@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * The routesphere-like loader: reads {@code config/tenants.yml} to find the active tenant + profile, then
@@ -68,12 +69,21 @@ public final class ProfileYamlLoader {
         if (node instanceof Map<?, ?> map) {
             map.forEach((k, v) -> flatten(prefix.isEmpty() ? String.valueOf(k) : prefix + "." + k, v, out));
         } else if (node instanceof List<?> list) {
-            for (int i = 0; i < list.size(); i++) {
-                flatten(prefix + "[" + i + "]", list.get(i), out);
+            if (isScalarList(list)) {
+                // a list of scalars (e.g. enabledSummary) -> comma-joined, so MicroProfile getValues reads it
+                out.put(prefix, list.stream().map(String::valueOf).collect(Collectors.joining(",")));
+            } else {
+                for (int i = 0; i < list.size(); i++) {
+                    flatten(prefix + "[" + i + "]", list.get(i), out);
+                }
             }
         } else if (node != null) {
             out.put(prefix, String.valueOf(node));
         }
+    }
+
+    private static boolean isScalarList(List<?> list) {
+        return list.stream().noneMatch(e -> e instanceof Map || e instanceof List);
     }
 
     private static boolean asBoolean(Object value) {

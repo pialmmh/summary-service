@@ -1,7 +1,7 @@
 package com.telcobright.summary.runtime.api;
 
-import com.telcobright.summary.beans.cdr.CdrVoiceSummaryBean;
-import com.telcobright.summary.beans.cdr.RatedCdrEvent;
+import com.telcobright.summary.beans.cdr.CdrSummary;
+import com.telcobright.summary.beans.cdr.CdrSummaryBean;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.engine.spi.SummaryStore;
 import com.telcobright.summary.runtime.spi.UnitOfWork;
@@ -18,8 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** The one top-level transaction: success commits once; ANY failure rolls the whole batch back. No DB needed. */
 class BatchRunnerRollbackTest {
 
-    private final CdrVoiceSummaryBean bean = CdrTestSupport.bean();
-    private final List<RatedCdrEvent> batch = List.of(CdrTestSupport.sg10Call(CdrTestSupport.at(2026, 6, 19, 14, 30)));
+    private final CdrSummaryBean bean = CdrTestSupport.dailyBean();
+    private final List<CdrSummary> batch = List.of(CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 14, 30)));
 
     @Test
     void success_commits_once_and_does_not_roll_back() {

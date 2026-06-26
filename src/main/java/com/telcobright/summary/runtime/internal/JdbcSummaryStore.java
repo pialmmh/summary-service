@@ -1,12 +1,9 @@
 package com.telcobright.summary.runtime.internal;
 
-import com.telcobright.summary.engine.spi.ColumnDef;
-import com.telcobright.summary.engine.spi.SummaryRow;
+import com.telcobright.summary.engine.spi.RowMapper;
 import com.telcobright.summary.engine.spi.SummaryStore;
 import com.telcobright.summary.engine.spi.SummaryStoreException;
-import com.telcobright.summary.engine.spi.WindowSchema;
 
-import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -15,14 +12,14 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.StringJoiner;
 
 /**
- * The JDBC {@link SummaryStore} over the ONE transaction-bound connection the batch owns. It LOADs all rows
- * for the involved buckets in a single query and maps them (carrying their DB id), and runs the engine's
- * INSERT/UPDATE/DELETE segments. It never commits or rolls back — the {@link JdbcUnitOfWork} does.
+ * The JDBC {@link SummaryStore} over the ONE transaction-bound connection the batch owns. It LOADs all rows for
+ * the involved buckets in a single query (selecting id + the entity's insert columns) and maps them to typed
+ * entities via the bean's mapper, and runs the engine's INSERT/UPDATE/DELETE segments. It never commits or
+ * rolls back — the {@link JdbcUnitOfWork} does.
  */
 final class JdbcSummaryStore implements SummaryStore {
 
@@ -35,18 +32,20 @@ final class JdbcSummaryStore implements SummaryStore {
     }
 
     @Override
-    public List<SummaryRow> load(WindowSchema schema, Collection<LocalDateTime> buckets) {
+    public <T> List<T> load(String table, String insertColumnsCsv, String bucketColumn,
+                            Collection<LocalDateTime> buckets, RowMapper<T> mapper) {
         if (buckets.isEmpty()) {
             return List.of();
         }
-        String sql = selectByBuckets(schema, buckets);
-        List<SummaryRow> rows = new ArrayList<>();
+        String sql = "select id," + insertColumnsCsv + " from " + table
+                + " where " + bucketColumn + " in (" + bucketLiterals(buckets) + ")";
+        List<T> rows = new ArrayList<>();
         try (Statement st = connection.createStatement(); ResultSet rs = st.executeQuery(sql)) {
             while (rs.next()) {
-                rows.add(mapRow(schema, rs));
+                rows.add(mapper.map(rs));
             }
         } catch (SQLException e) {
-            throw new SummaryStoreException("load failed for " + schema.table(), e);
+            throw new SummaryStoreException("load failed for " + table, e);
         }
         return rows;
     }
@@ -60,40 +59,10 @@ final class JdbcSummaryStore implements SummaryStore {
         }
     }
 
-    private static String selectByBuckets(WindowSchema schema, Collection<LocalDateTime> buckets) {
-        StringJoiner cols = new StringJoiner(",");
-        cols.add("id");
-        schema.columns().forEach(c -> cols.add(c.name()));
+    private static String bucketLiterals(Collection<LocalDateTime> buckets) {
         StringJoiner in = new StringJoiner(",");
         buckets.forEach(b -> in.add("'" + DATETIME.format(b) + "'"));
-        return "select " + cols + " from " + schema.table() + " where " + schema.bucketColumn() + " in (" + in + ")";
-    }
-
-    private static SummaryRow mapRow(WindowSchema schema, ResultSet rs) throws SQLException {
-        long id = rs.getLong("id");
-        LinkedHashMap<String, Object> key = new LinkedHashMap<>();
-        LinkedHashMap<String, BigDecimal> counters = new LinkedHashMap<>();
-        for (ColumnDef c : schema.columns()) {
-            if (c.isCounter()) {
-                BigDecimal v = rs.getBigDecimal(c.name());
-                counters.put(c.name(), v == null ? BigDecimal.ZERO : v);
-            } else {
-                key.put(c.name(), readKey(rs, c));
-            }
-        }
-        return new SummaryRow(id, key, counters);
-    }
-
-    private static Object readKey(ResultSet rs, ColumnDef c) throws SQLException {
-        return switch (c.type()) {
-            case STRING -> rs.getString(c.name());
-            case DATETIME -> rs.getObject(c.name(), LocalDateTime.class);
-            case DECIMAL -> rs.getBigDecimal(c.name());
-            case INT, LONG -> {
-                long v = rs.getLong(c.name());
-                yield rs.wasNull() ? null : v;
-            }
-        };
+        return in.toString();
     }
 
     /** Run one statement or a {@code ;}-joined segment, summing every update count (multi-statement aware). */

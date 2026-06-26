@@ -1,6 +1,7 @@
 package com.telcobright.summary.registry.api;
 
 import com.telcobright.summary.bean.spi.SummaryBean;
+import com.telcobright.summary.bean.spi.SummaryEntity;
 import com.telcobright.summary.registry.internal.KafkaConsumerFactory;
 import com.telcobright.summary.registry.internal.SummaryWorker;
 import com.telcobright.summary.runtime.api.BatchRunner;
@@ -17,10 +18,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Holds the known beans and their running workers. A bean can be {@link #start started} or {@link #stop
- * stopped} at runtime — that is the hot-start hook: a newly registered bean gets its own consumer + worker
- * thread with NO app restart. (The UI-defined-beans phase will register beans here at runtime; v1 registers
- * the compiled beans at startup.) Each worker is one daemon thread driving one Kafka consumer.
+ * Holds the configured beans and their running workers. A bean can be {@link #start started} or
+ * {@link #stop stopped} at runtime — the hot-start hook: a newly registered bean gets its own consumer +
+ * worker thread with NO app restart. v1 registers the {@code enabledSummary} beans at startup (see
+ * {@code SummaryBootstrap}); the UI-defined-beans phase will register beans here at runtime.
  */
 @ApplicationScoped
 public class SummaryBeanRegistry {
@@ -88,9 +89,9 @@ public class SummaryBeanRegistry {
         Set.copyOf(workers.keySet()).forEach(this::stop);
     }
 
-    private <E> void startWorker(SummaryBean<E> bean) {
+    private <T extends SummaryEntity<T>> void startWorker(SummaryBean<T> bean) {
         Consumer<String, byte[]> consumer = consumerFactory.create(bean);
-        SummaryWorker<E> worker = new SummaryWorker<>(bean, consumer, batchRunner);
+        SummaryWorker<T> worker = new SummaryWorker<>(bean, consumer, batchRunner);
         Thread thread = new Thread(worker, "summary-worker-" + bean.name());
         thread.setDaemon(true);
         workers.put(bean.name(), new RunningWorker(worker, thread));

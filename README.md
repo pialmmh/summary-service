@@ -8,25 +8,27 @@ summarisation; producers (billing-core and others) just emit events to Kafka. Su
 It ports billing-core's proven **load-merge-write** summary pipeline (.NET → Java) and generalises the
 CDR-specific code into a declarative, pluggable **bean** model.
 
-## Status — v1 scaffold (built, tests green)
+## Status — built, tests green (typed `Summary<T>` redesign)
 
-- Quarkus skeleton + routesphere-like tenant/profile config + the `SummaryBean` SPI + registry.
-- The reference **cdr-voice** bean (day + hour windows → `sum_voice_*`).
-- 15 unit tests + 2 MySQL integration tests green. **Not deployed** — cutover is coordinated with the
+- Quarkus skeleton + routesphere-like tenant/profile config + the typed `SummaryEntity<T>`/`SummaryBean<T>` SPI
+  + registry.
+- The reference **`CdrSummary`** entity (faithful 1:1 port of billing-core's `AbstractCdrSummary`, all 47
+  columns) with `CdrSummaryBean` configured per window (daily + hourly → `sum_voice_*`).
+- 27 unit tests + 2 MySQL integration tests green. **Not deployed** — cutover is coordinated with the
   architect + dotnet (billing-core drops its summary write).
-- The rated-CDR event schema + `sum_voice_*` DDL are **PROVISIONAL**, pending billing-core (dotnet) pinning
-  them. See `docs/decisions.md`.
+- `RatedCdrEvent` + `sum_voice_*` DDL are **PROVISIONAL**, pending billing-core (dotnet) pinning the topic /
+  event field names / real DDL. See `docs/decisions.md` §12.
 
 ## Build & test
 
 ```bash
-mvn test                 # 15 fast unit tests (no DB/Kafka needed — uses SPI fakes)
+mvn test                 # 27 fast unit tests (no DB/Kafka needed — uses SPI fakes)
 mvn package              # + Quarkus augmentation (builds the runnable app)
-mvn verify               # + MySQL integration tests; SELF-SKIP if MySQL is unreachable
+mvn verify -Dsummary.it.mysql.password=…   # + MySQL integration tests; SELF-SKIP if MySQL is unreachable
 ```
 
-The integration tests target the local dev MySQL (`127.0.0.1:3306`, `root`); override with
-`-Dsummary.it.mysql.url=… -Dsummary.it.mysql.user=… -Dsummary.it.mysql.password=…`.
+The integration tests target the local dev MySQL (`127.0.0.1:3306`, `root`); the password is supplied at run
+time (no credential in git), override with `-Dsummary.it.mysql.url=… -Dsummary.it.mysql.user=…`.
 
 ## The pipeline (per bean, per batch)
 
@@ -44,32 +46,37 @@ poll Kafka batch  →  compute windows involved  →  load those windows ONCE
 5. **Atomic batch** — ONE top-level transaction (`BatchRunner`); any failure rolls the WHOLE batch back. No
    inner class commits.
 
-## Summary beans (pluggable, YAML-activated)
+## Summary beans (typed entity, config-driven instances)
 
-A **bean** = one counter/summary, declared data-first (`bean/spi/SummaryBean`): the event + topic, the time
-windows (day/hour, generalisable to 15-min/week/month), the group-by **dimensions**, the additive
-**counters** (with each event's delta), and the target tables. The engine does load-merge-write generically
-from these declarations — no per-bean SQL. Beans are switched on + parameterised in the profile yml and can
-be **hot-started** by the registry without a restart (the UI-defined-beans phase comes later).
+A **summary entity** `T` (e.g. `CdrSummary`) is a real class that owns its key, merge, negate, clone, and SQL
+fragments (`bean/spi/SummaryEntity`). A **bean** (`bean/spi/SummaryBean<T>`) builds `T` from an event stream
+into one table over one window. There is **one bean class per entity**; each `enabledSummary` entry is a
+distinct **configured instance** — daily, hourly, 5-minute, weekly are just different `window` + `table`
+configs of the same class, no code change. The engine does load-merge-write over `T`; a future `CallQuality`
+summary is a new entity + factory. Beans **hot-start** via the registry without a restart.
+
+`window` accepts: `5min` / `Nmin` (multiple of 5) / `hourly` / `daily` / `weekly` (Monday-start ISO week) /
+`monthly` / `yearly`.
 
 ## Configuration (routesphere-like)
 
 - `application.properties` — only **selects** the active tenant/profile + `summary.autostart` (default off).
 - `config/tenants.yml` — which tenant is enabled + its profile.
-- `config/tenants/<tenant>/<profile>/profile-<profile>.yml` — datasource, Kafka, and per-bean activation,
-  flattened into Quarkus config by `TenantProfileConfigSource`.
+- `config/tenants/<tenant>/<profile>/profile-<profile>.yml` — datasource, Kafka, and the **`enabledSummary`**
+  list + each bean's `entity`/`window`/`table`/`topic`/`service-group`, flattened into Quarkus config by
+  `TenantProfileConfigSource`. Only beans in `enabledSummary` run.
 - **Secrets** (DB password) come from **OpenBao** at cutover — never committed, never from env. See
   `docs/decisions.md`.
 
 ## Layout
 
 ```
-bean/spi         the pluggable SummaryBean contract (declare windows/dimensions/counters)
-engine/          load-merge-write: SummaryEngine (api) · SummaryStore (spi) · cache+SQL (internal)
+bean/spi         SummaryEntity<T> + SummaryBean<T> contracts · SummaryKey · WindowSize · SqlLiterals
+engine/          load-merge-write over T: SummaryEngine (api) · SummaryStore (spi) · SummaryCache<T> (internal)
 runtime/         BatchRunner (api, the ONE transaction) · UnitOfWork (spi) · JDBC store (internal)
-registry/        SummaryBeanRegistry (api, start/stop/hot-start) · Kafka worker (internal)
+registry/        SummaryBeanRegistry (api) · SummaryBeanFactory + BeanConfig (spi) · worker + bootstrap (internal)
 config/          TenantProfileConfigSource (routesphere-like profile loader)
-beans/cdr/       the reference cdr-voice bean + RatedCdrEvent (PROVISIONAL)
+beans/cdr/       CdrSummary entity (47 cols) · CdrSummaryBuilder · CdrSummaryBean · factory · RatedCdrEvent (PROVISIONAL)
 ```
 
 See `docs/architecture.md` for the package tree and `docs/decisions.md` for the architect rulings.

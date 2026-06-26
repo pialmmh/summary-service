@@ -1,6 +1,7 @@
 package com.telcobright.summary.runtime.api;
 
 import com.telcobright.summary.bean.spi.SummaryBean;
+import com.telcobright.summary.bean.spi.SummaryEntity;
 import com.telcobright.summary.engine.api.BatchResult;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.runtime.spi.UnitOfWork;
@@ -16,8 +17,7 @@ import java.util.List;
 /**
  * Runs ONE batch as ONE transaction — the single top-level commit/rollback (the ported MySqlCdrBatchRunner
  * rule). It begins a unit of work, hands the engine the transaction-bound store, and commits once; ANY
- * exception rolls the whole batch back (cdr/chargeable-style atomicity: all windows persist together or none).
- * No inner class commits or rolls back.
+ * exception rolls the whole batch back (every window persists together or none). No inner class commits.
  */
 @ApplicationScoped
 public class BatchRunner {
@@ -36,14 +36,14 @@ public class BatchRunner {
         this.segmentSize = segmentSize;
     }
 
-    public <E> BatchResult run(SummaryBean<E> bean, List<E> events) {
+    public <T extends SummaryEntity<T>> BatchResult run(SummaryBean<T> bean, List<T> entities) {
         UnitOfWork unitOfWork = unitOfWorkFactory.begin();
         try {
-            BatchResult result = engine.runBatch(bean, events, unitOfWork.store(), segmentSize);
+            BatchResult result = engine.runBatch(bean, entities, unitOfWork.store(), segmentSize);
             unitOfWork.commit();
             return result;
         } catch (RuntimeException failure) {
-            rollbackQuietly(unitOfWork, bean, events.size(), failure);
+            rollbackQuietly(unitOfWork, bean, entities.size(), failure);
             throw failure;
         } finally {
             closeQuietly(unitOfWork);

@@ -1,117 +1,105 @@
 package com.telcobright.summary.engine.internal;
 
-import com.telcobright.summary.bean.spi.WindowDef;
-import com.telcobright.summary.beans.cdr.CdrVoiceSummaryBean;
-import com.telcobright.summary.beans.cdr.RatedCdrEvent;
+import com.telcobright.summary.beans.cdr.CdrSummary;
 import com.telcobright.summary.engine.spi.MergeMode;
-import com.telcobright.summary.engine.spi.SummaryRow;
-import com.telcobright.summary.engine.spi.WindowSchema;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
-
-import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/** The cache merge math: increment, decrement, overwrite, insert-vs-update tracking, and the redelivery story. */
+/** The typed cache merge math: increment, decrement, overwrite, insert-vs-update tracking, the redelivery story. */
 class SummaryCacheTest {
 
-    private final CdrVoiceSummaryBean bean = CdrTestSupport.bean();
-    private final WindowDef dayWindow = bean.windows().get(0);
-    private final WindowSchema schema = WindowSchemaFactory.build(bean, dayWindow);
-    private final RatedCdrEvent call = CdrTestSupport.sg10Call(CdrTestSupport.at(2026, 6, 19, 14, 30));
+    private static final String TABLE = CdrTestSupport.DAY_TABLE;
 
-    private SummaryRow delta() {
-        return RowFactory.delta(bean, dayWindow, call);
+    private static SummaryCache<CdrSummary> cache() {
+        return new SummaryCache<>(TABLE, CdrSummary.INSERT_COLUMNS);
     }
 
-    private static BigDecimal counter(SummaryCache cache, String column) {
-        return cache.rows().iterator().next().counter(column);
+    private static CdrSummary call() {
+        return CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 14, 30));
+    }
+
+    private static long totalcalls(SummaryCache<CdrSummary> cache) {
+        return cache.rows().iterator().next().totalcalls;
     }
 
     @Test
     void add_into_a_new_window_inserts_and_accumulates() {
-        SummaryCache cache = new SummaryCache(schema);
-
-        cache.merge(delta(), MergeMode.ADD);
-        cache.merge(delta(), MergeMode.ADD);   // same tuple again
+        SummaryCache<CdrSummary> cache = cache();
+        cache.merge(call(), MergeMode.ADD);
+        cache.merge(call(), MergeMode.ADD);   // same tuple again
 
         assertEquals(1, cache.insertedCount(), "still ONE insert (a row inserted this batch stays an insert)");
         assertEquals(0, cache.updatedCount());
-        assertEquals(0, counter(cache, "totalcalls").compareTo(new BigDecimal("2")));
-        assertEquals(0, counter(cache, "customercost").compareTo(new BigDecimal("2.0")));
+        assertEquals(2, totalcalls(cache));
     }
 
     @Test
     void add_onto_a_loaded_window_updates_it() {
-        SummaryCache cache = new SummaryCache(schema);
-        SummaryRow existing = delta();
+        SummaryCache<CdrSummary> cache = cache();
+        CdrSummary existing = call();
         existing.setId(100L);
         cache.populateExisting(existing);
 
-        cache.merge(delta(), MergeMode.ADD);
+        cache.merge(call(), MergeMode.ADD);
 
         assertEquals(0, cache.insertedCount());
         assertEquals(1, cache.updatedCount(), "a LOADED row becomes an update");
-        assertEquals(0, counter(cache, "totalcalls").compareTo(new BigDecimal("2")));
+        assertEquals(2, totalcalls(cache));
     }
 
     @Test
     void subtract_decrements_a_loaded_window() {
-        SummaryCache cache = new SummaryCache(schema);
-        SummaryRow existing = delta();
+        SummaryCache<CdrSummary> cache = cache();
+        CdrSummary existing = call();
         for (int i = 0; i < 4; i++) {
-            existing.mergeAdd(delta());          // existing totalcalls = 5
+            existing.merge(call());          // totalcalls = 5
         }
         existing.setId(100L);
         cache.populateExisting(existing);
 
-        cache.merge(delta(), MergeMode.SUBTRACT); // -1 call
+        cache.merge(call(), MergeMode.SUBTRACT);
 
-        assertEquals(0, counter(cache, "totalcalls").compareTo(new BigDecimal("4")));
-        assertEquals(0, counter(cache, "customercost").compareTo(new BigDecimal("4.0")));
+        assertEquals(4, totalcalls(cache));
     }
 
     @Test
     void subtract_on_a_window_that_was_not_loaded_is_rejected() {
-        SummaryCache cache = new SummaryCache(schema);
-
-        assertThrows(IllegalStateException.class, () -> cache.merge(delta(), MergeMode.SUBTRACT));
+        SummaryCache<CdrSummary> cache = cache();
+        assertThrows(IllegalStateException.class, () -> cache.merge(call(), MergeMode.SUBTRACT));
     }
 
     @Test
     void overwrite_replaces_counters_for_the_correction_path() {
-        SummaryCache cache = new SummaryCache(schema);
-        SummaryRow existing = delta();
+        SummaryCache<CdrSummary> cache = cache();
+        CdrSummary existing = call();
         for (int i = 0; i < 9; i++) {
-            existing.mergeAdd(delta());          // existing totalcalls = 10 (a wrong/stale window)
+            existing.merge(call());          // totalcalls = 10 (a stale window)
         }
         existing.setId(100L);
         cache.populateExisting(existing);
 
-        cache.merge(delta(), MergeMode.OVERWRITE); // recomputed truth = 1 call
+        cache.merge(call(), MergeMode.OVERWRITE);   // recomputed truth = 1 call
 
-        assertEquals(0, counter(cache, "totalcalls").compareTo(BigDecimal.ONE), "counters replaced, not added");
+        assertEquals(1, totalcalls(cache), "counters replaced, not added");
     }
 
     @Test
     void redelivery_double_counts_and_overwrite_repairs_it() {
-        // batch 1 committed a window of 1 call
-        SummaryRow afterBatch1 = delta();
+        CdrSummary afterBatch1 = call();   // a window of 1 call, committed
         afterBatch1.setId(100L);
 
-        // redelivery: the same batch loads that row and ADDs again -> 2 (increment is NOT idempotent)
-        SummaryCache redelivered = new SummaryCache(schema);
+        SummaryCache<CdrSummary> redelivered = cache();
         redelivered.populateExisting(afterBatch1);
-        redelivered.merge(delta(), MergeMode.ADD);
-        assertEquals(0, counter(redelivered, "totalcalls").compareTo(new BigDecimal("2")), "double-counted");
+        redelivered.merge(call(), MergeMode.ADD);
+        assertEquals(2, totalcalls(redelivered), "increment is NOT idempotent — redelivery double-counts");
 
-        // correction recomputes the window from source-of-truth (1 call) and OVERWRITES -> repaired
-        SummaryRow doubled = redelivered.rows().iterator().next();
-        SummaryCache correction = new SummaryCache(schema);
+        CdrSummary doubled = redelivered.rows().iterator().next();
+        SummaryCache<CdrSummary> correction = cache();
         correction.populateExisting(doubled);
-        correction.merge(delta(), MergeMode.OVERWRITE);
-        assertEquals(0, counter(correction, "totalcalls").compareTo(BigDecimal.ONE), "correction repaired the count");
+        correction.merge(call(), MergeMode.OVERWRITE);
+        assertEquals(1, totalcalls(correction), "correction recompute + overwrite repaired the count");
     }
 }

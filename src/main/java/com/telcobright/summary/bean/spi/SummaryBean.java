@@ -1,32 +1,28 @@
 package com.telcobright.summary.bean.spi;
 
-import java.time.Instant;
-import java.time.ZoneId;
-import java.util.List;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
 
 /**
- * A summary bean = ONE counter/summary implementation, declared data-first. The CDR per-day/per-hour
- * summary is one bean. A bean states the event it consumes, the time windows it keeps, the dimensions it
- * groups by, and the counters it sums — the engine does the load-merge-write generically from these.
+ * A summary bean = ONE purpose: build a typed summary entity {@code T} from an event stream and roll it into
+ * one MySQL table over one configured time window. The CDR daily summary and the CDR hourly summary are two
+ * beans over the SAME entity ({@code CdrSummary}); a future call-quality summary is a bean over its own entity.
  *
- * <p>Beans are pluggable and YAML-activated; the registry can hot-start a worker for a new bean without a
- * restart. Implementations are pure declaration + extractors — they hold NO database, transaction, or Kafka
- * state (those are the engine's job), which keeps them trivially unit-testable.
+ * <p>Beans are config-driven instances (window + table + topic + filter from YAML), produced per
+ * {@code enabledSummary} entry; the registry hot-starts one worker per enabled bean with no restart.
  *
- * @param <E> the event type this bean consumes
+ * @param <T> the summary entity this bean maintains
  */
-public interface SummaryBean<E> {
+public interface SummaryBean<T extends SummaryEntity<T>> {
 
-    /** Unique bean id (also the worker/consumer id). */
+    /** Unique bean id (also its worker id + its {@code summary.beans.<name>} config section). */
     String name();
 
     /** The Kafka topic carrying the normal (increment) event stream. */
     String topic();
 
-    /**
-     * The Kafka topic carrying correction events; a correction recomputes a window from source-of-truth and
-     * OVERWRITES it. Null means this bean has no correction path.
-     */
+    /** The correction topic (recompute + overwrite a window); null if this bean has no correction path. */
     default String correctionTopic() {
         return null;
     }
@@ -36,21 +32,27 @@ public interface SummaryBean<E> {
         return 1000;
     }
 
-    /** The wall-clock zone the windows are bucketed in (e.g. Asia/Dhaka). */
-    ZoneId zone();
+    /** Target MySQL table for this bean's window. */
+    String table();
 
-    /** The event timestamp used to choose the window bucket. */
-    Instant eventTime(E event);
+    /** The INSERT column list (CSV, in value order, WITHOUT id — AUTO_INCREMENT assigns it). */
+    String insertColumnsCsv();
 
-    /** The windows this bean maintains (e.g. day + hour). */
-    List<WindowDef> windows();
+    /** The datetime column holding the window bucket (e.g. {@code tup_starttime}); the load query filters on it. */
+    String bucketColumn();
 
-    /** The group-by dimensions (key columns) of a summary row. */
-    List<DimensionDef<E>> dimensions();
+    /** The configured time window (5min / hourly / daily / weekly / …). */
+    WindowSize window();
 
-    /** The additive counters of a summary row, with each event's delta. */
-    List<CounterDef<E>> counters();
+    /**
+     * Decode one Kafka record value into a bucketed summary entity, or return {@code null} if this event is not
+     * for this bean (e.g. a different service group on a shared topic) so the worker skips it.
+     */
+    T build(byte[] payload);
 
-    /** Decode a Kafka record value into an event of this bean's type. */
-    E deserialize(byte[] payload);
+    /** The window bucket of an entity ({@code tup_starttime}); the distinct set is what the load query fetches. */
+    LocalDateTime bucketOf(T entity);
+
+    /** Map a loaded DB row (id + the insert columns) into an entity carrying its id. */
+    T mapRow(ResultSet row) throws SQLException;
 }

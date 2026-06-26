@@ -1,9 +1,8 @@
 package com.telcobright.summary.testkit;
 
-import com.telcobright.summary.engine.spi.SummaryRow;
+import com.telcobright.summary.engine.spi.RowMapper;
 import com.telcobright.summary.engine.spi.SummaryStore;
 import com.telcobright.summary.engine.spi.SummaryStoreException;
-import com.telcobright.summary.engine.spi.WindowSchema;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -15,18 +14,21 @@ import java.util.Map;
 /**
  * In-memory {@link SummaryStore} — the SPI fake that IS the engine test surface (no database). It records the
  * SQL the engine runs, counts load calls and the buckets each load received (to prove "load involved windows
- * once"), and can be seeded with already-persisted rows. Optionally fails writes to exercise rollback.
+ * once"), and can be seeded with already-persisted entities. Optionally fails writes to exercise rollback.
  */
 public final class FakeSummaryStore implements SummaryStore {
 
-    private final Map<String, List<SummaryRow>> seeded = new HashMap<>();
+    private record Seed(LocalDateTime bucket, Object entity) {
+    }
+
+    private final Map<String, List<Seed>> seeded = new HashMap<>();
     private final Map<String, Integer> loadCalls = new HashMap<>();
     private final Map<String, Collection<LocalDateTime>> lastBuckets = new HashMap<>();
     private final List<String> executedSql = new ArrayList<>();
     private boolean failWrites = false;
 
-    public void seed(String table, SummaryRow row) {
-        seeded.computeIfAbsent(table, t -> new ArrayList<>()).add(row);
+    public void seed(String table, LocalDateTime bucket, Object entity) {
+        seeded.computeIfAbsent(table, t -> new ArrayList<>()).add(new Seed(bucket, entity));
     }
 
     public void failWrites() {
@@ -34,13 +36,15 @@ public final class FakeSummaryStore implements SummaryStore {
     }
 
     @Override
-    public List<SummaryRow> load(WindowSchema schema, Collection<LocalDateTime> buckets) {
-        loadCalls.merge(schema.table(), 1, Integer::sum);
-        lastBuckets.put(schema.table(), buckets);
-        List<SummaryRow> result = new ArrayList<>();
-        for (SummaryRow row : seeded.getOrDefault(schema.table(), List.of())) {
-            if (buckets.contains((LocalDateTime) row.keyValue(schema.bucketColumn()))) {
-                result.add(row);
+    @SuppressWarnings("unchecked")
+    public <T> List<T> load(String table, String insertColumnsCsv, String bucketColumn,
+                            Collection<LocalDateTime> buckets, RowMapper<T> mapper) {
+        loadCalls.merge(table, 1, Integer::sum);
+        lastBuckets.put(table, buckets);
+        List<T> result = new ArrayList<>();
+        for (Seed seed : seeded.getOrDefault(table, List.of())) {
+            if (buckets.contains(seed.bucket())) {
+                result.add((T) seed.entity());
             }
         }
         return result;

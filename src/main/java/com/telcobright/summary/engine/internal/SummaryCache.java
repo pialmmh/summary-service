@@ -1,75 +1,72 @@
 package com.telcobright.summary.engine.internal;
 
-import com.telcobright.summary.engine.spi.ColumnDef;
+import com.telcobright.summary.bean.spi.SummaryEntity;
+import com.telcobright.summary.bean.spi.SummaryKey;
 import com.telcobright.summary.engine.spi.MergeMode;
-import com.telcobright.summary.engine.spi.RowKey;
-import com.telcobright.summary.engine.spi.SummaryRow;
 import com.telcobright.summary.engine.spi.SummaryStore;
-import com.telcobright.summary.engine.spi.WindowSchema;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * The per-window change-tracking cache (ported AbstractCache + SummaryCache). Existing rows are seeded with
- * {@link #populateExisting}; events fold in with {@link #merge}; {@link #flush} writes the net changes as
- * segmented INSERT/UPDATE/DELETE through the {@link SummaryStore}. NO transaction control here.
+ * The per-window change-tracking cache (ported AbstractCache + SummaryCache), now typed over the summary
+ * entity {@code T}. Existing rows are seeded with {@link #populateExisting}; events fold in with {@link #merge}
+ * using the entity's own merge/multiply/clone; {@link #flush} writes the net change as segmented
+ * INSERT/UPDATE/DELETE through the {@link SummaryStore}. NO transaction control here.
  *
- * <p>Tracking rule (kept from the legacy): a row INSERTed this batch and then merged again stays an insert
- * with the accumulated value; only a row that was LOADED becomes an update. So every UPDATE/DELETE targets a
- * row that has a DB id.
+ * <p>Tracking rule (kept from legacy): a row INSERTed this batch and merged again stays an insert with the
+ * accumulated value; only a LOADED row becomes an update — so every UPDATE/DELETE targets a row with a DB id.
  */
-public final class SummaryCache {
+public final class SummaryCache<T extends SummaryEntity<T>> {
 
-    private final WindowSchema schema;
+    private final String table;
     private final String insertHeader;
-    private final Map<RowKey, SummaryRow> cache = new LinkedHashMap<>();
-    private final Map<RowKey, SummaryRow> inserted = new LinkedHashMap<>();
-    private final Map<RowKey, SummaryRow> updated = new LinkedHashMap<>();
-    private final Map<RowKey, SummaryRow> deleted = new LinkedHashMap<>();
+    private final Map<SummaryKey, T> cache = new LinkedHashMap<>();
+    private final Map<SummaryKey, T> inserted = new LinkedHashMap<>();
+    private final Map<SummaryKey, T> updated = new LinkedHashMap<>();
+    private final Map<SummaryKey, T> deleted = new LinkedHashMap<>();
 
-    public SummaryCache(WindowSchema schema) {
-        this.schema = schema;
-        this.insertHeader = SqlRenderer.insertHeader(schema);
+    public SummaryCache(String table, String insertColumnsCsv) {
+        this.table = table;
+        this.insertHeader = "insert into " + table + " (" + insertColumnsCsv + ") values ";
     }
 
-    public WindowSchema schema() {
-        return schema;
-    }
-
-    /** Seed the cache with an already-persisted row (it carries its DB id). A later merge marks it Updated. */
-    public void populateExisting(SummaryRow existing) {
-        if (cache.putIfAbsent(keyOf(existing), existing) != null) {
-            throw new IllegalStateException("Duplicate existing row while populating cache for " + schema.table());
+    /** Seed with an already-persisted row (it carries its DB id). A later merge marks it Updated. */
+    public void populateExisting(T existing) {
+        if (cache.putIfAbsent(existing.tupleKey(), existing) != null) {
+            throw new IllegalStateException("duplicate existing row while populating cache for " + table);
         }
     }
 
-    /** Fold one delta row into its window per {@link MergeMode}. */
-    public void merge(SummaryRow delta, MergeMode mode) {
-        RowKey key = keyOf(delta);
-        SummaryRow existing = cache.get(key);
+    /** Fold one delta entity into its window per {@link MergeMode}. */
+    public void merge(T delta, MergeMode mode) {
+        SummaryKey key = delta.tupleKey();
+        T existing = cache.get(key);
         if (existing == null) {
             if (mode == MergeMode.SUBTRACT) {
-                throw new IllegalStateException("Cannot SUBTRACT a window that was not loaded: " + schema.table());
+                throw new IllegalStateException("cannot SUBTRACT a window that was not loaded: " + table);
             }
-            SummaryRow fresh = delta.copyAsNew();   // id stays null -> AUTO_INCREMENT assigns it on INSERT
+            T fresh = delta.cloneWithFakeId();   // id stays null -> AUTO_INCREMENT assigns it on INSERT
             cache.put(key, fresh);
             inserted.put(key, fresh);
             return;
         }
         switch (mode) {
-            case ADD -> existing.mergeAdd(delta);
+            case ADD -> existing.merge(delta);
             case SUBTRACT -> {
-                delta.negateCounters();
-                existing.mergeAdd(delta);
+                delta.multiply(-1);
+                existing.merge(delta);
             }
-            case OVERWRITE -> existing.overwriteCounters(delta);
+            case OVERWRITE -> {
+                T replacement = delta.cloneWithFakeId();
+                replacement.setId(existing.id());   // keep the loaded id; replace the counters wholesale
+                cache.put(key, replacement);
+            }
         }
         if (!inserted.containsKey(key)) {
-            updated.putIfAbsent(key, existing);
+            updated.put(key, cache.get(key));
         }
     }
 
@@ -84,7 +81,7 @@ public final class SummaryCache {
         if (inserted.isEmpty()) {
             return;
         }
-        List<String> tuples = inserted.values().stream().map(r -> SqlRenderer.insertTuple(schema, r)).toList();
+        List<String> tuples = inserted.values().stream().map(SummaryEntity::insertValues).toList();
         SegmentedSqlWriter.writeInsertsInSegments(store, insertHeader, tuples, segmentSize);
         inserted.clear();
     }
@@ -93,7 +90,8 @@ public final class SummaryCache {
         if (updated.isEmpty()) {
             return;
         }
-        List<String> statements = updated.values().stream().map(r -> SqlRenderer.updateStatement(schema, r)).toList();
+        List<String> statements = updated.values().stream()
+                .map(e -> "update " + table + " set " + e.updateAssignments() + " where id=" + e.id()).toList();
         SegmentedSqlWriter.writeStatementsInSegments(store, statements, segmentSize);
         updated.clear();
     }
@@ -102,22 +100,15 @@ public final class SummaryCache {
         if (deleted.isEmpty()) {
             return;
         }
-        List<String> statements = deleted.values().stream().map(r -> SqlRenderer.deleteStatement(schema, r)).toList();
+        List<String> statements = deleted.values().stream()
+                .map(e -> "delete from " + table + " where id=" + e.id()).toList();
         SegmentedSqlWriter.writeStatementsInSegments(store, statements, segmentSize);
         deleted.clear();
     }
 
-    private RowKey keyOf(SummaryRow row) {
-        List<Object> tokens = new ArrayList<>();
-        for (ColumnDef c : schema.keyColumns()) {
-            tokens.add(SqlRenderer.keyToken(row.keyValue(c.name()), c.type()));
-        }
-        return new RowKey(tokens);
-    }
+    // ---- inspection (tests + batch result) ----
 
-    // ---- inspection (used by tests + the batch result) ----
-
-    public Collection<SummaryRow> rows() {
+    public Collection<T> rows() {
         return cache.values();
     }
 

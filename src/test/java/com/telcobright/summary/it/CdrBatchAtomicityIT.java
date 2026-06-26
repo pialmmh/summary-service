@@ -1,7 +1,7 @@
 package com.telcobright.summary.it;
 
-import com.telcobright.summary.beans.cdr.CdrVoiceSummaryBean;
-import com.telcobright.summary.beans.cdr.RatedCdrEvent;
+import com.telcobright.summary.beans.cdr.CdrSummary;
+import com.telcobright.summary.beans.cdr.CdrSummaryBean;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.runtime.api.BatchRunner;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
@@ -24,14 +24,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * INTEGRATION (local lxc MySQL): the WHOLE batch is ONE transaction owned by {@link BatchRunner}. Success
- * commits every window together; a mid-batch failure rolls EVERYTHING back (the already-written day row is
- * undone when the hour write fails). Mirrors billing-core's CdrBatchAtomicityTests. SELF-SKIPS if MySQL is
- * unreachable — runs in the {@code verify} phase (failsafe).
+ * INTEGRATION (local lxc MySQL): the WHOLE batch is ONE transaction owned by {@link BatchRunner} over the real
+ * 47-column sum_voice schema. Success commits the merged window; an atomic multi-row INSERT that fails on one
+ * bad value persists NOTHING (the good row is not left behind). SELF-SKIPS if MySQL is unreachable.
  *
- * <p>Targets the local dev MySQL (127.0.0.1:3306, root) per the house convention. NO password is baked into
- * git — supply it at run time with {@code -Dsummary.it.mysql.password=…} (and optionally
- * {@code -Dsummary.it.mysql.url/user}). With no password the connect fails and the test SELF-SKIPS.
+ * <p>Local dev DB per the house convention (127.0.0.1:3306, root). NO password is baked into git — supply it
+ * with {@code -Dsummary.it.mysql.password=…}; with none the connect fails and the test skips.
  */
 class CdrBatchAtomicityIT {
 
@@ -40,8 +38,9 @@ class CdrBatchAtomicityIT {
     private static final String USER = System.getProperty("summary.it.mysql.user", "root");
     private static final String PASSWORD = System.getProperty("summary.it.mysql.password", "");
     private static final String DB = "summary_it";
+    private static final String TABLE = CdrTestSupport.DAY_TABLE;
 
-    private final CdrVoiceSummaryBean bean = CdrTestSupport.bean();
+    private final CdrSummaryBean bean = CdrTestSupport.dailyBean();
     private BatchRunner runner;
 
     @BeforeEach
@@ -58,26 +57,31 @@ class CdrBatchAtomicityIT {
     }
 
     @Test
-    void batch_commits_every_window_atomically_on_success() {
-        List<RatedCdrEvent> batch = List.of(
-                CdrTestSupport.sg10Call(CdrTestSupport.at(2026, 6, 19, 14, 30)),
-                CdrTestSupport.sg10Call(CdrTestSupport.at(2026, 6, 19, 15, 45)));   // same day, two hours
+    void batch_merges_and_commits_against_real_mysql() {
+        List<CdrSummary> batch = List.of(
+                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 10, 0)),
+                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 15, 0)),   // same day -> merges
+                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 20, 9, 0)));   // another day -> new row
 
         runner.run(bean, batch);
 
-        assertEquals(1, count("sum_voice_day_03"), "two calls, one day window -> one merged day row");
-        assertEquals(2, count("sum_voice_hr_03"), "two distinct hour windows -> two hour rows");
-        assertEquals(2, dayTotalCalls(), "day row counts both calls");
+        assertEquals(2, count(TABLE), "two day windows -> two rows");
+        assertEquals(3, sum("totalcalls"), "three calls counted across the two rows");
+        assertEquals(3, sum("connectedcallsCC"), "connectedcallsCC summed in Merge");
     }
 
     @Test
-    void batch_rolls_back_entirely_when_a_later_window_write_fails() {
-        execOnDb("drop table sum_voice_hr_03");   // the hour write (AFTER the day write) will fail
+    void a_failing_multi_row_insert_persists_nothing() {
+        execOnDb("alter table " + TABLE + " modify tup_destinationId varchar(2) not null default ''");
 
-        assertThrows(RuntimeException.class, () ->
-                runner.run(bean, List.of(CdrTestSupport.sg10Call(CdrTestSupport.at(2026, 6, 19, 14, 30)))));
+        // two distinct rows in ONE multi-row insert; the second destination ('99999') overflows varchar(2)
+        List<CdrSummary> batch = List.of(
+                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 10, 0), 7),
+                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 10, 0), 99999));
 
-        assertEquals(0, count("sum_voice_day_03"), "the already-written day row was rolled back");
+        assertThrows(RuntimeException.class, () -> runner.run(bean, batch));
+
+        assertEquals(0, count(TABLE), "the whole batch rolled back — not even the good row persisted");
     }
 
     // ---- schema + helpers ----
@@ -93,14 +97,12 @@ class CdrBatchAtomicityIT {
     private void createSchema(Connection conn) throws SQLException {
         exec(conn, "create database if not exists " + DB + " character set utf8mb4");
         exec(conn, "use " + DB);
-        for (String table : new String[]{"sum_voice_day_03", "sum_voice_hr_03"}) {
-            exec(conn, "drop table if exists " + table);
-            exec(conn, createTable(table));
-        }
+        exec(conn, "drop table if exists " + TABLE);
+        exec(conn, createTable());
     }
 
-    private static String createTable(String table) {
-        return "create table " + table + " ("
+    private static String createTable() {
+        return "create table " + TABLE + " ("
                 + "id bigint not null auto_increment,"
                 + "tup_switchid int not null default 0, tup_inpartnerid int not null default 0,"
                 + "tup_outpartnerid int not null default 0,"
@@ -111,13 +113,23 @@ class CdrBatchAtomicityIT {
                 + "tup_matchedprefixcustomer varchar(32) not null default '', tup_matchedprefixsupplier varchar(32) not null default '',"
                 + "tup_sourceId varchar(32) not null default '', tup_destinationId varchar(32) not null default '',"
                 + "tup_customercurrency varchar(16) not null default '', tup_suppliercurrency varchar(16) not null default '',"
-                + "tup_starttime datetime not null,"
+                + "tup_tax1currency varchar(16) not null default '', tup_tax2currency varchar(16) not null default '',"
+                + "tup_vatcurrency varchar(16) not null default '', tup_starttime datetime not null,"
                 + "totalcalls bigint not null default 0, connectedcalls bigint not null default 0,"
-                + "successfulcalls bigint not null default 0,"
+                + "connectedcallsCC bigint not null default 0, successfulcalls bigint not null default 0,"
                 + "actualduration decimal(18,6) not null default 0, roundedduration decimal(18,6) not null default 0,"
-                + "duration1 decimal(18,6) not null default 0,"
+                + "duration1 decimal(18,6) not null default 0, duration2 decimal(18,6) not null default 0,"
+                + "duration3 decimal(18,6) not null default 0, PDD decimal(18,6) not null default 0,"
                 + "customercost decimal(18,6) not null default 0, suppliercost decimal(18,6) not null default 0,"
                 + "tax1 decimal(18,6) not null default 0, tax2 decimal(18,6) not null default 0,"
+                + "vat decimal(18,6) not null default 0,"
+                + "intAmount1 int not null default 0, intAmount2 int not null default 0,"
+                + "longAmount1 bigint not null default 0, longAmount2 bigint not null default 0,"
+                + "longDecimalAmount1 decimal(18,6) not null default 0, longDecimalAmount2 decimal(18,6) not null default 0,"
+                + "intAmount3 int not null default 0, longAmount3 bigint not null default 0,"
+                + "longDecimalAmount3 decimal(18,6) not null default 0,"
+                + "decimalAmount1 decimal(18,6) not null default 0, decimalAmount2 decimal(18,6) not null default 0,"
+                + "decimalAmount3 decimal(18,6) not null default 0,"
                 + "primary key (id), key ix_starttime (tup_starttime)) engine=innodb default charset=utf8mb4";
     }
 
@@ -125,14 +137,12 @@ class CdrBatchAtomicityIT {
         return queryLong("select count(*) from " + table);
     }
 
-    private long dayTotalCalls() {
-        return queryLong("select coalesce(sum(totalcalls),0) from sum_voice_day_03");
+    private long sum(String column) {
+        return queryLong("select coalesce(sum(" + column + "),0) from " + TABLE);
     }
 
     private long queryLong(String sql) {
-        try (Connection c = DriverManager.getConnection(SERVER_URL.replace("/?", "/" + DB + "?"), USER, PASSWORD);
-             Statement st = c.createStatement();
-             ResultSet rs = st.executeQuery(sql)) {
+        try (Connection c = dbConnection(); Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
             rs.next();
             return rs.getLong(1);
         } catch (SQLException e) {
@@ -141,11 +151,15 @@ class CdrBatchAtomicityIT {
     }
 
     private void execOnDb(String sql) {
-        try (Connection c = DriverManager.getConnection(SERVER_URL.replace("/?", "/" + DB + "?"), USER, PASSWORD)) {
+        try (Connection c = dbConnection()) {
             exec(c, sql);
         } catch (SQLException e) {
             throw new IllegalStateException(sql, e);
         }
+    }
+
+    private Connection dbConnection() throws SQLException {
+        return DriverManager.getConnection(SERVER_URL.replace("/?", "/" + DB + "?"), USER, PASSWORD);
     }
 
     private static void exec(Connection conn, String sql) throws SQLException {
