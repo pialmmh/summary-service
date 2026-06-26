@@ -1,0 +1,39 @@
+# =====================================================================================
+# tcbl / dev — summary-service profile
+#
+# Flattened into Quarkus config by TenantProfileConfigSource. Self-contained (no profile
+# inheritance). NO SECRETS here: quarkus.datasource.password is resolved from OpenBao at
+# runtime (kv/summary-service/mysql, key=password). For local-only dev you may export
+# QUARKUS_DATASOURCE_PASSWORD via your shell, but never commit it.
+# =====================================================================================
+
+quarkus:
+  datasource:
+    db-kind: mysql
+    username: root
+    # password: <resolved from OpenBao kv/summary-service/mysql, NOT set here>
+    jdbc:
+      # 127.0.0.1 (not localhost) — MySQL runs in an lxc container on this host
+      # allowMultiQueries=true — the engine runs ;-joined UPDATE/DELETE segments in one round trip
+      url: jdbc:mysql://127.0.0.1:3306/tcbl_summary?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&allowMultiQueries=true
+      min-size: 2
+      max-size: 16
+
+# --- summary-service runtime config (consumed by the registry + workers + beans) ---
+summary:
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092
+    # offsets are committed only AFTER the DB commit (idempotency strategy v1)
+    consumer-group: summary-service-tcbl
+  defaults:
+    batch-size: 1000          # max events polled + merged + written per DB transaction
+    segment-size: 1000        # rows per multi-row extended INSERT (legacy SegmentSizeForDbWrite)
+  beans:
+    # the reference bean — CDR voice day + hour counters
+    cdr-voice:
+      enabled: true
+      topic: rated-cdr                 # PROVISIONAL — reconcile with billing-core (dotnet)
+      correction-topic: rated-cdr-correction
+      batch-size: 1000
+      day-table: sum_voice_day_03
+      hour-table: sum_voice_hr_03

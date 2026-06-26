@@ -1,0 +1,16 @@
+# =====================================================================================
+# Active tenant + profile registry (routesphere-like).
+#
+# TenantProfileConfigSource reads this file, picks the FIRST tenant with enabled=true,
+# and loads config/tenants/<name>/<profile>/profile-<profile>.yml, flattening it into
+# Quarkus config (quarkus.datasource.*, summary.beans.*, ...).
+#
+# Keep secrets OUT of these files — DB passwords resolve from OpenBao at runtime.
+# =====================================================================================
+tenants:
+  - name: tcbl
+    enabled: true
+    profile: dev
+  - name: tcbl
+    enabled: false
+    profile: prod

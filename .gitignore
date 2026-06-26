@@ -6,3 +6,9 @@ target/
 !.mvn/wrapper/maven-wrapper.jar
 .env
 *.log
+.claude/settings.local.json
+.claude/.devrole
+
+# never commit local dev secrets — prod secrets live in OpenBao, local ones stay out of git
+*.local-secret
+config/**/secrets.local.*
