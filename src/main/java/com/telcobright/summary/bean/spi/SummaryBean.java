@@ -3,33 +3,29 @@ package com.telcobright.summary.bean.spi;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
- * A summary bean = ONE purpose: build a typed summary entity {@code T} from an event stream and roll it into
- * one MySQL table over one configured time window. The CDR daily summary and the CDR hourly summary are two
- * beans over the SAME entity ({@code CdrSummary}); a future call-quality summary is a bean over its own entity.
+ * A summary bean = ONE purpose: build typed summary entities {@code T} from one entity's outbox stream and
+ * roll them into one MySQL table over one configured time window. The CDR daily summary and the CDR hourly
+ * summary are two beans over the SAME entity ({@code CdrSummary}); a future call-quality summary is its own bean.
  *
- * <p>Beans are config-driven instances (window + table + topic + filter from YAML), produced per
- * {@code enabledSummary} entry; the registry hot-starts one worker per enabled bean with no restart.
+ * <p>Beans are config-driven instances (window + table + filter + context from YAML), produced per
+ * {@code enabledSummary} entry; each runs as its own parallel worker that drains the outbox.
  *
  * @param <T> the summary entity this bean maintains
  */
 public interface SummaryBean<T extends SummaryEntity<T>> {
 
-    /** Unique bean id (also its worker id + its {@code summary.beans.<name>} config section). */
+    /** Unique bean id (also its worker id, its {@code summary.beans.<name>} config, and its offset bookmark). */
     String name();
 
-    /** The Kafka topic carrying the normal (increment) event stream. */
-    String topic();
+    /** The outbox {@code entity_type} this bean consumes (e.g. {@code "cdr"}). */
+    String entityType();
 
-    /** The correction topic (recompute + overwrite a window); null if this bean has no correction path. */
-    default String correctionTopic() {
+    /** The shared read-only context this bean needs (e.g. {@code "mediationContext"}), or null. */
+    default String contextName() {
         return null;
-    }
-
-    /** Max events polled + merged + written per DB transaction. */
-    default int batchSize() {
-        return 1000;
     }
 
     /** Target MySQL table for this bean's window. */
@@ -45,10 +41,11 @@ public interface SummaryBean<T extends SummaryEntity<T>> {
     WindowSize window();
 
     /**
-     * Decode one Kafka record value into a bucketed summary entity, or return {@code null} if this event is not
-     * for this bean (e.g. a different service group on a shared topic) so the worker skips it.
+     * Build the summary entities for ONE decompressed outbox row — its batch of records (the JSON array of
+     * {@code {Cdr, Customer}}). Records not for this bean (e.g. a different service group) are skipped; each
+     * kept record becomes one bucketed entity.
      */
-    T build(byte[] payload);
+    List<T> buildBatch(byte[] decompressedRowJson);
 
     /** The window bucket of an entity ({@code tup_starttime}); the distinct set is what the load query fetches. */
     LocalDateTime bucketOf(T entity);

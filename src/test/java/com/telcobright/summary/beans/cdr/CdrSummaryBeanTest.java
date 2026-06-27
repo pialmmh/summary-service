@@ -3,33 +3,35 @@ package com.telcobright.summary.beans.cdr;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.time.ZonedDateTime;
+import java.util.List;
 
-import static com.telcobright.summary.testkit.CdrTestSupport.toJson;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
-/** The bean's event->entity build: service-group filtering, per-window bucketing, persistence metadata. */
+/** The bean's blob→entity build: service-group filtering, per-window bucketing, and C# PascalCase decoding. */
 class CdrSummaryBeanTest {
 
     private final CdrSummaryBean daily = CdrTestSupport.dailyBean();
     private final CdrSummaryBean hourly = CdrTestSupport.hourlyBean();
 
     @Test
-    void build_skips_events_of_another_service_group() {
-        ZonedDateTime t = CdrTestSupport.at(2026, 6, 19, 14, 30);
-        assertNull(daily.build(toJson(CdrTestSupport.sg11Call(t))), "SG11 event filtered by the SG10 bean");
-        assertNotNull(daily.build(toJson(CdrTestSupport.sg10Call(t))));
+    void build_batch_keeps_only_its_service_group() {
+        LocalDateTime t = CdrTestSupport.at(2026, 6, 19, 14, 30);
+        byte[] mixed = CdrTestSupport.batchJson(List.of(CdrTestSupport.sg10Entry(t), CdrTestSupport.sg11Entry(t)));
+
+        List<CdrSummary> built = daily.buildBatch(mixed);
+
+        assertEquals(1, built.size(), "only the SG10 entry is kept by the SG10 bean");
     }
 
     @Test
-    void daily_and_hourly_beans_bucket_the_same_event_differently() {
-        ZonedDateTime t = CdrTestSupport.at(2026, 6, 19, 14, 30);
+    void daily_and_hourly_beans_bucket_the_same_record_differently() {
+        byte[] one = CdrTestSupport.batchJson(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 14, 30))));
 
-        CdrSummary day = daily.build(toJson(CdrTestSupport.sg10Call(t)));
-        CdrSummary hour = hourly.build(toJson(CdrTestSupport.sg10Call(t)));
+        CdrSummary day = daily.buildBatch(one).get(0);
+        CdrSummary hour = hourly.buildBatch(one).get(0);
 
         assertEquals(LocalDateTime.of(2026, 6, 19, 0, 0), day.tup_starttime);
         assertEquals(LocalDateTime.of(2026, 6, 19, 14, 0), hour.tup_starttime);
@@ -37,9 +39,30 @@ class CdrSummaryBeanTest {
     }
 
     @Test
+    void decodes_the_csharp_pascalcase_blob() {
+        // exactly the PINNED on-the-wire shape: C# PascalCase keys, ISO datetimes, nulls omitted
+        String json = "[{\"Cdr\":{\"SwitchId\":1,\"InPartnerId\":5,\"IncomingRoute\":\"in\",\"OutgoingRoute\":\"out\","
+                + "\"OriginatingIP\":\"1.1.1.1\",\"TerminatingIP\":\"2.2.2.2\",\"CountryCode\":\"880\","
+                + "\"ConnectTime\":\"2026-06-19T14:30:00\",\"NERSuccess\":1,\"ChargingStatus\":1,\"DurationSec\":60,"
+                + "\"StartTime\":\"2026-06-19T14:30:00\",\"AnsIdTerm\":42,\"MatchedPrefixSupplier\":\"1712\"},"
+                + "\"Customer\":{\"servicegroup\":10,\"Prefix\":\"1712\",\"unitPriceOrCharge\":1.0,\"idBilledUom\":\"BDT\","
+                + "\"BilledAmount\":1.0,\"TaxAmount1\":0.5}}]";
+
+        List<CdrSummary> built = daily.buildBatch(json.getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(1, built.size());
+        CdrSummary s = built.get(0);
+        assertEquals(1, s.totalcalls);
+        assertEquals(1, s.connectedcalls);
+        assertEquals(0, s.customercost.compareTo(new BigDecimal("1.0")));
+        assertEquals(LocalDateTime.of(2026, 6, 19, 0, 0), s.tup_starttime);
+    }
+
+    @Test
     void exposes_its_table_columns_and_bucket() {
         assertEquals(CdrTestSupport.DAY_TABLE, daily.table());
         assertEquals(CdrSummary.INSERT_COLUMNS, daily.insertColumnsCsv());
         assertEquals("tup_starttime", daily.bucketColumn());
+        assertEquals("cdr", daily.entityType());
     }
 }

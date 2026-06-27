@@ -4,9 +4,13 @@ The rulings this service is built on. Items marked **RATIFIED** come from the de
 (`CLAUDE.md` + `/tmp/shared-instruction/summary-service-design.md`); the rest are this stream's calls.
 
 > **v2 redesign (2026-06-27) — see §12.** The generic axis moved from the EVENT to the typed summary ENTITY
-> `T` per `summary-service-entity-redesign.md` (dotnet, ratified + user directive). The pipeline rulings
-> below (§1–4, §6) are unchanged and still hold; the type-model rulings are updated in §12. The v1
-> declarative `SummaryRow`/dimension-extractor model is superseded.
+> `T` per `summary-service-entity-redesign.md` (dotnet, ratified + user directive). The type-model rulings are
+> in §12. The v1 declarative `SummaryRow`/dimension-extractor model is superseded.
+>
+> **v3 redesign (2026-06-28) — see §13.** The INPUT moved from Kafka cdr-events to a MySQL transactional
+> OUTBOX + per-bean MySQL offset + Kafka-as-ping, per `summary-service-outbox-design.md` (user + architect +
+> dotnet ratified). The engine (§1–3) is unchanged — it reads the outbox blob now. §4 (Kafka-offset
+> idempotency) and §11 (recompute-from-cdr correction) are SUPERSEDED by §13.
 
 ## 1. load-merge-write is the core — RATIFIED
 Not bare `INSERT … ON DUPLICATE KEY UPDATE`. The cache → merge → segmented-write path handles increment
@@ -97,8 +101,35 @@ week 1–52/53) / `monthly` / `yearly`. The week bucket is stored as the week-st
 (a datetime, uniquely identifying the week); if an integer week-number column is wanted later, that's a schema
 addition to coordinate.
 
-### 12c. Provisional surface (updated)
-`RatedCdrEvent` (now the full builder input set) + `sum_voice.provisional.sql` (all 47 columns) remain
-PROVISIONAL pending dotnet's still-owed items: real `CREATE TABLE` (with partitions, SG10 `*_03` / SG11
-`*_02`), the pinned `RatedCdrEvent` field names mapped to `CdrSummaryBuilder`, and the final topic name(s).
-Reconcile `RatedCdrEvent` + `CdrSummaryBuilder` + the DDL when they land — nothing else changes.
+### 12c. Provisional surface (updated by §13)
+The blob/topic/DDL are now PINNED by dotnet (see §13). `MediationContext` shape stays provisional but is not
+load-bearing for the CDR build.
+
+## 13. Input = MySQL outbox + per-bean offset + Kafka-ping — RATIFIED (v3, supersedes §4 and §11)
+Per `summary-service-outbox-design.md` (user + architect + dotnet). MySQL+Kafka can't be atomic (dual-write)
+and full window recompute is impossible (millions of cdrs), so:
+
+- **Outbox:** billing writes ONE `summary_affected{id, entity_type, data}` row per ~1000-cdr batch inside its
+  cdr transaction; `data` = `base64(gzip(UTF-8 JSON array of {Cdr, Customer}))` (PINNED). Kafka topic
+  `cdr_summary_ping` carries only a wakeup (payload informational). The engine reads the blob now.
+- **Exactly-once per bean:** each bean writes its summaries AND advances its `summary_offset.last_offset` in
+  ONE MySQL transaction. The Kafka offset is NOT progress. Crash before commit → offset unchanged →
+  reprocessed clean. This SUPERSEDES §4 (commit-Kafka-offset-after-DB) — the gap that needed it is gone.
+- **Parallel beans, shared context:** daily & hourly are separate workers (own offset, own tx), sharing a
+  read-only `MediationContext` loaded once from config-manager (unchanged; summary is just a client). The
+  context is NOT load-bearing for the CDR build (the blob carries already-rated cdr+chargeable) — wired lazily
+  per the user directive; reconcile its fields if a future build needs them.
+- **Reaper:** option A (shared outbox, billing writes once). A scheduled task deletes `summary_affected` rows
+  with `id ≤ min(last_offset)` across the entity's ACTIVE beans; a bean with no offset row counts as 0 (nothing
+  deleted until every bean has progressed). Removing a bean from `enabledSummary` permanently should delete its
+  offset row so it stops blocking the reaper (architect Q2 — proceeding on this default; ruling pending).
+- **Correction:** the "recompute the window from the cdr table" path (§11) is DROPPED — impossible at scale;
+  summarisation is incremental-only. `MergeMode.OVERWRITE` stays in the cache for a future targeted correction.
+- **Topology:** single active instance per tenant (architect Q1, ratified by the user). The per-bean
+  `summary_offset` (+ optional FOR UPDATE) is the HA hook if multi-instance is needed later.
+
+### 13a. PINNED by dotnet (no longer provisional)
+blob codec + `{Cdr,Customer}` field list; ping topic `cdr_summary_ping`; outbox DDL (`summary_affected` +
+`summary_offset.last_offset`, billing-core `src/Billing.Data/Sql/summary_outbox.sql`); `sum_voice` 47 cols
+(matches `CdrSummary`), SG10→`*_03`/SG11→`*_02`, RANGE-by-month partitions. The summary side decodes the C#
+PascalCase blob case-insensitively. Still open: architect Q2 (reaper deregister rule); `MediationContext` shape.

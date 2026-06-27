@@ -3,24 +3,20 @@ package com.telcobright.summary.bean.spi;
 import org.junit.jupiter.api.Test;
 
 import java.time.DayOfWeek;
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The YAML-configured window granularities truncate an event instant to the right bucket start. */
+/** The YAML-configured window granularities truncate a local event time to the right bucket start. */
 class WindowSizeTest {
 
-    private static final ZoneId ZONE = ZoneId.of("Asia/Dhaka");
     // 2026-06-19 (Friday) 14:37 local
-    private static final Instant T = ZonedDateTime.of(2026, 6, 19, 14, 37, 0, 0, ZONE).toInstant();
+    private static final LocalDateTime T = LocalDateTime.of(2026, 6, 19, 14, 37, 0);
 
     private static LocalDateTime bucket(String token) {
-        return WindowSize.parse(token).bucketStart(T, ZONE);
+        return WindowSize.parse(token).bucketStart(T);
     }
 
     @Test

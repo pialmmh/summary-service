@@ -1,69 +1,69 @@
 # summary-service — architecture
 
-The generic axis is the **summary ENTITY `T`** (a real typed class, e.g. `CdrSummary`), not the event. The
-engine does load-merge-write over `T`; `T` owns its key, merge, negate, clone, and SQL fragments.
+The generic axis is the typed summary **entity `T`** (e.g. `CdrSummary`). The input is a **MySQL outbox**
+(`summary_affected`), consumed **exactly-once per bean** via a per-bean **MySQL offset** (`summary_offset`);
+Kafka (`cdr_summary_ping`) is only a wakeup. The ratified load-merge-write engine reads the decompressed blob.
 
 ## TreeView
 
 ```
-summary-service (time-windowed counters for any event stream)
+summary-service (incremental time-windowed counters from a MySQL outbox)
 ├── bean/spi · SummaryEntity<T> · SummaryBean<T> · SummaryKey · WindowSize · SqlLiterals
 ├── engine
 │   ├── api · SummaryEngine (runBatch), BatchResult
-│   ├── spi · SummaryStore (db seam), RowMapper, MergeMode, SummaryStoreException
+│   ├── spi · SummaryStore (summary-row db seam), RowMapper, MergeMode, SummaryStoreException
 │   └── internal · SummaryCache<T>, SegmentedSqlWriter, CollectionSegmenter
+├── outbox
+│   ├── api · OutboxReader (drain = the ONE tx per step: read offset+rows → merge → write summaries → advance offset)
+│   ├── spi · OutboxStore (offset/rows/reap DAO), OutboxRow
+│   └── internal · OutboxCodec (base64/gzip/json), OutboxReaper (scheduled trim)
 ├── runtime (the ONE transaction + JDBC)
-│   ├── api · BatchRunner (begins a unit of work, commits once, rolls back on any failure)
-│   ├── spi · UnitOfWork, UnitOfWorkFactory
-│   └── internal · JdbcUnitOfWorkFactory, JdbcUnitOfWork, JdbcSummaryStore
-├── registry (lifecycle / hot-start / config-driven instances)
-│   ├── api · SummaryBeanRegistry (register, start, stop, status)
+│   ├── spi · UnitOfWork (store() + outbox(), same connection), UnitOfWorkFactory
+│   └── internal · JdbcUnitOfWorkFactory, JdbcUnitOfWork, JdbcSummaryStore, JdbcOutboxStore
+├── registry (lifecycle / parallel workers / hot-start)
+│   ├── api · SummaryBeanRegistry (register, start, stop, wakeAll, runningBeanNames)
 │   ├── spi · SummaryBeanFactory (one per entity), BeanConfig
-│   └── internal · SummaryWorker<T> (poll loop), KafkaConsumerFactory, SummaryBootstrap
+│   └── internal · OutboxWorker<T> (drain loop, woken by ping/timer), SummaryBootstrap
+├── context (shared read-only, from config-manager)
+│   ├── api · ContextRegistry (load each context once)
+│   ├── spi · SummaryContext
+│   └── internal/cdr · ConfigManagerClient, MediationContext
+├── ping/internal · PingListener (Kafka cdr_summary_ping → wake workers)
 ├── config/internal · TenantProfileConfigSource, ProfileYamlLoader
-└── beans/cdr · CdrSummary (entity, 47 cols) · CdrSummaryBuilder · CdrSummaryBean · CdrSummaryBeanFactory · RatedCdrEvent
+└── beans/cdr · CdrSummary (entity, 47 cols) · CdrSummaryBuilder · CdrSummaryBean · factory · Cdr/Customer/CdrBlobEntry · CdrBlobMapper
 ```
 
 Discover the system through `**/api` + `**/spi`; `internal/` is implementation (no outward imports).
 
-## The entity model
+## Exactly-once per bean
 
-- **`SummaryEntity<T>`** (= legacy `ISummary` + `ICacheble`): `id` · `tupleKey()` · `merge(T)` · `multiply(int)`
-  · `cloneWithFakeId()` · `insertValues()` · `updateAssignments()`. The key type is fixed to `SummaryKey`
-  (a canonical token tuple), so the engine is generic over just `T`.
-- **`CdrSummary`** is the faithful 1:1 port of billing-core's `AbstractCdrSummary` — all 47 columns, exact
-  `Merge` (adds every counter incl. `connectedcallsCC`) and `Multiply` (scales every counter EXCEPT
-  `connectedcallsCC` — a deliberate legacy quirk, replicated). ONE entity for day AND hour AND call AND sms.
-- A future `CallQuality` summary = a new class on the same interface + its own factory; no engine change.
+Each bean has its own `summary_offset(entity_type, bean_name, last_offset)`. A drain reads the offset, reads
+the next outbox rows, writes its summaries, **and advances its offset — all in ONE MySQL transaction**
+(`UnitOfWork` exposes both `store()` and `outbox()` over the same connection). So work + progress commit
+together: a crash before commit rolls both back (offset unchanged → reprocessed clean, no double-count); the
+Kafka offset is never used for progress, so a lost/duplicate ping is harmless. Single active instance per
+tenant (architect Q1).
 
-## Beans are config-driven instances
+## Flow: one drain (cdrOutboxDrain)
 
-One **`SummaryBean<T>` class per entity** (e.g. `CdrSummaryBean`); each `enabledSummary` entry is a distinct
-configured instance differing only by `window` + `table` (+ topic/filter). Daily vs hourly vs 5-minute vs
-weekly are configs, not classes. `SummaryBeanFactory` (one per entity) turns a `BeanConfig` into a live bean.
+Runs when a worker wakes (ping or fallback timer) for a bean that has un-consumed outbox rows.
 
-`WindowSize` truncates an event instant to the bucket (`tup_starttime`): `5min` / `Nmin` (multiple of 5) /
-`hourly` / `daily` / `weekly` (Monday-start ISO week) / `monthly` / `yearly`.
-
-## Flow: one batch (cdrSummaryOnBatch)
-
-Runs when a worker polls a non-empty batch from the bean's topic.
-
-1. `SummaryWorker` polls up to `batchSize` records; `SummaryBean.build` decodes + buckets each into a `T`
-   (or null to skip — e.g. another service group on a shared topic).
-2. `SummaryWorker` calls `BatchRunner.run(bean, entities)`.
-3. `BatchRunner` begins a `UnitOfWork` (a MySQL connection, autocommit off) and calls `SummaryEngine.runBatch`.
-4. `SummaryEngine` computes the distinct buckets, calls `SummaryStore.load` ONCE (mapping rows via
-   `bean.mapRow`), seeds `SummaryCache<T>`, then merges every entity (`T.merge`).
-5. `SummaryEngine` flushes the cache: `T.insertValues()` build the multi-row INSERT (new rows) +
-   `T.updateAssignments()` build id-targeted UPDATEs (loaded rows), run in segments through the store.
-6. `BatchRunner` commits; then `SummaryWorker` `commitSync()`s the Kafka offset.
-7. On ANY exception in 3–5, `BatchRunner` rolls the whole batch back and the offset is NOT committed → the
-   batch redelivers (repaired by the correction/overwrite path).
+1. `OutboxWorker` calls `OutboxReader.drain(bean)`.
+2. `OutboxReader` begins a `UnitOfWork` and reads `outbox().readOffset(entity, bean)`.
+3. `outbox().readAfter(entity, offset, maxRowsPerTx)` → the next `summary_affected` rows.
+4. For each row: `OutboxCodec.decode` (base64→gunzip) → `bean.buildBatch` (parse `{Cdr,Customer}` array, filter
+   service group, bucket each via `WindowSize`) → entities.
+5. `SummaryEngine.runBatch` computes the involved windows, `SummaryStore.load`s them ONCE, merges every entity
+   (`SummaryCache<T>`), and flushes segmented INSERT/UPDATE through the same connection.
+6. `outbox().advanceOffset(entity, bean, lastRowId)`; `UnitOfWork.commit()` — summaries + offset together.
+7. On ANY exception in 2–6, `OutboxReader` rolls back; the offset is unchanged and the rows redeliver.
+8. Separately, `OutboxReaper` deletes `summary_affected` rows with `id ≤ min(last_offset)` across the active beans.
 
 ## Why these seams
 
 - **`SummaryEntity` / `SummaryBean` (bean/spi)** — a new summary kind is a new entity + bean; the engine is untouched.
-- **`SummaryStore` (engine/spi)** — the DB is a seam; the engine is tested with an in-memory fake, production is JDBC.
-- **`UnitOfWork` (runtime/spi)** — the transaction boundary is a seam; rollback is unit-tested with no DB and proven against real MySQL.
+- **`SummaryStore` + `OutboxStore` (engine/spi, outbox/spi)** — both DB sides are seams over one connection,
+  so the reader is tested with in-memory fakes and proven against real MySQL in the IT.
+- **`UnitOfWork` (runtime/spi)** — the transaction boundary that makes summaries + offset atomic (exactly-once).
 - **`SummaryBeanFactory` + `BeanConfig` (registry/spi)** — config-driven instances; new windows/tables with no code.
+- **`ContextRegistry` (context/api)** — config-manager loaded once, shared read-only (not load-bearing for CDR v1).

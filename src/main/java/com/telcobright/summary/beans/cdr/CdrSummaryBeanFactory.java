@@ -12,11 +12,12 @@ import jakarta.inject.Inject;
 @ApplicationScoped
 public class CdrSummaryBeanFactory implements SummaryBeanFactory {
 
-    private final ObjectMapper mapper;
+    private final ObjectMapper blobMapper;
 
     @Inject
     public CdrSummaryBeanFactory(ObjectMapper mapper) {
-        this.mapper = mapper;
+        // a case-insensitive + JavaTime copy for the C# PascalCase outbox blob
+        this.blobMapper = CdrBlobMapper.from(mapper);
     }
 
     @Override
@@ -26,6 +27,6 @@ public class CdrSummaryBeanFactory implements SummaryBeanFactory {
 
     @Override
     public SummaryBean<?> create(BeanConfig config) {
-        return new CdrSummaryBean(mapper, config);
+        return new CdrSummaryBean(blobMapper, config);
     }
 }

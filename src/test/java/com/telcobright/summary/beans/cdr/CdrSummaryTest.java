@@ -17,16 +17,17 @@ class CdrSummaryTest {
     private static final WindowSize DAILY = WindowSize.parse("daily");
 
     private CdrSummary call() {
-        return CdrSummaryBuilder.build(CdrTestSupport.sg10Call(CdrTestSupport.at(2026, 6, 19, 14, 30)), DAILY, CdrTestSupport.ZONE);
+        CdrBlobEntry e = CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 14, 30));
+        return CdrSummaryBuilder.build(e.cdr(), e.customer(), DAILY);
     }
 
     @Test
-    void builder_derives_the_common_counters_from_the_event() {
+    void builder_derives_the_common_counters_from_the_blob() {
         CdrSummary s = call();
         assertEquals(1, s.totalcalls);
-        assertEquals(1, s.connectedcalls);          // connectTime present
-        assertEquals(1, s.connectedcallsCC);        // nerSuccess == 1
-        assertEquals(1, s.successfulcalls);         // chargingStatus
+        assertEquals(1, s.connectedcalls);          // ConnectTime present
+        assertEquals(1, s.connectedcallsCC);        // NERSuccess == 1
+        assertEquals(1, s.successfulcalls);         // ChargingStatus
         assertEquals(0, s.actualduration.compareTo(new BigDecimal("60")));
         assertEquals(0, s.customercost.compareTo(new BigDecimal("1.0")));
         assertEquals(0, s.tax1.compareTo(new BigDecimal("0.5")));
@@ -53,14 +54,11 @@ class CdrSummaryTest {
     }
 
     @Test
-    void tuple_key_is_equal_for_same_dimensions_and_bucket_but_differs_by_destination() {
-        CdrSummary a = call();
-        CdrSummary b = call();
-        assertEquals(a.tupleKey(), b.tupleKey());
+    void tuple_key_is_equal_for_same_dimensions_but_differs_by_destination() {
+        assertEquals(call().tupleKey(), call().tupleKey());
 
-        CdrSummary other = CdrSummaryBuilder.build(
-                CdrTestSupport.sg10Call(CdrTestSupport.at(2026, 6, 19, 14, 30), 99), DAILY, CdrTestSupport.ZONE);
-        assertNotEquals(a.tupleKey(), other.tupleKey());
+        CdrBlobEntry other = CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 14, 30), 99);
+        assertNotEquals(call().tupleKey(), CdrSummaryBuilder.build(other.cdr(), other.customer(), DAILY).tupleKey());
     }
 
     @Test

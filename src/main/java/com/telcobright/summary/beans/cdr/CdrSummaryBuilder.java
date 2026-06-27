@@ -3,79 +3,75 @@ package com.telcobright.summary.beans.cdr;
 import com.telcobright.summary.bean.spi.WindowSize;
 
 import java.math.BigDecimal;
-import java.time.Instant;
-import java.time.ZoneId;
 
 /**
- * Builds a per-call {@link CdrSummary} from a {@link RatedCdrEvent} — the port of legacy
- * {@code CdrSummaryBuilder}: the SG-independent identity/count/duration fields (PopulateCommon), the window
- * bucket ({@code tup_starttime} truncated to the bean's {@link WindowSize}), then the service-group-specific
+ * Builds a per-call {@link CdrSummary} from an outbox blob entry's {@code (Cdr, Customer)} pair — the port of
+ * billing-core's {@code CdrSummaryBuilder} (the legacy (cdr, acc_chargeable) signature): the SG-independent
+ * identity/count/duration fields (PopulateCommon), the window bucket ({@code tup_starttime} = the cdr's
+ * wall-clock {@code StartTime} truncated to the bean's {@link WindowSize}), then the service-group-specific
  * rate/cost/tax/prefix/currency fields (SG10 customer leg vs SG11 customer leg), then null-string defaults.
- *
- * <p>CUSTOMER leg only — supplier/extended-leg fields populate from the cdr where present (SG10) and otherwise
- * stay 0, exactly as legacy.
  */
 final class CdrSummaryBuilder {
 
     private CdrSummaryBuilder() {
     }
 
-    static CdrSummary build(RatedCdrEvent e, WindowSize window, ZoneId zone) {
+    static CdrSummary build(Cdr cdr, Customer customer, WindowSize window) {
         CdrSummary s = new CdrSummary();
-        populateCommon(s, e);
-        s.tup_starttime = window.bucketStart(Instant.ofEpochMilli(e.startEpochMillis()), zone);
-        populateServiceGroup(s, e);
+        populateCommon(s, cdr);
+        s.tup_starttime = window.bucketStart(cdr.startTime());
+        populateServiceGroup(s, cdr, customer);
         replaceNullsWithDefault(s);
         return s;
     }
 
-    private static void populateCommon(CdrSummary s, RatedCdrEvent e) {
-        s.tup_switchid = e.switchId();
-        s.tup_inpartnerid = e.inPartnerId() == null ? 0 : e.inPartnerId();
-        s.tup_outpartnerid = e.outPartnerId() == null ? 0 : e.outPartnerId();
-        s.tup_incomingroute = e.incomingRoute() == null ? "" : e.incomingRoute();
-        s.tup_outgoingroute = e.outgoingRoute() == null ? "" : e.outgoingRoute();
-        s.tup_incomingip = e.originatingIp() == null ? "" : e.originatingIp();
-        s.tup_outgoingip = e.terminatingIp() == null ? "" : e.terminatingIp();
+    private static void populateCommon(CdrSummary s, Cdr cdr) {
+        s.tup_switchid = cdr.switchId();
+        s.tup_inpartnerid = cdr.inPartnerId() == null ? 0 : cdr.inPartnerId();
+        s.tup_outpartnerid = cdr.outPartnerId() == null ? 0 : cdr.outPartnerId();
+        s.tup_incomingroute = orEmpty(cdr.incomingRoute());
+        s.tup_outgoingroute = orEmpty(cdr.outgoingRoute());
+        s.tup_incomingip = orEmpty(cdr.originatingIp());
+        s.tup_outgoingip = orEmpty(cdr.terminatingIp());
 
         s.totalcalls = 1;
-        s.connectedcalls = e.connectTimeEpochMillis() != null ? 1 : 0;
-        s.connectedcallsCC = e.nerSuccess() != null && e.nerSuccess() == 1 ? 1 : 0;
-        s.successfulcalls = e.chargingStatus() == null ? 0 : e.chargingStatus();
-        s.actualduration = nz(e.durationSec());
-        s.roundedduration = nz(e.roundedDuration());
-        s.duration1 = nz(e.duration1());
-        s.duration2 = nz(e.duration2());
-        s.duration3 = nz(e.duration3());
-        s.PDD = nz(e.pdd());
+        s.connectedcalls = cdr.connectTime() != null ? 1 : 0;
+        s.connectedcallsCC = cdr.nerSuccess() != null && cdr.nerSuccess() == 1 ? 1 : 0;
+        s.successfulcalls = cdr.chargingStatus() == null ? 0 : cdr.chargingStatus();
+        s.actualduration = nz(cdr.durationSec());
+        s.roundedduration = nz(cdr.roundedDuration());
+        s.duration1 = nz(cdr.duration1());
+        s.duration2 = nz(cdr.duration2());
+        s.duration3 = nz(cdr.duration3());
+        s.PDD = nz(cdr.pdd());
     }
 
-    private static void populateServiceGroup(CdrSummary s, RatedCdrEvent e) {
-        s.tup_countryorareacode = e.countryCode();
+    private static void populateServiceGroup(CdrSummary s, Cdr cdr, Customer customer) {
+        s.tup_countryorareacode = cdr.countryCode();
 
-        if (e.serviceGroup() == 10) {            // SG10 customer leg (+ supplier fields from the cdr)
-            s.tup_destinationId = idString(e.ansIdTerm());
-            s.tup_matchedprefixsupplier = e.matchedPrefixSupplier();
-            s.tup_matchedprefixcustomer = e.prefix();
-            s.tup_customerrate = nz(e.unitPriceOrCharge());
-            s.tup_customercurrency = e.idBilledUom();
-            s.customercost = nz(e.billedAmount());
+        if (customer.servicegroup() == 10) {            // SG10 customer leg (+ supplier fields from the cdr)
+            s.tup_destinationId = idString(cdr.ansIdTerm());
+            s.tup_matchedprefixsupplier = cdr.matchedPrefixSupplier();
+            s.tup_matchedprefixcustomer = customer.prefix();
+            s.tup_customerrate = nz(customer.unitPriceOrCharge());
+            s.tup_customercurrency = customer.idBilledUom();
+            s.customercost = nz(customer.billedAmount());
             s.tup_tax1currency = "BDT";
-            s.tax1 = nz(e.taxAmount1());
-            s.suppliercost = nz(e.outPartnerCost());
-            s.tup_supplierrate = nz(e.supplierRate());
+            s.tax1 = nz(customer.taxAmount1());
+            s.suppliercost = nz(cdr.outPartnerCost());
+            s.tup_supplierrate = nz(cdr.supplierRate());
             s.tup_suppliercurrency = "BDT";
             s.tup_tax2currency = "BDT";
-            s.tax2 = nz(e.tax2());
-        } else if (e.serviceGroup() == 11) {     // SG11 customer leg
-            s.tup_matchedprefixcustomer = e.matchedPrefixY();
-            s.tup_sourceId = idString(e.ansIdOrig());
-            s.customercost = nz(e.billedAmount());
-            s.tup_customerrate = nz(e.otherDecAmount1());
-            s.longDecimalAmount1 = nz(e.otherAmount1());
-            s.tax1 = nz(e.taxAmount1());
+            s.tax2 = nz(cdr.tax2());
+        } else if (customer.servicegroup() == 11) {     // SG11 customer leg
+            s.tup_matchedprefixcustomer = cdr.matchedPrefixY();
+            s.tup_sourceId = idString(cdr.ansIdOrig());
+            s.customercost = nz(customer.billedAmount());
+            s.tup_customerrate = nz(customer.otherDecAmount1());
+            s.longDecimalAmount1 = nz(customer.otherAmount1());
+            s.tax1 = nz(customer.taxAmount1());
         } else {
-            throw new IllegalArgumentException("no summary mapping for service group " + e.serviceGroup());
+            throw new IllegalArgumentException("no summary mapping for service group " + customer.servicegroup());
         }
     }
 

@@ -1,10 +1,8 @@
 # =====================================================================================
-# tcbl / dev — summary-service profile
+# tcbl / dev — summary-service profile (OUTBOX consumer)
 #
-# Flattened into Quarkus config by TenantProfileConfigSource. Self-contained (no profile
-# inheritance). NO SECRETS here: quarkus.datasource.password is resolved from OpenBao at
-# cutover (kv/summary-service/mysql). For local-only dev you may export
-# QUARKUS_DATASOURCE_PASSWORD via your shell, but never commit it.
+# Flattened into Quarkus config by TenantProfileConfigSource. NO SECRETS here:
+# quarkus.datasource.password resolves from OpenBao at cutover (kv/summary-service/mysql).
 # =====================================================================================
 
 quarkus:
@@ -14,49 +12,44 @@ quarkus:
     # password: <resolved from OpenBao kv/summary-service/mysql, NOT set here>
     jdbc:
       # 127.0.0.1 (not localhost) — MySQL runs in an lxc container on this host.
-      # allowMultiQueries=true — the engine runs ;-joined UPDATE/DELETE segments in one round trip
+      # allowMultiQueries=true — the engine runs ;-joined UPDATE/DELETE segments in one round trip.
       url: jdbc:mysql://127.0.0.1:3306/tcbl_summary?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&allowMultiQueries=true
       min-size: 2
       max-size: 16
 
-# --- summary-service runtime config (consumed by the registry + workers + beans) ---
 summary:
-  kafka:
-    bootstrap-servers: 127.0.0.1:9092
-    consumer-group: summary-service-tcbl
-  defaults:
-    segment-size: 1000          # rows per multi-row extended INSERT (legacy SegmentSizeForDbWrite)
+  # 1) CONTEXT beans — shared read-only, loaded ONCE from config-manager (same apis billing calls).
+  #    config-manager is UNCHANGED; summary is just another client. Loaded lazily at bean activation.
+  contexts:
+    mediationContext:
+      source: config-manager
+      base-url: http://10.10.196.1:7071        # PROVISIONAL (same config-manager billing uses)
+      tenant: tcbl
 
-  # ONLY the beans listed here are configured + (when summary.autostart=true) hot-started.
-  # Add a new line to spin up another summary (e.g. a 5-minute CDR roll-up) with no code change.
+  # 2) Outbox consumer settings (input is the MySQL outbox; Kafka is only a ping).
+  outbox:
+    entity-type: cdr
+    ping-topic: cdr_summary_ping               # PINNED
+    ping-bootstrap-servers: 127.0.0.1:9092
+    poll-interval-seconds: 5                    # fallback drain if no ping arrives
+    max-rows-per-tx: 50                         # outbox rows merged per drain transaction
+    segment-size: 1000                          # rows per multi-row extended INSERT
+    reaper-interval-seconds: 60                 # trims summary_affected past min(last_offset)
+
+  # 3) SUMMARY beans to activate — each runs as its OWN parallel worker (own offset, own tx).
   enabledSummary:
     - dailyCdrSummary
     - hourlyCdrSummary
-    # - fiveMinCdrSummary
-    # - weeklyCdrSummary
-
-  # One CdrSummary entity; daily vs hourly differ ONLY by window + table. window accepts:
-  # 5min / Nmin (multiple of 5) / hourly / daily / weekly / monthly / yearly.
   beans:
     dailyCdrSummary:
       entity: cdr
       window: daily
       table: sum_voice_day_03
-      topic: rated-cdr                 # PROVISIONAL — reconcile with billing-core (dotnet)
-      correction-topic: rated-cdr-correction
-      service-group: 10                # SG10 -> *_03 (SG11 -> *_02)
-      batch-size: 1000
-      zone: Asia/Dhaka
+      service-group: 10                         # SG10 -> *_03 (SG11 -> *_02)
+      context: mediationContext
     hourlyCdrSummary:
       entity: cdr
       window: hourly
       table: sum_voice_hr_03
-      topic: rated-cdr
-      correction-topic: rated-cdr-correction
       service-group: 10
-      batch-size: 1000
-      zone: Asia/Dhaka
-
-    # Example future roll-ups — same entity, just a different window + table:
-    # fiveMinCdrSummary: { entity: cdr, window: 5min,   table: sum_voice_5min_03, topic: rated-cdr, service-group: 10 }
-    # weeklyCdrSummary:  { entity: cdr, window: weekly, table: sum_voice_week_03, topic: rated-cdr, service-group: 10 }
+      context: mediationContext

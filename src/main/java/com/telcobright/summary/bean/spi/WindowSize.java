@@ -1,16 +1,15 @@
 package com.telcobright.summary.bean.spi;
 
 import java.time.DayOfWeek;
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
 
 /**
- * The time window a summary bean rolls events into, configured per bean in YAML. It truncates an event
- * instant to the START of the window it falls in (the bucket), as wall-clock time in the bean's zone — that
- * value becomes the entity's {@code tup_starttime} and identifies the window.
+ * The time window a summary bean rolls events into, configured per bean in YAML. It truncates an event time to
+ * the START of the window it falls in (the bucket) — that value becomes the entity's {@code tup_starttime} and
+ * identifies the window. The event time is the cdr's {@code StartTime}, already wall-clock local (no zone
+ * conversion), so this works on a plain {@link LocalDateTime}.
  *
  * <p>Accepted YAML tokens (case-insensitive):
  * <ul>
@@ -66,9 +65,8 @@ public final class WindowSize {
         return new WindowSize(Unit.MINUTES, n, n + "min");
     }
 
-    /** The start of the window this instant falls in, as wall-clock time in {@code zone}. */
-    public LocalDateTime bucketStart(Instant eventTime, ZoneId zone) {
-        LocalDateTime t = LocalDateTime.ofInstant(eventTime, zone);
+    /** The start of the window this local event time falls in. */
+    public LocalDateTime bucketStart(LocalDateTime t) {
         return switch (unit) {
             case MINUTES -> {
                 int minutesIntoDay = t.getHour() * 60 + t.getMinute();

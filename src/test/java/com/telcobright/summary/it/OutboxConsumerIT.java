@@ -1,9 +1,8 @@
 package com.telcobright.summary.it;
 
-import com.telcobright.summary.beans.cdr.CdrSummary;
 import com.telcobright.summary.beans.cdr.CdrSummaryBean;
 import com.telcobright.summary.engine.api.SummaryEngine;
-import com.telcobright.summary.runtime.api.BatchRunner;
+import com.telcobright.summary.outbox.api.OutboxReader;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +12,7 @@ import javax.sql.DataSource;
 import java.io.PrintWriter;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -20,28 +20,25 @@ import java.util.List;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * INTEGRATION (local lxc MySQL): the WHOLE batch is ONE transaction owned by {@link BatchRunner} over the real
- * 47-column sum_voice schema. Success commits the merged window; an atomic multi-row INSERT that fails on one
- * bad value persists NOTHING (the good row is not left behind). SELF-SKIPS if MySQL is unreachable.
- *
- * <p>Local dev DB per the house convention (127.0.0.1:3306, root). NO password is baked into git — supply it
- * with {@code -Dsummary.it.mysql.password=…}; with none the connect fails and the test skips.
+ * INTEGRATION (local lxc MySQL): the full outbox consumer over real MySQL. Seeds {@code summary_affected} with
+ * base64(gzip(JSON {Cdr,Customer})) rows (what billing writes), runs the daily bean's drain, and verifies the
+ * summaries land, the per-bean {@code last_offset} advances, and a re-drain is a no-op (exactly-once). SELF-SKIPS
+ * if MySQL is unreachable; password via {@code -Dsummary.it.mysql.password=…} (no credential in git).
  */
-class CdrBatchAtomicityIT {
+class OutboxConsumerIT {
 
     private static final String SERVER_URL = System.getProperty("summary.it.mysql.url",
             "jdbc:mysql://127.0.0.1:3306/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true");
     private static final String USER = System.getProperty("summary.it.mysql.user", "root");
     private static final String PASSWORD = System.getProperty("summary.it.mysql.password", "");
     private static final String DB = "summary_it";
-    private static final String TABLE = CdrTestSupport.DAY_TABLE;
+    private static final String DAY_TABLE = CdrTestSupport.DAY_TABLE;
 
     private final CdrSummaryBean bean = CdrTestSupport.dailyBean();
-    private BatchRunner runner;
+    private OutboxReader reader;
 
     @BeforeEach
     void setUp() {
@@ -53,35 +50,30 @@ class CdrBatchAtomicityIT {
             throw new IllegalStateException("could not prepare the integration schema", e);
         }
         DataSource dataSource = new DriverManagerDataSource(SERVER_URL.replace("/?", "/" + DB + "?"));
-        runner = new BatchRunner(new JdbcUnitOfWorkFactory(dataSource), new SummaryEngine(), 1000);
+        reader = new OutboxReader(new JdbcUnitOfWorkFactory(dataSource), new SummaryEngine(), 1000, 50);
     }
 
     @Test
-    void batch_merges_and_commits_against_real_mysql() {
-        List<CdrSummary> batch = List.of(
-                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 10, 0)),
-                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 15, 0)),   // same day -> merges
-                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 20, 9, 0)));   // another day -> new row
+    void drains_the_outbox_writes_summaries_advances_offset_and_is_exactly_once() {
+        // row 1: two calls on the same day -> the daily bean merges them; row 2: another day
+        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(
+                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)),
+                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 15, 0)))));
+        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(
+                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 20, 9, 0)))));
 
-        runner.run(bean, batch);
+        int processed = reader.drain(bean);
 
-        assertEquals(2, count(TABLE), "two day windows -> two rows");
-        assertEquals(3, sum("totalcalls"), "three calls counted across the two rows");
-        assertEquals(3, sum("connectedcallsCC"), "connectedcallsCC summed in Merge");
-    }
+        assertEquals(2, processed, "two outbox rows consumed");
+        assertEquals(2, count(DAY_TABLE), "two day windows -> two summary rows");
+        assertEquals(3, sumTotalCalls(), "three calls counted across the windows");
+        assertEquals(2, offset("dailyCdrSummary"), "last_offset advanced to the last row id");
 
-    @Test
-    void a_failing_multi_row_insert_persists_nothing() {
-        execOnDb("alter table " + TABLE + " modify tup_destinationId varchar(2) not null default ''");
-
-        // two distinct rows in ONE multi-row insert; the second destination ('99999') overflows varchar(2)
-        List<CdrSummary> batch = List.of(
-                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 10, 0), 7),
-                CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 10, 0), 99999));
-
-        assertThrows(RuntimeException.class, () -> runner.run(bean, batch));
-
-        assertEquals(0, count(TABLE), "the whole batch rolled back — not even the good row persisted");
+        // re-drain: nothing new, no double-count
+        int again = reader.drain(bean);
+        assertEquals(0, again);
+        assertEquals(2, count(DAY_TABLE));
+        assertEquals(3, sumTotalCalls());
     }
 
     // ---- schema + helpers ----
@@ -97,12 +89,18 @@ class CdrBatchAtomicityIT {
     private void createSchema(Connection conn) throws SQLException {
         exec(conn, "create database if not exists " + DB + " character set utf8mb4");
         exec(conn, "use " + DB);
-        exec(conn, "drop table if exists " + TABLE);
-        exec(conn, createTable());
+        exec(conn, "drop table if exists summary_affected");
+        exec(conn, "drop table if exists summary_offset");
+        exec(conn, "drop table if exists " + DAY_TABLE);
+        exec(conn, "create table summary_affected (id bigint not null auto_increment, entity_type varchar(32) not null,"
+                + " data longtext not null, primary key(id), key ix_entity(entity_type,id)) engine=innodb default charset=utf8mb4");
+        exec(conn, "create table summary_offset (entity_type varchar(32) not null, bean_name varchar(64) not null,"
+                + " last_offset bigint not null default 0, primary key(entity_type,bean_name)) engine=innodb default charset=utf8mb4");
+        exec(conn, createSumVoiceTable());
     }
 
-    private static String createTable() {
-        return "create table " + TABLE + " ("
+    private static String createSumVoiceTable() {
+        return "create table " + DAY_TABLE + " ("
                 + "id bigint not null auto_increment,"
                 + "tup_switchid int not null default 0, tup_inpartnerid int not null default 0,"
                 + "tup_outpartnerid int not null default 0,"
@@ -133,26 +131,33 @@ class CdrBatchAtomicityIT {
                 + "primary key (id), key ix_starttime (tup_starttime)) engine=innodb default charset=utf8mb4";
     }
 
+    private void seedOutbox(long id, String data) {
+        String sql = "insert into summary_affected(id, entity_type, data) values(?, 'cdr', ?)";
+        try (Connection c = dbConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, id);
+            ps.setString(2, data);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("seed failed", e);
+        }
+    }
+
     private long count(String table) {
         return queryLong("select count(*) from " + table);
     }
 
-    private long sum(String column) {
-        return queryLong("select coalesce(sum(" + column + "),0) from " + TABLE);
+    private long sumTotalCalls() {
+        return queryLong("select coalesce(sum(totalcalls),0) from " + DAY_TABLE);
+    }
+
+    private long offset(String beanName) {
+        return queryLong("select coalesce(max(last_offset),0) from summary_offset where bean_name='" + beanName + "'");
     }
 
     private long queryLong(String sql) {
         try (Connection c = dbConnection(); Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
             rs.next();
             return rs.getLong(1);
-        } catch (SQLException e) {
-            throw new IllegalStateException(sql, e);
-        }
-    }
-
-    private void execOnDb(String sql) {
-        try (Connection c = dbConnection()) {
-            exec(c, sql);
         } catch (SQLException e) {
             throw new IllegalStateException(sql, e);
         }

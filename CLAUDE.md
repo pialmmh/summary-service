@@ -1,16 +1,31 @@
 # summary-service — project brief (for the agent that builds this)
 
-> You were started via `/start-dev summary-service`. Read this file, then **read the full design at
-> `/tmp/shared-instruction/summary-service-design.md`** (authored by the dotnet/billing-core agent), then
-> load `/code-convention`. Coordinate on the `summary-service` dev channel. The dotnet agent provides the
-> reference .NET impl + the rated-CDR Kafka stream; the architect (routesphere) ratifies the contract.
+> You were started via `/start-dev summary-service`. Read this file, then **read the AUTHORITATIVE design at
+> `/tmp/shared-instruction/summary-service-outbox-design.md`** (dotnet/billing-core, **user-ratified 2026-06-27**;
+> architect-ratified) **and the architect RULINGS at
+> `/tmp/shared-instruction/summary-service-architect-rulings-outbox.md`** (answers your Q1–Q6: single-active
+> topology, reaper/deregister rules, MediationContext NOT load-bearing for the CDR bean v1, ping broadcast,
+> entity_type taxonomy, summary_offset ownership + head-init), then load `/code-convention`. Coordinate on the
+> `summary-service` dev channel.
+
+> ⚠ **DESIGN SUPERSEDED (2026-06-27) — follow the outbox-design doc, NOT the old Kafka-events model below.**
+> The event source is now a **MySQL transactional OUTBOX** (`summary_affected`, written inside billing's cdr-batch
+> transaction) + **per-bean MySQL offset** (`summary_offset`) + **Kafka-as-ping** (no payload). This replaces
+> *"publish rated CDRs to a Kafka topic"* (MySQL+Kafka can't be atomic — dual-write) **and** *"correction =
+> recompute the window from the cdr table"* (a daily window is millions of cdrs — impossible). Summarisation is
+> **INCREMENTAL-ONLY**; **exactly-once per bean** = each bean writes its summaries **and** advances its own offset
+> in **ONE MySQL transaction**. Daily/hourly are **separate parallel beans** (own worker/offset/tx) sharing only a
+> **read-only MediationContext** loaded once from config-manager. **config-manager is UNCHANGED** (summary is just
+> another client of the same apis). A **reaper** deletes outbox rows once all active beans pass them. The engine
+> invariants further down (load-windows-once, segmented insert, one-txn-per-batch, incremental merge) are
+> UNCHANGED — they now read the outbox blob. **Where this brief disagrees with the outbox doc, the outbox doc wins.**
 
 ## Mission
 A standalone **Java 21 / Quarkus** service that generates **time-windowed counters/summaries** for any
 event stream — CDRs today, any log/entity later (softswitch/BSC/MSC-style performance counters). It OWNS
-summarisation; billing-core (and other producers) just emit events to Kafka. This **decouples summary from
-billing-core** → summaries become **eventually consistent** (Kafka-fed), which is fine for derived roll-ups —
-state it explicitly in the docs.
+summarisation; billing-core (and other producers) hand off events via a **MySQL transactional outbox** (see the
+SUPERSEDED banner above). This **decouples summary from billing-core** → summaries are **eventually consistent**
+(outbox-fed, incremental), which is fine for derived roll-ups — state it explicitly in the docs.
 
 ## Port from billing-core (`pialmmh/billing-dotnetcore`, proven .NET → Java)
 | billing-core | role |

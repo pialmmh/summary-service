@@ -10,26 +10,28 @@ import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * The CDR summary bean over the {@link CdrSummary} entity — one configured instance per enabled summary
- * (daily, hourly, 5-minute, …) differing only by {@link #window()} + {@link #table()}. It decodes a rated-CDR
- * event, filters to its configured service group, and builds a bucketed {@link CdrSummary} via
- * {@link CdrSummaryBuilder}. The engine does the load-merge-write.
+ * (daily, hourly, 5-minute, …) differing only by {@link #window()} + {@link #table()}. It decodes an outbox
+ * row's batch of {@code {Cdr, Customer}} entries, keeps the ones for its configured service group, and builds
+ * a bucketed {@link CdrSummary} per entry via {@link CdrSummaryBuilder}. The engine does the load-merge-write.
+ *
+ * <p>The bean declares {@link #contextName()} so the registry loads that context, but the CDR build reads only
+ * the blob — the MediationContext is not load-bearing here (per the pinned contract).
  */
 public final class CdrSummaryBean implements SummaryBean<CdrSummary> {
 
-    private final ObjectMapper mapper;
+    private final ObjectMapper blobMapper;
     private final BeanConfig config;
     private final int serviceGroup;
-    private final ZoneId zone;
 
-    public CdrSummaryBean(ObjectMapper mapper, BeanConfig config) {
-        this.mapper = mapper;
+    public CdrSummaryBean(ObjectMapper blobMapper, BeanConfig config) {
+        this.blobMapper = blobMapper;
         this.config = config;
         this.serviceGroup = config.serviceGroup() == null ? 10 : config.serviceGroup();
-        this.zone = config.zone();
     }
 
     @Override
@@ -38,18 +40,13 @@ public final class CdrSummaryBean implements SummaryBean<CdrSummary> {
     }
 
     @Override
-    public String topic() {
-        return config.topic();
+    public String entityType() {
+        return config.entity();
     }
 
     @Override
-    public String correctionTopic() {
-        return config.correctionTopic();
-    }
-
-    @Override
-    public int batchSize() {
-        return config.batchSize();
+    public String contextName() {
+        return config.context();
     }
 
     @Override
@@ -73,12 +70,19 @@ public final class CdrSummaryBean implements SummaryBean<CdrSummary> {
     }
 
     @Override
-    public CdrSummary build(byte[] payload) {
-        RatedCdrEvent event = deserialize(payload);
-        if (event.serviceGroup() != serviceGroup) {
-            return null;   // not this bean's service group on a shared topic -> skip
+    public List<CdrSummary> buildBatch(byte[] decompressedRowJson) {
+        List<CdrBlobEntry> entries = decode(decompressedRowJson);
+        List<CdrSummary> built = new ArrayList<>(entries.size());
+        for (CdrBlobEntry entry : entries) {
+            if (entry.cdr() == null || entry.customer() == null) {
+                continue;
+            }
+            if (entry.customer().servicegroup() != serviceGroup) {
+                continue;   // not this bean's service group
+            }
+            built.add(CdrSummaryBuilder.build(entry.cdr(), entry.customer(), config.window()));
         }
-        return CdrSummaryBuilder.build(event, config.window(), zone);
+        return built;
     }
 
     @Override
@@ -140,11 +144,12 @@ public final class CdrSummaryBean implements SummaryBean<CdrSummary> {
         return s;
     }
 
-    private RatedCdrEvent deserialize(byte[] payload) {
+    private List<CdrBlobEntry> decode(byte[] json) {
         try {
-            return mapper.readValue(payload, RatedCdrEvent.class);
+            return blobMapper.readValue(json,
+                    blobMapper.getTypeFactory().constructCollectionType(List.class, CdrBlobEntry.class));
         } catch (IOException e) {
-            throw new IllegalArgumentException("malformed rated-cdr payload", e);
+            throw new IllegalArgumentException("malformed outbox blob for " + config.name(), e);
         }
     }
 
