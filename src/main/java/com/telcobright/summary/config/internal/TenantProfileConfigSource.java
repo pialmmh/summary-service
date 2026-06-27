@@ -9,7 +9,7 @@ import java.util.Set;
  * Feeds the active tenant's flattened profile yml into Quarkus config (the routesphere pattern). Ordinal 275
  * so it overrides application.properties for the keys it provides (datasource, summary.*), while
  * application.properties keeps owning the active-tenant selection. Registered via ServiceLoader
- * (META-INF/services). Reads no secrets — the DB password resolves separately from OpenBao.
+ * (META-INF/services). The DB credentials are inline in the profile yml (no OpenBao), matching billing-core.
  */
 public class TenantProfileConfigSource implements ConfigSource {
 

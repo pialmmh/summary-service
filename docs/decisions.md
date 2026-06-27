@@ -51,25 +51,24 @@ URL (set in the profile yml).
 profile loader (the core of the pattern). The config-manager REST feed + Kafka reload-with-debounce are
 documented extension points, off by default so the app boots with no external services.
 
-## 8. Secrets via OpenBao — RATIFIED (mechanism deferred, rule honored now)
-No secret is ever committed or read from an env var. The committed profile yml holds the datasource **without
-a password**. At cutover the `quarkus-vault` extension (pinned to the version aligned with this Quarkus 3.26
-build) maps `kv/summary-service/mysql` → `quarkus.datasource.password`. The extension is intentionally NOT on
-the v1 classpath: the only cached versions (4.1/4.2) break augmentation on Quarkus 3.26, and until the OpenBao
-AppRole is provisioned it would just add a broker dependency to the build. The secrets rule is satisfied
-regardless — nothing sensitive is in git. The local dev MySQL password used by the integration test is a
-dev-only convenience credential (overridable via `-Dsummary.it.mysql.password`), not a production secret.
+## 8. Secrets: INLINE in the profile yml (no OpenBao) — RATIFIED (user, 2026-06-28; supersedes the OpenBao plan)
+The DB credentials live **inline** in the active profile yml (`quarkus.datasource.username/password`), pointing
+at the CCL infra (DB `103.95.96.77`, Kafka `103.95.96.78:9092`, config-manager `103.95.96.78:7072`) — the
+**same approach billing-core uses** (it committed inline creds, `ebd8da0`), chosen for operational parity. This
+is a **deliberate deviation from the house OpenBao rule**, made by the user; recorded here so it is intentional,
+not accidental. Consequence: when the CCL creds are filled at cutover they become a committed secret (the
+tradeoff the user accepted for parity). The fields are currently empty TODOs — nothing sensitive is committed
+yet. No `quarkus-vault` dependency. The integration test password is supplied at run time
+(`-Dsummary.it.mysql.password`), never committed.
 
 ## 9. Dynamic UI-defined beans — LATER (RATIFIED)
 The registry already supports runtime `start`/`stop` (a bean hot-starts its own consumer + worker thread with
 no restart). The UI to define beans is a later phase; v1 registers the compiled beans at startup.
 
-## 10. PROVISIONAL contract — pending billing-core (dotnet)
-`RatedCdrEvent` (the consumed event) and `sum_voice.provisional.sql` (the target tables) are the architect's
-placeholders so the pipeline + tests have something concrete. A handoff is posted on the `summary-service`
-channel asking dotnet to pin: the topic name(s), the rated-CDR event schema, and the real `sum_voice_*` DDL.
-When they land, reconcile `RatedCdrEvent` + `CdrVoiceSummaryBean`'s extractors + the DDL — nothing else
-changes.
+## 10. Contract pinning — DONE (history)
+This was the placeholder-until-dotnet-pins note. The contract is now PINNED and consumed — see §13 and §13a.
+The consumed shape is the `{Cdr, Customer}` blob (not the old flattened `RatedCdrEvent`), built by
+`CdrSummaryBean`; `sum_voice` matches `CdrSummary` (47 cols).
 
 ## 11. Correction path — designed, increment shipped
 `MergeMode.OVERWRITE` and the `correction-topic` config exist; the cache supports overwrite (clone the

@@ -1,19 +1,22 @@
 # =====================================================================================
 # tcbl / dev — summary-service profile (OUTBOX consumer)
 #
-# Flattened into Quarkus config by TenantProfileConfigSource. NO SECRETS here:
-# quarkus.datasource.password resolves from OpenBao at cutover (kv/summary-service/mysql).
+# Flattened into Quarkus config by TenantProfileConfigSource. Endpoints MATCH billing-core (dotnet) CCL:
+# DB 103.95.96.77:3306, Kafka 103.95.96.78:9092, config-manager 103.95.96.78:7072. Credentials are INLINE
+# (no OpenBao), same approach as billing-core. The CCL DB/Kafka are NOT reachable without the CCL VPN —
+# intentionally left that way (no local fallback); fill the creds + bring up connectivity to run.
 # =====================================================================================
 
 quarkus:
   datasource:
     db-kind: mysql
-    username: root
-    # password: <resolved from OpenBao kv/summary-service/mysql, NOT set here>
+    # CCL DB — same as billing-core (dotnet): host 103.95.96.77, admin schema telcobright, reseller schemas
+    # res_NNN resolved per tenant at runtime. Credentials INLINE (no OpenBao), same as billing-core.
+    username: ""                                  # CCL DB user     — TODO: set (same value as billing-core)
+    password: ""                                  # CCL DB password — TODO: set (same value as billing-core)
     jdbc:
-      # 127.0.0.1 (not localhost) — MySQL runs in an lxc container on this host.
       # allowMultiQueries=true — the engine runs ;-joined UPDATE/DELETE segments in one round trip.
-      url: jdbc:mysql://127.0.0.1:3306/tcbl_summary?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&allowMultiQueries=true
+      url: jdbc:mysql://103.95.96.77:3306/telcobright?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&allowMultiQueries=true
       min-size: 2
       max-size: 16
 
@@ -23,18 +26,18 @@ summary:
   contexts:
     mediationContext:
       source: config-manager
-      base-url: http://10.10.196.1:7071        # PROVISIONAL (same config-manager billing uses)
-      tenant: tcbl
+      base-url: http://103.95.96.78:7072         # CCL config-manager — same as billing-core (dotnet)
+      tenant: tcbl                               # NB: align with billing-core's ccl78 tenant chain at cutover
 
   # 2) Outbox consumer settings (input is the MySQL outbox; Kafka is only a ping).
   outbox:
     entity-type: cdr
-    ping-topic: cdr_summary_ping               # PINNED
-    ping-bootstrap-servers: 127.0.0.1:9092
-    poll-interval-seconds: 5                    # fallback drain if no ping arrives
-    max-rows-per-tx: 50                         # outbox rows merged per drain transaction
-    segment-size: 1000                          # rows per multi-row extended INSERT
-    reaper-interval-seconds: 60                 # trims summary_affected past min(last_offset)
+    ping-topic: cdr_summary_ping                # PINNED (matches billing-core producer)
+    ping-bootstrap-servers: 103.95.96.78:9092   # CCL Kafka — same as billing-core (dotnet)
+    poll-interval-seconds: 5                     # fallback drain if no ping arrives
+    max-rows-per-tx: 50                          # outbox rows merged per drain transaction
+    segment-size: 1000                           # rows per multi-row extended INSERT
+    reaper-interval-seconds: 60                  # trims summary_affected past min(last_offset)
 
   # 3) SUMMARY beans to activate — each runs as its OWN parallel worker (own offset, own tx).
   enabledSummary:
@@ -45,7 +48,7 @@ summary:
       entity: cdr
       window: daily
       table: sum_voice_day_03
-      service-group: 10                         # SG10 -> *_03 (SG11 -> *_02)
+      service-group: 10                          # SG10 -> *_03 (SG11 -> *_02)
       context: mediationContext
     hourlyCdrSummary:
       entity: cdr

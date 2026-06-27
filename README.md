@@ -68,7 +68,8 @@ change. A future `CallQuality` summary is a new entity + factory.
 - `config/tenants.yml` + `config/tenants/<tenant>/<profile>/profile-<profile>.yml` — datasource, the
   `summary.contexts` (config-manager) block, the `summary.outbox` settings, and the **`enabledSummary`** list +
   each bean's `entity`/`window`/`table`/`service-group`/`context`. Flattened by `TenantProfileConfigSource`.
-- **Secrets** (DB password) come from **OpenBao** at cutover — never committed, never from env.
+- **DB credentials** are **inline** in the profile yml (no OpenBao), matching billing-core — fill the CCL creds
+  at cutover (see `docs/decisions.md` §8). The integration-test password is supplied at run time, never committed.
 
 ## Layout
 

@@ -5,7 +5,7 @@
 # and loads config/tenants/<name>/<profile>/profile-<profile>.yml, flattening it into
 # Quarkus config (quarkus.datasource.*, summary.beans.*, ...).
 #
-# Keep secrets OUT of these files — DB passwords resolve from OpenBao at runtime.
+# Credentials are INLINE in each profile (no OpenBao), matching billing-core.
 # =====================================================================================
 tenants:
   - name: tcbl

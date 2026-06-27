@@ -63,7 +63,7 @@
             <artifactId>quarkus-agroal</artifactId>
         </dependency>
 
-        <!-- rated-CDR event JSON -> RatedCdrEvent -->
+        <!-- outbox blob JSON ({Cdr,Customer}) decode; JavaTime for StartTime/ConnectTime -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-jackson</artifactId>
@@ -76,12 +76,9 @@
         </dependency>
 
         <!--
-          SECRETS: DB creds come from the secret store (OpenBao), NEVER from env or committed config.
-          The quarkus-vault extension is added at CUTOVER, pinned to the version aligned with this Quarkus
-          release (the 3.26-aligned build), mapping kv/summary-service/mysql -> quarkus.datasource.password.
-          It is intentionally NOT on the v1 classpath: until the OpenBao AppRole is provisioned it would only
-          add a broker dependency to the build. The committed config holds NO password regardless — see
-          docs/DECISIONS.md ("Secrets").
+          SECRETS: DB creds are INLINE in the active profile yml (no OpenBao), matching billing-core for
+          operational parity (a deliberate deviation from the house OpenBao rule — see docs/decisions.md
+          "Secrets"). So no quarkus-vault dependency. Fill the CCL creds in the profile yml at cutover.
         -->
 
         <!-- health/readiness for the workers -->
