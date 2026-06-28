@@ -1,6 +1,6 @@
 package com.telcobright.summary.outbox.api;
 
-import com.telcobright.summary.beans.cdr.CdrSummaryBean;
+import com.telcobright.summary.summarybeans.call.CallSummaryBean;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.FakeOutboxStore;
@@ -23,8 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class OutboxReaderTest {
 
     private static final String ENTITY = "cdr";
-    private static final String BEAN = "dailyCdrSummary";
-    private final CdrSummaryBean bean = CdrTestSupport.dailyBean();
+    private static final String BEAN = "dailyCallSummary";
+    private final CallSummaryBean bean = CdrTestSupport.dailyBean();
 
     private OutboxReader reader(FakeUnitOfWorkFactory factory) {
         return new OutboxReader(factory, new SummaryEngine(), 1000, 50);

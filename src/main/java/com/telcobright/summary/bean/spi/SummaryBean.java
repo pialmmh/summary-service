@@ -7,11 +7,13 @@ import java.util.List;
 
 /**
  * A summary bean = ONE purpose: build typed summary entities {@code T} from one entity's outbox stream and
- * roll them into one MySQL table over one configured time window. The CDR daily summary and the CDR hourly
- * summary are two beans over the SAME entity ({@code CdrSummary}); a future call-quality summary is its own bean.
+ * roll them into one MySQL table over one time window. The daily call summary and the hourly call summary are
+ * two beans over the SAME entity ({@code CallSummary}); a future call-quality summary is its own bean.
  *
- * <p>Beans are config-driven instances (window + table + filter + context from YAML), produced per
- * {@code enabledSummary} entry; each runs as its own parallel worker that drains the outbox.
+ * <p>Each window is its own bean CLASS (e.g. {@code HourlySummary}, {@code DailySummary}), browsable under
+ * {@code summarybeans/<category>/}; its {@code table} + filter + context come from {@code summary.beans.<name>}
+ * in YAML, and {@code summary.enabledSummary} selects which to run. Each runs as its own parallel worker that
+ * drains the outbox.
  *
  * @param <T> the summary entity this bean maintains
  */

@@ -90,7 +90,7 @@ interface. The load-once / segmented-write / one-txn rulings (§1–4, §6) are 
 deliberate legacy inconsistency, replicated with a comment so a reader doesn't "tidy" it. Correcting it is a
 separate, explicit decision. The id strategy from §5 (AUTO_INCREMENT + update-by-id, no allocator) stands.
 
-### 12b. One bean per entity + configurable window in YAML — RATIFIED (user directive)
+### 12b. One bean per entity + configurable window in YAML — RATIFIED (user directive); window-as-config SUPERSEDED by §12d
 One `SummaryBean<T>` class per entity (e.g. `CdrSummaryBean`); each `summary.enabledSummary` entry is a
 distinct CONFIGURED instance differing only by `window` + `table` (+ topic/`service-group`). Daily, hourly,
 5-minute, weekly are configs, not classes — refines dotnet's "two bean classes" (logged to dotnet). A
@@ -103,6 +103,22 @@ addition to coordinate.
 ### 12c. Provisional surface (updated by §13)
 The blob/topic/DDL are now PINNED by dotnet (see §13). `MediationContext` shape stays provisional but is not
 load-bearing for the CDR build.
+
+### 12d. Beans organised as `summarybeans/<category>/`, one class per window — RATIFIED (user, 2026-06-28; supersedes 12b's window-as-config)
+The service is a catalog of summary/counter generators across categories (call/voice today; packet-flow,
+session, voip, video flow later). So beans are organised by **category package**: `summarybeans/<category>/`.
+Within a category, a shared base bean holds the decode/build/map logic and **each time window is its own
+`@Singleton` class** that fixes only `window()` — `summarybeans/call/HourlySummary.java`,
+`summarybeans/call/DailySummary.java` over `CallSummaryBean` (the entity is `CallSummary`, renamed from
+`CdrSummary`). This makes the catalog browsable ("open the folder, see every counter the category emits").
+
+Wiring change: the per-entity `SummaryBeanFactory` + `BeanConfig` are **removed**. `SummaryBootstrap` now
+**CDI-discovers** all `SummaryBean`s (`@Any Instance<SummaryBean<?>>`) and activates the ones whose `name()` is
+in `summary.enabledSummary`; `table`/`service-group`/`context` come from `summary.beans.<name>`, the `window` is
+the class, and `entity_type` is pinned `"cdr"` in the base. Tradeoff vs 12b: one instance per window class (you
+can't spin up two hourly beans of the same category from YAML alone — that'd be a second class). The user chose
+this for the browsable per-window catalog. The load-once / segmented-write / one-txn / exactly-once rulings
+(§1–3, §13) are unchanged. Build green (33 unit + 1 MySQL IT) after the move.
 
 ## 13. Input = MySQL outbox + per-bean offset + Kafka-ping — RATIFIED (v3, supersedes §4 and §11)
 Per `summary-service-outbox-design.md` (user + architect + dotnet). MySQL+Kafka can't be atomic (dual-write)

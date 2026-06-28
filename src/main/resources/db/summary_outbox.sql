@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS summary_affected (
 
 CREATE TABLE IF NOT EXISTS summary_offset (
     entity_type VARCHAR(32)  NOT NULL,                  -- matches summary_affected.entity_type
-    bean_name   VARCHAR(64)  NOT NULL,                  -- e.g. dailyCdrSummary / hourlyCdrSummary
+    bean_name   VARCHAR(64)  NOT NULL,                  -- e.g. dailyCallSummary / hourlyCallSummary
     last_offset BIGINT       NOT NULL DEFAULT 0,        -- last summary_affected.id this bean finished
     PRIMARY KEY (entity_type, bean_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

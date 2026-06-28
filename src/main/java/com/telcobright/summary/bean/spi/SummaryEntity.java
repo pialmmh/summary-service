@@ -2,7 +2,7 @@ package com.telcobright.summary.bean.spi;
 
 /**
  * A summary row as a real typed entity — the port of legacy {@code ISummary<TEntity,TKey>} + {@code ICacheble}.
- * The generic axis of the engine is THIS entity {@code T} (e.g. {@code CdrSummary}), not the event: {@code T}
+ * The generic axis of the engine is THIS entity {@code T} (e.g. {@code CallSummary}), not the event: {@code T}
  * owns its key, its merge math, its negate, its clone, and the SQL fragments it writes. "Support any entity"
  * (a future {@code CallQuality}) = a new class on this same interface.
  *

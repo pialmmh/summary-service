@@ -1,9 +1,10 @@
-package com.telcobright.summary.beans.cdr;
+package com.telcobright.summary.summarybeans.call;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.WindowSize;
-import com.telcobright.summary.registry.spi.BeanConfig;
+
+import org.eclipse.microprofile.config.ConfigProvider;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -14,65 +15,85 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The CDR summary bean over the {@link CdrSummary} entity — one configured instance per enabled summary
- * (daily, hourly, 5-minute, …) differing only by {@link #window()} + {@link #table()}. It decodes an outbox
- * row's batch of {@code {Cdr, Customer}} entries, keeps the ones for its configured service group, and builds
- * a bucketed {@link CdrSummary} per entry via {@link CdrSummaryBuilder}. The engine does the load-merge-write.
+ * The shared <b>call</b> summary machinery over the {@link CallSummary} entity (the 47-col {@code sum_voice}
+ * row). It decodes an outbox row's batch of {@code {Cdr, Customer}} entries, keeps the ones for its configured
+ * service group, and builds a bucketed {@link CallSummary} per entry via {@link CallSummaryBuilder}; the engine
+ * does the load-merge-write. Everything here is window-independent — the concrete per-window beans
+ * ({@link HourlySummary}, {@link DailySummary}, …) add ONE thing: {@link #window()}.
  *
- * <p>The bean declares {@link #contextName()} so the registry loads that context, but the CDR build reads only
+ * <p>This is the extension point for the {@code call} category: a new window = a new tiny subclass, browsable in
+ * this package. Each subclass is a CDI bean discovered + activated by name from {@code summary.enabledSummary};
+ * its {@code table} / {@code service-group} / {@code context} come from {@code summary.beans.<name>} in the
+ * active profile yml.
+ *
+ * <p>The bean declares {@link #contextName()} so the registry loads that context, but the call build reads only
  * the blob — the MediationContext is not load-bearing here (per the pinned contract).
  */
-public final class CdrSummaryBean implements SummaryBean<CdrSummary> {
+public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
 
     private final ObjectMapper blobMapper;
-    private final BeanConfig config;
+    private final String name;
+    private final String table;
     private final int serviceGroup;
+    private final String context;
 
-    public CdrSummaryBean(ObjectMapper blobMapper, BeanConfig config) {
-        this.blobMapper = blobMapper;
-        this.config = config;
-        this.serviceGroup = config.serviceGroup() == null ? 10 : config.serviceGroup();
+    /** CDI path: read {@code table}/{@code service-group}/{@code context} from {@code summary.beans.<name>}. */
+    protected CallSummaryBean(ObjectMapper blobMapper, String name) {
+        this(blobMapper, name,
+                optString(name, "table"),
+                optInt(name, "service-group", 10),
+                optString(name, "context"));
     }
+
+    /** Explicit path (tests / non-CDI wiring): the settings are passed in directly. */
+    protected CallSummaryBean(ObjectMapper blobMapper, String name, String table, int serviceGroup, String context) {
+        // a case-insensitive + JavaTime copy for the C# PascalCase outbox blob
+        this.blobMapper = CdrBlobMapper.from(blobMapper);
+        this.name = name;
+        this.table = table;
+        this.serviceGroup = serviceGroup;
+        this.context = context;
+    }
+
+    /** The one thing a per-window subclass fixes — its time bucket (hourly / daily / 5min / weekly / …). */
+    @Override
+    public abstract WindowSize window();
 
     @Override
     public String name() {
-        return config.name();
+        return name;
     }
 
+    /** The outbox {@code entity_type} the call category consumes — PINNED to {@code "cdr"} by billing-core. */
     @Override
     public String entityType() {
-        return config.entity();
+        return "cdr";
     }
 
     @Override
     public String contextName() {
-        return config.context();
+        return context;
     }
 
     @Override
     public String table() {
-        return config.table();
+        return table;
     }
 
     @Override
     public String insertColumnsCsv() {
-        return CdrSummary.INSERT_COLUMNS;
+        return CallSummary.INSERT_COLUMNS;
     }
 
     @Override
     public String bucketColumn() {
-        return CdrSummary.BUCKET_COLUMN;
+        return CallSummary.BUCKET_COLUMN;
     }
 
     @Override
-    public WindowSize window() {
-        return config.window();
-    }
-
-    @Override
-    public List<CdrSummary> buildBatch(byte[] decompressedRowJson) {
+    public List<CallSummary> buildBatch(byte[] decompressedRowJson) {
         List<CdrBlobEntry> entries = decode(decompressedRowJson);
-        List<CdrSummary> built = new ArrayList<>(entries.size());
+        List<CallSummary> built = new ArrayList<>(entries.size());
         for (CdrBlobEntry entry : entries) {
             if (entry.cdr() == null || entry.customer() == null) {
                 continue;
@@ -80,19 +101,19 @@ public final class CdrSummaryBean implements SummaryBean<CdrSummary> {
             if (entry.customer().servicegroup() != serviceGroup) {
                 continue;   // not this bean's service group
             }
-            built.add(CdrSummaryBuilder.build(entry.cdr(), entry.customer(), config.window()));
+            built.add(CallSummaryBuilder.build(entry.cdr(), entry.customer(), window()));
         }
         return built;
     }
 
     @Override
-    public LocalDateTime bucketOf(CdrSummary entity) {
+    public LocalDateTime bucketOf(CallSummary entity) {
         return entity.tup_starttime;
     }
 
     @Override
-    public CdrSummary mapRow(ResultSet rs) throws SQLException {
-        CdrSummary s = new CdrSummary();
+    public CallSummary mapRow(ResultSet rs) throws SQLException {
+        CallSummary s = new CallSummary();
         s.setId(rs.getLong("id"));
         s.tup_switchid = rs.getInt("tup_switchid");
         s.tup_inpartnerid = rs.getInt("tup_inpartnerid");
@@ -149,7 +170,7 @@ public final class CdrSummaryBean implements SummaryBean<CdrSummary> {
             return blobMapper.readValue(json,
                     blobMapper.getTypeFactory().constructCollectionType(List.class, CdrBlobEntry.class));
         } catch (IOException e) {
-            throw new IllegalArgumentException("malformed outbox blob for " + config.name(), e);
+            throw new IllegalArgumentException("malformed outbox blob for " + name, e);
         }
     }
 
@@ -161,5 +182,15 @@ public final class CdrSummaryBean implements SummaryBean<CdrSummary> {
     private static BigDecimal dec(ResultSet rs, String column) throws SQLException {
         BigDecimal v = rs.getBigDecimal(column);
         return v == null ? BigDecimal.ZERO : v;
+    }
+
+    private static String optString(String name, String key) {
+        return ConfigProvider.getConfig()
+                .getOptionalValue("summary.beans." + name + "." + key, String.class).orElse(null);
+    }
+
+    private static int optInt(String name, String key, int defaultValue) {
+        return ConfigProvider.getConfig()
+                .getOptionalValue("summary.beans." + name + "." + key, Integer.class).orElse(defaultValue);
     }
 }

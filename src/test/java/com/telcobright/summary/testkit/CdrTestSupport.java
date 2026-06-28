@@ -2,45 +2,42 @@ package com.telcobright.summary.testkit;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.telcobright.summary.bean.spi.WindowSize;
-import com.telcobright.summary.beans.cdr.Cdr;
-import com.telcobright.summary.beans.cdr.CdrBlobEntry;
-import com.telcobright.summary.beans.cdr.CdrBlobMapper;
-import com.telcobright.summary.beans.cdr.CdrSummary;
-import com.telcobright.summary.beans.cdr.CdrSummaryBean;
-import com.telcobright.summary.beans.cdr.Customer;
+import com.telcobright.summary.summarybeans.call.CallSummary;
+import com.telcobright.summary.summarybeans.call.CallSummaryBean;
+import com.telcobright.summary.summarybeans.call.Cdr;
+import com.telcobright.summary.summarybeans.call.CdrBlobEntry;
+import com.telcobright.summary.summarybeans.call.CdrBlobMapper;
+import com.telcobright.summary.summarybeans.call.Customer;
+import com.telcobright.summary.summarybeans.call.DailySummary;
+import com.telcobright.summary.summarybeans.call.HourlySummary;
 import com.telcobright.summary.outbox.internal.OutboxCodec;
-import com.telcobright.summary.registry.spi.BeanConfig;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * Builders for the outbox tests: ready cdr beans (daily / hourly), SG10/SG11 {@code {Cdr, Customer}} blob
- * entries mirroring the legacy fixtures (switch 1, partner 5, one 60s connected/charged call costing 1.0, tax
- * 0.5, NER success), and helpers to pack a batch the way billing does (JSON → gzip → base64).
+ * Builders for the outbox tests: ready call summary beans (daily / hourly) wired explicitly (no CDI / no
+ * config), SG10/SG11 {@code {Cdr, Customer}} blob entries mirroring the legacy fixtures (switch 1, partner 5,
+ * one 60s connected/charged call costing 1.0, tax 0.5, NER success), and helpers to pack a batch the way
+ * billing does (JSON → gzip → base64).
  */
 public final class CdrTestSupport {
 
     public static final String DAY_TABLE = "sum_voice_day_03";
     public static final String HOUR_TABLE = "sum_voice_hr_03";
+    private static final int SERVICE_GROUP = 10;
     private static final ObjectMapper MAPPER = CdrBlobMapper.create();
 
     private CdrTestSupport() {
     }
 
-    public static CdrSummaryBean dailyBean() {
-        return bean("dailyCdrSummary", "daily", DAY_TABLE);
+    public static CallSummaryBean dailyBean() {
+        return new DailySummary(MAPPER, DAY_TABLE, SERVICE_GROUP, "mediationContext");
     }
 
-    public static CdrSummaryBean hourlyBean() {
-        return bean("hourlyCdrSummary", "hourly", HOUR_TABLE);
-    }
-
-    public static CdrSummaryBean bean(String name, String window, String table) {
-        BeanConfig config = new BeanConfig(name, "cdr", WindowSize.parse(window), table, 10, "mediationContext");
-        return new CdrSummaryBean(MAPPER, config);
+    public static CallSummaryBean hourlyBean() {
+        return new HourlySummary(MAPPER, HOUR_TABLE, SERVICE_GROUP, "mediationContext");
     }
 
     public static LocalDateTime at(int year, int month, int day, int hour, int minute) {
@@ -87,12 +84,12 @@ public final class CdrTestSupport {
         return OutboxCodec.encode(batchJson(entries));
     }
 
-    /** A daily CdrSummary built through the real bean path (totalcalls=1), for cache/engine tests. */
-    public static CdrSummary daySummary(LocalDateTime start) {
+    /** A daily CallSummary built through the real bean path (totalcalls=1), for cache/engine tests. */
+    public static CallSummary daySummary(LocalDateTime start) {
         return daySummary(start, 42);
     }
 
-    public static CdrSummary daySummary(LocalDateTime start, int ansIdTerm) {
+    public static CallSummary daySummary(LocalDateTime start, int ansIdTerm) {
         return dailyBean().buildBatch(batchJson(List.of(sg10Entry(start, ansIdTerm)))).get(0);
     }
 

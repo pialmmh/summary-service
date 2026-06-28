@@ -1,7 +1,7 @@
 package com.telcobright.summary.engine.api;
 
-import com.telcobright.summary.beans.cdr.CdrSummary;
-import com.telcobright.summary.beans.cdr.CdrSummaryBean;
+import com.telcobright.summary.summarybeans.call.CallSummary;
+import com.telcobright.summary.summarybeans.call.CallSummaryBean;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.FakeSummaryStore;
 import org.junit.jupiter.api.Test;
@@ -15,11 +15,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The full load-merge-write pipeline over the fake store, typed on CdrSummary: load-once, insert, update. */
+/** The full load-merge-write pipeline over the fake store, typed on CallSummary: load-once, insert, update. */
 class SummaryEngineTest {
 
     private final SummaryEngine engine = new SummaryEngine();
-    private final CdrSummaryBean bean = CdrTestSupport.dailyBean();
+    private final CallSummaryBean bean = CdrTestSupport.dailyBean();
 
     @Test
     void fresh_batch_inserts_a_day_row() {
@@ -35,7 +35,7 @@ class SummaryEngineTest {
     @Test
     void involved_windows_are_loaded_once_not_per_event() {
         FakeSummaryStore store = new FakeSummaryStore();
-        List<CdrSummary> batch = List.of(
+        List<CallSummary> batch = List.of(
                 daySummary(at(2026, 6, 19, 0, 30)),
                 daySummary(at(2026, 6, 19, 14, 0)),    // same day 19
                 daySummary(at(2026, 6, 20, 9, 15)),
@@ -51,7 +51,7 @@ class SummaryEngineTest {
     @Test
     void existing_day_row_is_merged_onto_and_updated_by_id() {
         FakeSummaryStore store = new FakeSummaryStore();
-        CdrSummary existing = daySummary(at(2026, 6, 19, 14, 30));   // one call, already persisted as id 100
+        CallSummary existing = daySummary(at(2026, 6, 19, 14, 30));   // one call, already persisted as id 100
         existing.setId(100L);
         store.seed(DAY_TABLE, existing.tup_starttime, existing);
 

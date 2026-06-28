@@ -39,20 +39,18 @@ summary:
     segment-size: 1000                           # rows per multi-row extended INSERT
     reaper-interval-seconds: 60                  # trims summary_affected past min(last_offset)
 
-  # 3) SUMMARY beans to activate — each runs as its OWN parallel worker (own offset, own tx).
+  # 3) SUMMARY beans to activate — each name = a per-window bean CLASS under summarybeans/<category>/.
+  #    The window is fixed by the class (DailySummary/HourlySummary); only table/service-group/context are
+  #    config. Each runs as its OWN parallel worker (own offset, own tx).
   enabledSummary:
-    - dailyCdrSummary
-    - hourlyCdrSummary
+    - dailyCallSummary                           # -> summarybeans/call/DailySummary.java
+    - hourlyCallSummary                          # -> summarybeans/call/HourlySummary.java
   beans:
-    dailyCdrSummary:
-      entity: cdr
-      window: daily
+    dailyCallSummary:
       table: sum_voice_day_03
       service-group: 10                          # SG10 -> *_03 (SG11 -> *_02)
       context: mediationContext
-    hourlyCdrSummary:
-      entity: cdr
-      window: hourly
+    hourlyCallSummary:
       table: sum_voice_hr_03
       service-group: 10
       context: mediationContext

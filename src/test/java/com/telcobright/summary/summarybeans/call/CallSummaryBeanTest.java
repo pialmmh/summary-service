@@ -1,4 +1,4 @@
-package com.telcobright.summary.beans.cdr;
+package com.telcobright.summary.summarybeans.call;
 
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
@@ -11,17 +11,17 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** The bean's blob→entity build: service-group filtering, per-window bucketing, and C# PascalCase decoding. */
-class CdrSummaryBeanTest {
+class CallSummaryBeanTest {
 
-    private final CdrSummaryBean daily = CdrTestSupport.dailyBean();
-    private final CdrSummaryBean hourly = CdrTestSupport.hourlyBean();
+    private final CallSummaryBean daily = CdrTestSupport.dailyBean();
+    private final CallSummaryBean hourly = CdrTestSupport.hourlyBean();
 
     @Test
     void build_batch_keeps_only_its_service_group() {
         LocalDateTime t = CdrTestSupport.at(2026, 6, 19, 14, 30);
         byte[] mixed = CdrTestSupport.batchJson(List.of(CdrTestSupport.sg10Entry(t), CdrTestSupport.sg11Entry(t)));
 
-        List<CdrSummary> built = daily.buildBatch(mixed);
+        List<CallSummary> built = daily.buildBatch(mixed);
 
         assertEquals(1, built.size(), "only the SG10 entry is kept by the SG10 bean");
     }
@@ -30,8 +30,8 @@ class CdrSummaryBeanTest {
     void daily_and_hourly_beans_bucket_the_same_record_differently() {
         byte[] one = CdrTestSupport.batchJson(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 14, 30))));
 
-        CdrSummary day = daily.buildBatch(one).get(0);
-        CdrSummary hour = hourly.buildBatch(one).get(0);
+        CallSummary day = daily.buildBatch(one).get(0);
+        CallSummary hour = hourly.buildBatch(one).get(0);
 
         assertEquals(LocalDateTime.of(2026, 6, 19, 0, 0), day.tup_starttime);
         assertEquals(LocalDateTime.of(2026, 6, 19, 14, 0), hour.tup_starttime);
@@ -48,10 +48,10 @@ class CdrSummaryBeanTest {
                 + "\"Customer\":{\"servicegroup\":10,\"Prefix\":\"1712\",\"unitPriceOrCharge\":1.0,\"idBilledUom\":\"BDT\","
                 + "\"BilledAmount\":1.0,\"TaxAmount1\":0.5}}]";
 
-        List<CdrSummary> built = daily.buildBatch(json.getBytes(StandardCharsets.UTF_8));
+        List<CallSummary> built = daily.buildBatch(json.getBytes(StandardCharsets.UTF_8));
 
         assertEquals(1, built.size());
-        CdrSummary s = built.get(0);
+        CallSummary s = built.get(0);
         assertEquals(1, s.totalcalls);
         assertEquals(1, s.connectedcalls);
         assertEquals(0, s.customercost.compareTo(new BigDecimal("1.0")));
@@ -61,7 +61,7 @@ class CdrSummaryBeanTest {
     @Test
     void exposes_its_table_columns_and_bucket() {
         assertEquals(CdrTestSupport.DAY_TABLE, daily.table());
-        assertEquals(CdrSummary.INSERT_COLUMNS, daily.insertColumnsCsv());
+        assertEquals(CallSummary.INSERT_COLUMNS, daily.insertColumnsCsv());
         assertEquals("tup_starttime", daily.bucketColumn());
         assertEquals("cdr", daily.entityType());
     }

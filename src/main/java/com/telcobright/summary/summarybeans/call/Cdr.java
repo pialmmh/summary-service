@@ -1,4 +1,4 @@
-package com.telcobright.summary.beans.cdr;
+package com.telcobright.summary.summarybeans.call;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
@@ -6,7 +6,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * The cdr half of an outbox blob entry — the rated CDR fields the {@link CdrSummaryBuilder} reads. PINNED:
+ * The cdr half of an outbox blob entry — the rated CDR fields the {@link CallSummaryBuilder} reads. PINNED:
  * field names are billing-core's C# {@code cdr} PascalCase properties, decoded CASE-INSENSITIVELY (so the
  * camelCase fields here match), nulls omitted. {@code StartTime} is the cdr's wall-clock local start (the
  * window bucket source); {@code ConnectTime} present ⇒ the call connected.

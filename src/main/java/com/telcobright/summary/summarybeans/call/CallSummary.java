@@ -1,4 +1,4 @@
-package com.telcobright.summary.beans.cdr;
+package com.telcobright.summary.summarybeans.call;
 
 import com.telcobright.summary.bean.spi.SqlLiterals;
 import com.telcobright.summary.bean.spi.SummaryEntity;
@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
  * counter EXCEPT {@code connectedcallsCC} — a deliberate legacy inconsistency replicated verbatim (see the
  * comment in {@link #multiply}); do NOT "tidy" it without an explicit decision.
  */
-public final class CdrSummary implements SummaryEntity<CdrSummary> {
+public final class CallSummary implements SummaryEntity<CallSummary> {
 
     /** INSERT columns in legacy ExtInsertColumns order, WITHOUT id (AUTO_INCREMENT assigns it). */
     public static final String INSERT_COLUMNS =
@@ -122,7 +122,7 @@ public final class CdrSummary implements SummaryEntity<CdrSummary> {
 
     /** Legacy Merge: add every counter, including connectedcallsCC. */
     @Override
-    public void merge(CdrSummary o) {
+    public void merge(CallSummary o) {
         totalcalls += o.totalcalls;
         connectedcalls += o.connectedcalls;
         connectedcallsCC += o.connectedcallsCC;
@@ -190,8 +190,8 @@ public final class CdrSummary implements SummaryEntity<CdrSummary> {
     }
 
     @Override
-    public CdrSummary cloneWithFakeId() {
-        CdrSummary c = new CdrSummary();
+    public CallSummary cloneWithFakeId() {
+        CallSummary c = new CallSummary();
         c.id = null;
         c.tup_switchid = tup_switchid;
         c.tup_inpartnerid = tup_inpartnerid;

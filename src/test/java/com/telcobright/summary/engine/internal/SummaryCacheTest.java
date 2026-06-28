@@ -1,6 +1,6 @@
 package com.telcobright.summary.engine.internal;
 
-import com.telcobright.summary.beans.cdr.CdrSummary;
+import com.telcobright.summary.summarybeans.call.CallSummary;
 import com.telcobright.summary.engine.spi.MergeMode;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
@@ -13,21 +13,21 @@ class SummaryCacheTest {
 
     private static final String TABLE = CdrTestSupport.DAY_TABLE;
 
-    private static SummaryCache<CdrSummary> cache() {
-        return new SummaryCache<>(TABLE, CdrSummary.INSERT_COLUMNS);
+    private static SummaryCache<CallSummary> cache() {
+        return new SummaryCache<>(TABLE, CallSummary.INSERT_COLUMNS);
     }
 
-    private static CdrSummary call() {
+    private static CallSummary call() {
         return CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 14, 30));
     }
 
-    private static long totalcalls(SummaryCache<CdrSummary> cache) {
+    private static long totalcalls(SummaryCache<CallSummary> cache) {
         return cache.rows().iterator().next().totalcalls;
     }
 
     @Test
     void add_into_a_new_window_inserts_and_accumulates() {
-        SummaryCache<CdrSummary> cache = cache();
+        SummaryCache<CallSummary> cache = cache();
         cache.merge(call(), MergeMode.ADD);
         cache.merge(call(), MergeMode.ADD);   // same tuple again
 
@@ -38,8 +38,8 @@ class SummaryCacheTest {
 
     @Test
     void add_onto_a_loaded_window_updates_it() {
-        SummaryCache<CdrSummary> cache = cache();
-        CdrSummary existing = call();
+        SummaryCache<CallSummary> cache = cache();
+        CallSummary existing = call();
         existing.setId(100L);
         cache.populateExisting(existing);
 
@@ -52,8 +52,8 @@ class SummaryCacheTest {
 
     @Test
     void subtract_decrements_a_loaded_window() {
-        SummaryCache<CdrSummary> cache = cache();
-        CdrSummary existing = call();
+        SummaryCache<CallSummary> cache = cache();
+        CallSummary existing = call();
         for (int i = 0; i < 4; i++) {
             existing.merge(call());          // totalcalls = 5
         }
@@ -67,14 +67,14 @@ class SummaryCacheTest {
 
     @Test
     void subtract_on_a_window_that_was_not_loaded_is_rejected() {
-        SummaryCache<CdrSummary> cache = cache();
+        SummaryCache<CallSummary> cache = cache();
         assertThrows(IllegalStateException.class, () -> cache.merge(call(), MergeMode.SUBTRACT));
     }
 
     @Test
     void overwrite_replaces_counters_for_the_correction_path() {
-        SummaryCache<CdrSummary> cache = cache();
-        CdrSummary existing = call();
+        SummaryCache<CallSummary> cache = cache();
+        CallSummary existing = call();
         for (int i = 0; i < 9; i++) {
             existing.merge(call());          // totalcalls = 10 (a stale window)
         }
@@ -88,16 +88,16 @@ class SummaryCacheTest {
 
     @Test
     void redelivery_double_counts_and_overwrite_repairs_it() {
-        CdrSummary afterBatch1 = call();   // a window of 1 call, committed
+        CallSummary afterBatch1 = call();   // a window of 1 call, committed
         afterBatch1.setId(100L);
 
-        SummaryCache<CdrSummary> redelivered = cache();
+        SummaryCache<CallSummary> redelivered = cache();
         redelivered.populateExisting(afterBatch1);
         redelivered.merge(call(), MergeMode.ADD);
         assertEquals(2, totalcalls(redelivered), "increment is NOT idempotent — redelivery double-counts");
 
-        CdrSummary doubled = redelivered.rows().iterator().next();
-        SummaryCache<CdrSummary> correction = cache();
+        CallSummary doubled = redelivered.rows().iterator().next();
+        SummaryCache<CallSummary> correction = cache();
         correction.populateExisting(doubled);
         correction.merge(call(), MergeMode.OVERWRITE);
         assertEquals(1, totalcalls(correction), "correction recompute + overwrite repaired the count");

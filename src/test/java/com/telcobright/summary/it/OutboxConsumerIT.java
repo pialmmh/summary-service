@@ -1,6 +1,6 @@
 package com.telcobright.summary.it;
 
-import com.telcobright.summary.beans.cdr.CdrSummaryBean;
+import com.telcobright.summary.summarybeans.call.CallSummaryBean;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.outbox.api.OutboxReader;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
@@ -37,7 +37,7 @@ class OutboxConsumerIT {
     private static final String DB = "summary_it";
     private static final String DAY_TABLE = CdrTestSupport.DAY_TABLE;
 
-    private final CdrSummaryBean bean = CdrTestSupport.dailyBean();
+    private final CallSummaryBean bean = CdrTestSupport.dailyBean();
     private OutboxReader reader;
 
     @BeforeEach
@@ -67,7 +67,7 @@ class OutboxConsumerIT {
         assertEquals(2, processed, "two outbox rows consumed");
         assertEquals(2, count(DAY_TABLE), "two day windows -> two summary rows");
         assertEquals(3, sumTotalCalls(), "three calls counted across the windows");
-        assertEquals(2, offset("dailyCdrSummary"), "last_offset advanced to the last row id");
+        assertEquals(2, offset("dailyCallSummary"), "last_offset advanced to the last row id");
 
         // re-drain: nothing new, no double-count
         int again = reader.drain(bean);

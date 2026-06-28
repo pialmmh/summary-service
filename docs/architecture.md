@@ -1,6 +1,6 @@
 # summary-service — architecture
 
-The generic axis is the typed summary **entity `T`** (e.g. `CdrSummary`). The input is a **MySQL outbox**
+The generic axis is the typed summary **entity `T`** (e.g. `CallSummary`). The input is a **MySQL outbox**
 (`summary_affected`), consumed **exactly-once per bean** via a per-bean **MySQL offset** (`summary_offset`);
 Kafka (`cdr_summary_ping`) is only a wakeup. The ratified load-merge-write engine reads the decompressed blob.
 
@@ -22,15 +22,16 @@ summary-service (incremental time-windowed counters from a MySQL outbox)
 │   └── internal · JdbcUnitOfWorkFactory, JdbcUnitOfWork, JdbcSummaryStore, JdbcOutboxStore
 ├── registry (lifecycle / parallel workers / hot-start)
 │   ├── api · SummaryBeanRegistry (register, start, stop, wakeAll, runningBeanNames)
-│   ├── spi · SummaryBeanFactory (one per entity), BeanConfig
-│   └── internal · OutboxWorker<T> (drain loop, woken by ping/timer), SummaryBootstrap
+│   └── internal · OutboxWorker<T> (drain loop, woken by ping/timer), SummaryBootstrap (CDI-discovers beans by name)
 ├── context (shared read-only, from config-manager)
 │   ├── api · ContextRegistry (load each context once)
 │   ├── spi · SummaryContext
 │   └── internal/cdr · ConfigManagerClient, MediationContext
 ├── ping/internal · PingListener (Kafka cdr_summary_ping → wake workers)
 ├── config/internal · TenantProfileConfigSource, ProfileYamlLoader
-└── beans/cdr · CdrSummary (entity, 47 cols) · CdrSummaryBuilder · CdrSummaryBean · factory · Cdr/Customer/CdrBlobEntry · CdrBlobMapper
+└── summarybeans/                (one sub-package per category — call today; packetflow/session/voip/video later)
+    └── call · CallSummary (entity, 47 cols) · CallSummaryBean (shared base) · HourlySummary · DailySummary
+               · CallSummaryBuilder · Cdr/Customer/CdrBlobEntry · CdrBlobMapper
 ```
 
 Discover the system through `**/api` + `**/spi`; `internal/` is implementation (no outward imports).
@@ -61,9 +62,13 @@ Runs when a worker wakes (ping or fallback timer) for a bean that has un-consume
 
 ## Why these seams
 
-- **`SummaryEntity` / `SummaryBean` (bean/spi)** — a new summary kind is a new entity + bean; the engine is untouched.
+- **`SummaryEntity` / `SummaryBean` (bean/spi)** — a new summary kind is a new entity + bean class under
+  `summarybeans/<category>/`; the engine is untouched. A new **window** of an existing category is a tiny
+  `@Singleton` subclass of the category base (e.g. `HourlySummary`/`DailySummary` over `CallSummaryBean`).
 - **`SummaryStore` + `OutboxStore` (engine/spi, outbox/spi)** — both DB sides are seams over one connection,
   so the reader is tested with in-memory fakes and proven against real MySQL in the IT.
 - **`UnitOfWork` (runtime/spi)** — the transaction boundary that makes summaries + offset atomic (exactly-once).
-- **`SummaryBeanFactory` + `BeanConfig` (registry/spi)** — config-driven instances; new windows/tables with no code.
+- **`SummaryBootstrap` (registry/internal)** — CDI-discovers every `SummaryBean` and activates the ones named
+  in `summary.enabledSummary`; `table`/`service-group`/`context` come from `summary.beans.<name>` (the window is
+  the class). No factory: adding a bean is adding a class + a YAML line.
 - **`ContextRegistry` (context/api)** — config-manager loaded once, shared read-only (not load-bearing for CDR v1).

@@ -1,23 +1,23 @@
-package com.telcobright.summary.beans.cdr;
+package com.telcobright.summary.summarybeans.call;
 
 import com.telcobright.summary.bean.spi.WindowSize;
 
 import java.math.BigDecimal;
 
 /**
- * Builds a per-call {@link CdrSummary} from an outbox blob entry's {@code (Cdr, Customer)} pair — the port of
+ * Builds a per-call {@link CallSummary} from an outbox blob entry's {@code (Cdr, Customer)} pair — the port of
  * billing-core's {@code CdrSummaryBuilder} (the legacy (cdr, acc_chargeable) signature): the SG-independent
  * identity/count/duration fields (PopulateCommon), the window bucket ({@code tup_starttime} = the cdr's
  * wall-clock {@code StartTime} truncated to the bean's {@link WindowSize}), then the service-group-specific
  * rate/cost/tax/prefix/currency fields (SG10 customer leg vs SG11 customer leg), then null-string defaults.
  */
-final class CdrSummaryBuilder {
+final class CallSummaryBuilder {
 
-    private CdrSummaryBuilder() {
+    private CallSummaryBuilder() {
     }
 
-    static CdrSummary build(Cdr cdr, Customer customer, WindowSize window) {
-        CdrSummary s = new CdrSummary();
+    static CallSummary build(Cdr cdr, Customer customer, WindowSize window) {
+        CallSummary s = new CallSummary();
         populateCommon(s, cdr);
         s.tup_starttime = window.bucketStart(cdr.startTime());
         populateServiceGroup(s, cdr, customer);
@@ -25,7 +25,7 @@ final class CdrSummaryBuilder {
         return s;
     }
 
-    private static void populateCommon(CdrSummary s, Cdr cdr) {
+    private static void populateCommon(CallSummary s, Cdr cdr) {
         s.tup_switchid = cdr.switchId();
         s.tup_inpartnerid = cdr.inPartnerId() == null ? 0 : cdr.inPartnerId();
         s.tup_outpartnerid = cdr.outPartnerId() == null ? 0 : cdr.outPartnerId();
@@ -46,7 +46,7 @@ final class CdrSummaryBuilder {
         s.PDD = nz(cdr.pdd());
     }
 
-    private static void populateServiceGroup(CdrSummary s, Cdr cdr, Customer customer) {
+    private static void populateServiceGroup(CallSummary s, Cdr cdr, Customer customer) {
         s.tup_countryorareacode = cdr.countryCode();
 
         if (customer.servicegroup() == 10) {            // SG10 customer leg (+ supplier fields from the cdr)
@@ -75,7 +75,7 @@ final class CdrSummaryBuilder {
         }
     }
 
-    private static void replaceNullsWithDefault(CdrSummary s) {
+    private static void replaceNullsWithDefault(CallSummary s) {
         s.tup_countryorareacode = orEmpty(s.tup_countryorareacode);
         s.tup_matchedprefixcustomer = orEmpty(s.tup_matchedprefixcustomer);
         s.tup_matchedprefixsupplier = orEmpty(s.tup_matchedprefixsupplier);

@@ -50,16 +50,20 @@ The **load-windows-once** rule (loading per event double-counts), the **segmente
 summaries **and** the offset in the same MySQL transaction (a crash before commit → offset unchanged →
 reprocessed clean).
 
-## Summary beans (typed entity, config-driven instances)
+## Summary beans (typed entity, one class per window — `summarybeans/<category>/`)
 
-A **summary entity** `T` (e.g. `CdrSummary`) owns its key, merge, negate, clone, and SQL fragments
-(`bean/spi/SummaryEntity`). A **bean** (`bean/spi/SummaryBean<T>`) decodes an outbox row's `{Cdr, Customer}`
-batch into bucketed entities. **One bean class per entity**; each `enabledSummary` entry is a distinct
-**configured instance** — daily, hourly, 5-minute, weekly are different `window` + `table` configs, no code
-change. A future `CallQuality` summary is a new entity + factory.
+Beans live under `summarybeans/<category>/` — `call` today (CDR/voice), with `packetflow` / `session` / `voip`
+/ `video` as future categories. A **summary entity** `T` (e.g. `CallSummary`) owns its key, merge, negate,
+clone, and SQL fragments (`bean/spi/SummaryEntity`). A category **base bean** (`CallSummaryBean`) decodes an
+outbox row's `{Cdr, Customer}` batch into bucketed entities; each **window is its own `@Singleton` class** —
+`HourlySummary`, `DailySummary` — fixing only `window()`. Browse the folder = see every counter the category emits.
 
-`window` accepts: `5min` / `Nmin` (multiple of 5) / `hourly` / `daily` / `weekly` (Monday-start ISO week) /
-`monthly` / `yearly`.
+Activate a bean by listing its name in `summary.enabledSummary`; `table` / `service-group` / `context` come
+from `summary.beans.<name>` (the window is the class, discovered + registered by `SummaryBootstrap`). A new
+**category** = a new entity + base bean + window classes; a new **window** of an existing category = one tiny subclass.
+
+`window` (fixed per class) is one of: `5min` / `Nmin` (multiple of 5) / `hourly` / `daily` / `weekly`
+(Monday-start ISO week) / `monthly` / `yearly`.
 
 ## Configuration (routesphere-like)
 
@@ -67,7 +71,7 @@ change. A future `CallQuality` summary is a new entity + factory.
   workers, ping listener, and reaper).
 - `config/tenants.yml` + `config/tenants/<tenant>/<profile>/profile-<profile>.yml` — datasource, the
   `summary.contexts` (config-manager) block, the `summary.outbox` settings, and the **`enabledSummary`** list +
-  each bean's `entity`/`window`/`table`/`service-group`/`context`. Flattened by `TenantProfileConfigSource`.
+  each bean's `table`/`service-group`/`context` (the window is the class). Flattened by `TenantProfileConfigSource`.
 - **DB credentials** are **inline** in the profile yml (no OpenBao), matching billing-core — fill the CCL creds
   at cutover (see `docs/decisions.md` §8). The integration-test password is supplied at run time, never committed.
 
@@ -78,11 +82,12 @@ bean/spi      SummaryEntity<T> + SummaryBean<T> contracts · SummaryKey · Windo
 engine/       load-merge-write over T: SummaryEngine (api) · SummaryStore (spi) · SummaryCache<T> (internal)
 outbox/       OutboxReader (api, the ONE tx per drain) · OutboxStore + OutboxRow (spi) · codec + reaper (internal)
 runtime/      UnitOfWork (spi, summary + outbox stores) · JDBC impls (internal)
-registry/     SummaryBeanRegistry (api) · SummaryBeanFactory + BeanConfig (spi) · OutboxWorker + bootstrap (internal)
+registry/     SummaryBeanRegistry (api) · OutboxWorker + SummaryBootstrap [CDI-discovers beans] (internal)
 context/      ContextRegistry (api) · SummaryContext (spi) · ConfigManagerClient + MediationContext (internal/cdr)
 ping/         PingListener (Kafka cdr_summary_ping → wake workers)
 config/       TenantProfileConfigSource (routesphere-like profile loader)
-beans/cdr/    CdrSummary (47 cols) · CdrSummaryBuilder · CdrSummaryBean · factory · Cdr/Customer/CdrBlobEntry (blob, PROVISIONAL fields)
+summarybeans/ one package per category (call today; packetflow/session/voip/video later)
+  call/       CallSummary (47 cols) · CallSummaryBean (base) · HourlySummary · DailySummary · CallSummaryBuilder · Cdr/Customer/CdrBlobEntry · CdrBlobMapper
 ```
 
 See `docs/architecture.md` for the package tree + flow and `docs/decisions.md` for the architect rulings.

@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 /**
  * The routesphere-like loader: reads {@code config/tenants.yml} to find the active tenant + profile, then
  * loads + FLATTENS {@code config/tenants/<tenant>/<profile>/profile-<profile>.yml} into dot-notation
- * properties (e.g. {@code quarkus.datasource.jdbc.url}, {@code summary.beans.cdr-voice.topic}). Missing files
+ * properties (e.g. {@code quarkus.datasource.jdbc.url}, {@code summary.beans.dailyCallSummary.table}). Missing files
  * yield empty results — the app still boots (it just has no tenant config), never a hard failure here.
  */
 public final class ProfileYamlLoader {

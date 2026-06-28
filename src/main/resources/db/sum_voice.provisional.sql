@@ -3,7 +3,7 @@
 --
 -- Faithful to billing-core's AbstractCdrSummary column set + order (see CdrSummary.INSERT_COLUMNS).
 -- RECONCILE with billing-core's real sum_voice_day_03 / hr_03 (SG10) and *_02 (SG11) DDL — including the
--- partition scheme — once dotnet pins it. Column names MUST match CdrSummary's fields.
+-- partition scheme — once dotnet pins it. Column names MUST match CallSummary's fields.
 --
 -- Engine contract this schema must satisfy:
 --   * id BIGINT AUTO_INCREMENT PRIMARY KEY — the engine omits id on INSERT and UPDATEs by id.
