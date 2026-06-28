@@ -76,6 +76,30 @@ class OutboxConsumerIT {
         assertEquals(3, sumTotalCalls());
     }
 
+    @Test
+    void drains_a_week_of_outbox_rows_into_seven_day_windows() {
+        // 7 outbox rows, one per day June 19..25, with day-index calls (1,2,…,7) -> 28 calls, 7 day windows
+        int expectedCalls = 0;
+        for (int i = 0; i < 7; i++) {
+            int callsThatDay = i + 1;
+            seedOutbox(i + 1, CdrTestSupport.encodedBatch(
+                    CdrTestSupport.series(CdrTestSupport.at(2026, 6, 19 + i, 0, 0), 60, callsThatDay)));
+            expectedCalls += callsThatDay;
+        }
+
+        int processed = reader.drain(bean);
+
+        assertEquals(7, processed, "seven outbox rows consumed");
+        assertEquals(7, count(DAY_TABLE), "seven distinct day windows");
+        assertEquals(expectedCalls, sumTotalCalls(), "1+2+…+7 = 28 calls counted across the windows");
+        assertEquals(7, offset("dailyCallSummary"), "last_offset advanced to the last row id");
+
+        // re-drain is exactly-once
+        assertEquals(0, reader.drain(bean));
+        assertEquals(7, count(DAY_TABLE));
+        assertEquals(expectedCalls, sumTotalCalls());
+    }
+
     // ---- schema + helpers ----
 
     private static Connection tryConnect(String url) {
