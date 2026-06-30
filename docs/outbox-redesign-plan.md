@@ -8,7 +8,8 @@ ratified **engine** (load-once → merge → segmented insert → one-tx) and th
 > **CONTRACT PINNED (2026-06-27, dotnet producer DONE + 101 tests green).** No more provisional input:
 > blob = `base64(gzip(UTF8 JSON))` array of `{Cdr, Customer}` (C# PascalCase, case-insensitive, nulls omitted);
 > ping topic `cdr_summary_ping`; offset column **`last_offset`**; DDL = billing-core
-> `src/Billing.Data/Sql/summary_outbox.sql`; sum_voice 47 cols (matches `CdrSummary`), SG10→`*_03`/SG11→`*_02`,
+> `src/Billing.Data/Sql/summary_outbox.sql`; sum_voice 47 cols (matches `CallSummary`); table name now DERIVED
+> `sum_voice_<window>_<table-suffix>` (suffix is config — point it at the existing `_03`/`_02` tables, no forced divergence),
 > RANGE-by-month partitions. Architect **Q3 effectively answered** (builder reads only Cdr+Customer — context is
 > NOT load-bearing). Architect **Q1 (topology) / Q2 (reaper set)** still open but don't block (defaults hold).
 
@@ -70,10 +71,13 @@ summary:
     poll-interval-seconds: 5            # fallback poll if no ping
     max-rows-per-tx: 50                 # outbox rows per drain tx
     reaper-interval-seconds: 60
-  enabledSummary: [ dailyCdrSummary, hourlyCdrSummary ]
+  # NOTE: shape below is SUPERSEDED — see decisions §12d (per-window classes + CDI discovery) and §12f
+  # (derived table). Shipped reality: window + entity_type="cdr" are fixed by the bean class; the table
+  # derives as sum_voice_<window>_<table-suffix>; service-group + table-suffix + context are config.
+  enabledSummary: [ dailyCallSummary, hourlyCallSummary ]
   beans:
-    dailyCdrSummary:  { entity: cdr, window: daily,  table: sum_voice_day_03, context: mediationContext, service-group: 10 }
-    hourlyCdrSummary: { entity: cdr, window: hourly, table: sum_voice_hr_03,  context: mediationContext, service-group: 10 }
+    dailyCallSummary:  { service-group: 10, table-suffix: "3", context: mediationContext }   # -> sum_voice_day_3
+    hourlyCallSummary: { service-group: 10, table-suffix: "3", context: mediationContext }   # -> sum_voice_hr_3
 ```
 
 `topic` (per-bean Kafka cdr topic) is **gone**; replaced by `entity` (outbox entity_type) + `context`.

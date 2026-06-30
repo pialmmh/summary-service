@@ -1,9 +1,11 @@
 -- =====================================================================================
 -- sum_voice_* — PROVISIONAL summary schema for the cdr entity (all 47 data columns).
 --
--- Faithful to billing-core's AbstractCdrSummary column set + order (see CdrSummary.INSERT_COLUMNS).
--- RECONCILE with billing-core's real sum_voice_day_03 / hr_03 (SG10) and *_02 (SG11) DDL — including the
--- partition scheme — once dotnet pins it. Column names MUST match CallSummary's fields.
+-- Faithful to billing-core's AbstractCdrSummary column set + order (see CallSummary.INSERT_COLUMNS).
+-- Table name is DERIVED: sum_voice_<window>_<table-suffix>; the suffix (config per bean) selects one of the
+-- PRE-PROVISIONED sets — sum_voice_{day,hr}_{1,2,3} — created up front WITH all partitions (1000-partition
+-- tables are far too slow to create on the fly). The bean only POINTS at an existing table; it never creates it.
+-- Set the suffix to match your real tables (e.g. "3" -> sum_voice_day_3, or "03" to match billing's legacy _03).
 --
 -- Engine contract this schema must satisfy:
 --   * id BIGINT AUTO_INCREMENT PRIMARY KEY — the engine omits id on INSERT and UPDATEs by id.
@@ -19,7 +21,7 @@
 CREATE DATABASE IF NOT EXISTS tcbl_summary CHARACTER SET utf8mb4;
 USE tcbl_summary;
 
-CREATE TABLE IF NOT EXISTS sum_voice_day_03 (
+CREATE TABLE IF NOT EXISTS sum_voice_day_3 (
     id                          BIGINT        NOT NULL AUTO_INCREMENT,
     tup_switchid                INT           NOT NULL DEFAULT 0,
     tup_inpartnerid             INT           NOT NULL DEFAULT 0,
@@ -78,7 +80,9 @@ CREATE TABLE IF NOT EXISTS sum_voice_day_03 (
         tup_customercurrency, tup_suppliercurrency)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- hourly (SG10), and the SG11 day/hour tables — identical shape, different bucket + table name
-CREATE TABLE IF NOT EXISTS sum_voice_hr_03  LIKE sum_voice_day_03;
-CREATE TABLE IF NOT EXISTS sum_voice_day_02 LIKE sum_voice_day_03;
-CREATE TABLE IF NOT EXISTS sum_voice_hr_02  LIKE sum_voice_day_03;
+-- the 3 pre-provisioned sets × {day, hr} — identical shape, different bucket + suffix (created up front, partitioned)
+CREATE TABLE IF NOT EXISTS sum_voice_hr_3  LIKE sum_voice_day_3;
+CREATE TABLE IF NOT EXISTS sum_voice_day_1 LIKE sum_voice_day_3;
+CREATE TABLE IF NOT EXISTS sum_voice_hr_1  LIKE sum_voice_day_3;
+CREATE TABLE IF NOT EXISTS sum_voice_day_2 LIKE sum_voice_day_3;
+CREATE TABLE IF NOT EXISTS sum_voice_hr_2  LIKE sum_voice_day_3;

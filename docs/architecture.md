@@ -29,9 +29,13 @@ summary-service (incremental time-windowed counters from a MySQL outbox)
 │   └── internal/cdr · ConfigManagerClient, MediationContext
 ├── ping/internal · PingListener (Kafka cdr_summary_ping → wake workers)
 ├── config/internal · TenantProfileConfigSource, ProfileYamlLoader
-└── summarybeans/                (one sub-package per category — call today; packetflow/session/voip/video later)
-    └── call · CallSummary (entity, 47 cols) · CallSummaryBean (shared base) · HourlySummary · DailySummary
-               · CallSummaryBuilder · Cdr/Customer/CdrBlobEntry · CdrBlobMapper
+├── beans/                       (PUBLIC API — fluent builders, the high-level entry points lib users import)
+│   · SummaryBeanBuilder<T,B> (the enforced contract) · DailySummaryBuilder · HourlySummaryBuilder
+└── summarybeans/                (one sub-package per category — call today; sms/packetflow/session/voip/video later)
+    ├── call ·  HourlySummary · DailySummary        (HIGH-LEVEL window beans only)
+    │   ├── internal · CallSummaryBean (shared base) · CallSummaryBuilder · CdrBlobMapper
+    │   └── model    · CallSummary (entity, 47 cols) · Cdr/Customer/CdrBlobEntry
+    └── sms  ·  (future — same shape as call)
 ```
 
 Discover the system through `**/api` + `**/spi`; `internal/` is implementation (no outward imports).

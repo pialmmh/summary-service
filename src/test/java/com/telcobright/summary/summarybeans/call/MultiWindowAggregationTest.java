@@ -1,5 +1,7 @@
 package com.telcobright.summary.summarybeans.call;
 
+import com.telcobright.summary.summarybeans.call.model.CallSummary;
+import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
 
@@ -63,7 +65,7 @@ class MultiWindowAggregationTest {
         // 12 calls every 5 min from 10:00 -> 12 distinct 5-min buckets in hour 10
         List<CdrBlobEntry> hour = series(at(2026, 6, 19, 10, 0), 5, 12);
 
-        Collection<CallSummary> fiveMin = rollup(beanForWindow("5min", "sum_voice_5min_03"), hour);
+        Collection<CallSummary> fiveMin = rollup(beanForWindow("5min"), hour);
         Collection<CallSummary> hourly = rollup(hourlyBean(), hour);
 
         assertEquals(12, fiveMin.size(), "12 five-minute buckets");
@@ -81,8 +83,8 @@ class MultiWindowAggregationTest {
                 sg10Entry(at(2026, 6, 10, 9, 0)),
                 sg10Entry(at(2026, 6, 20, 9, 0)));
 
-        Collection<CallSummary> weeks = rollup(beanForWindow("weekly", "sum_voice_week_03"), june);
-        Collection<CallSummary> months = rollup(beanForWindow("monthly", "sum_voice_month_03"), june);
+        Collection<CallSummary> weeks = rollup(beanForWindow("weekly"), june);
+        Collection<CallSummary> months = rollup(beanForWindow("monthly"), june);
 
         assertEquals(3, weeks.size(), "three distinct weeks");
         assertEquals(1, months.size(), "all of June in one month bucket");
@@ -98,8 +100,8 @@ class MultiWindowAggregationTest {
                 sg10Entry(at(2026, 2, 15, 9, 0)),
                 sg10Entry(at(2026, 3, 15, 9, 0)));
 
-        Collection<CallSummary> months = rollup(beanForWindow("monthly", "sum_voice_month_03"), spread);
-        Collection<CallSummary> years = rollup(beanForWindow("yearly", "sum_voice_year_03"), spread);
+        Collection<CallSummary> months = rollup(beanForWindow("monthly"), spread);
+        Collection<CallSummary> years = rollup(beanForWindow("yearly"), spread);
 
         assertEquals(4, months.size(), "Dec-2025, Jan/Feb/Mar-2026");
         assertEquals(2, years.size(), "2025 and 2026");

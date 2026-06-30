@@ -1,6 +1,6 @@
 package com.telcobright.summary.outbox.api;
 
-import com.telcobright.summary.summarybeans.call.CallSummaryBean;
+import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.FakeOutboxStore;

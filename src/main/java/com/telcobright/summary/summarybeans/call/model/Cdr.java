@@ -1,4 +1,4 @@
-package com.telcobright.summary.summarybeans.call;
+package com.telcobright.summary.summarybeans.call.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 

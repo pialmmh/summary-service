@@ -1,4 +1,4 @@
-package com.telcobright.summary.summarybeans.call;
+package com.telcobright.summary.summarybeans.call.internal;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.MapperFeature;

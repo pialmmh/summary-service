@@ -1,7 +1,7 @@
 package com.telcobright.summary.engine.api;
 
-import com.telcobright.summary.summarybeans.call.CallSummary;
-import com.telcobright.summary.summarybeans.call.CallSummaryBean;
+import com.telcobright.summary.summarybeans.call.model.CallSummary;
+import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.FakeSummaryStore;
 import org.junit.jupiter.api.Test;

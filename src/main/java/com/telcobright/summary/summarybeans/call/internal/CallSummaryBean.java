@@ -1,8 +1,10 @@
-package com.telcobright.summary.summarybeans.call;
+package com.telcobright.summary.summarybeans.call.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.WindowSize;
+import com.telcobright.summary.summarybeans.call.model.CallSummary;
+import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
 
 import org.eclipse.microprofile.config.ConfigProvider;
 
@@ -19,10 +21,10 @@ import java.util.List;
  * row). It decodes an outbox row's batch of {@code {Cdr, Customer}} entries, keeps the ones for its configured
  * service group, and builds a bucketed {@link CallSummary} per entry via {@link CallSummaryBuilder}; the engine
  * does the load-merge-write. Everything here is window-independent — the concrete per-window beans
- * ({@link HourlySummary}, {@link DailySummary}, …) add ONE thing: {@link #window()}.
+ * ({@code HourlySummary}, {@code DailySummary}, …) add ONE thing: {@link #window()}.
  *
- * <p>This is the extension point for the {@code call} category: a new window = a new tiny subclass, browsable in
- * this package. Each subclass is a CDI bean discovered + activated by name from {@code summary.enabledSummary};
+ * <p>This is the extension point for the {@code call} category: a new window = a new tiny subclass in the parent
+ * {@code call} package. Each subclass is a CDI bean discovered + activated by name from {@code summary.enabledSummary};
  * its {@code table} / {@code service-group} / {@code context} come from {@code summary.beans.<name>} in the
  * active profile yml.
  *
@@ -33,24 +35,24 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
 
     private final ObjectMapper blobMapper;
     private final String name;
-    private final String table;
+    private final String tableSuffix;   // selects the pre-provisioned set, e.g. "3" -> sum_voice_<window>_3
     private final int serviceGroup;
     private final String context;
 
-    /** CDI path: read {@code table}/{@code service-group}/{@code context} from {@code summary.beans.<name>}. */
+    /** CDI path: read {@code table-suffix}/{@code service-group}/{@code context} from {@code summary.beans.<name>}. */
     protected CallSummaryBean(ObjectMapper blobMapper, String name) {
         this(blobMapper, name,
-                optString(name, "table"),
+                optString(name, "table-suffix"),
                 optInt(name, "service-group", 10),
                 optString(name, "context"));
     }
 
     /** Explicit path (tests / non-CDI wiring): the settings are passed in directly. */
-    protected CallSummaryBean(ObjectMapper blobMapper, String name, String table, int serviceGroup, String context) {
+    protected CallSummaryBean(ObjectMapper blobMapper, String name, String tableSuffix, int serviceGroup, String context) {
         // a case-insensitive + JavaTime copy for the C# PascalCase outbox blob
         this.blobMapper = CdrBlobMapper.from(blobMapper);
         this.name = name;
-        this.table = table;
+        this.tableSuffix = tableSuffix;
         this.serviceGroup = serviceGroup;
         this.context = context;
     }
@@ -75,9 +77,19 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
         return context;
     }
 
+    /**
+     * The target table — DERIVED as {@code sum_voice_<window token>_<table-suffix>} (e.g.
+     * {@code sum_voice_day_3}). The suffix selects one of the pre-provisioned table sets (config maps each
+     * service group to a suffix); the window token is {@code day}/{@code hr}/{@code 5min}/…. The service group
+     * only filters records — it does NOT name the table.
+     */
     @Override
     public String table() {
-        return table;
+        if (tableSuffix == null || tableSuffix.isBlank()) {
+            throw new IllegalStateException(
+                    "bean '" + name + "' needs a table-suffix (summary.beans." + name + ".table-suffix)");
+        }
+        return "sum_voice_" + window().tableToken() + "_" + tableSuffix;
     }
 
     @Override

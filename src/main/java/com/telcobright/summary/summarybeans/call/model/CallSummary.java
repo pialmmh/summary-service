@@ -1,4 +1,4 @@
-package com.telcobright.summary.summarybeans.call;
+package com.telcobright.summary.summarybeans.call.model;
 
 import com.telcobright.summary.bean.spi.SqlLiterals;
 import com.telcobright.summary.bean.spi.SummaryEntity;

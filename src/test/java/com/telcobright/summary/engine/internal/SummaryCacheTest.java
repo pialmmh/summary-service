@@ -1,6 +1,6 @@
 package com.telcobright.summary.engine.internal;
 
-import com.telcobright.summary.summarybeans.call.CallSummary;
+import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.engine.spi.MergeMode;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;

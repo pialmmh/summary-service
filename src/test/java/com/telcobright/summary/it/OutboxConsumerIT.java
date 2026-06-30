@@ -1,6 +1,6 @@
 package com.telcobright.summary.it;
 
-import com.telcobright.summary.summarybeans.call.CallSummaryBean;
+import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.outbox.api.OutboxReader;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;

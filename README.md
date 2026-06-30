@@ -79,6 +79,7 @@ from `summary.beans.<name>` (the window is the class, discovered + registered by
 
 ```
 bean/spi      SummaryEntity<T> + SummaryBean<T> contracts · SummaryKey · WindowSize · SqlLiterals
+beans/        PUBLIC API — fluent builders (one per bean): SummaryBeanBuilder<T,B> contract · Daily/HourlySummaryBuilder
 engine/       load-merge-write over T: SummaryEngine (api) · SummaryStore (spi) · SummaryCache<T> (internal)
 outbox/       OutboxReader (api, the ONE tx per drain) · OutboxStore + OutboxRow (spi) · codec + reaper (internal)
 runtime/      UnitOfWork (spi, summary + outbox stores) · JDBC impls (internal)
@@ -86,8 +87,20 @@ registry/     SummaryBeanRegistry (api) · OutboxWorker + SummaryBootstrap [CDI-
 context/      ContextRegistry (api) · SummaryContext (spi) · ConfigManagerClient + MediationContext (internal/cdr)
 ping/         PingListener (Kafka cdr_summary_ping → wake workers)
 config/       TenantProfileConfigSource (routesphere-like profile loader)
-summarybeans/ one package per category (call today; packetflow/session/voip/video later)
-  call/       CallSummary (47 cols) · CallSummaryBean (base) · HourlySummary · DailySummary · CallSummaryBuilder · Cdr/Customer/CdrBlobEntry · CdrBlobMapper
+summarybeans/ one package per category (call today; sms/packetflow/session/voip/video later)
+  call/       HourlySummary · DailySummary  (high-level beans only)
+    internal/ CallSummaryBean (base) · CallSummaryBuilder · CdrBlobMapper
+    model/    CallSummary (47 cols) · Cdr/Customer/CdrBlobEntry
+  sms/        future — same shape as call
 ```
+
+### Assemble a bean (public builder API)
+```java
+SummaryBean<CallSummary> daily = DailySummaryBuilder.create(mapper)
+        .serviceGroup(10).tableSuffix("3").context("mediationContext").build();   // -> sum_voice_day_3
+```
+Every bean — now and future — exposes the same fluent chain (enforced by `beans/SummaryBeanBuilder`); the table
+derives as `sum_voice_<window>_<table-suffix>` (the suffix selects a pre-provisioned set, e.g. `sum_voice_day_3`).
+The running service still wires beans via CDI + YAML; the builder is the programmatic entry point for embedders.
 
 See `docs/architecture.md` for the package tree + flow and `docs/decisions.md` for the architect rulings.

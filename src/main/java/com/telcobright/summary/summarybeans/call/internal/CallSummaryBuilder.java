@@ -1,6 +1,9 @@
-package com.telcobright.summary.summarybeans.call;
+package com.telcobright.summary.summarybeans.call.internal;
 
 import com.telcobright.summary.bean.spi.WindowSize;
+import com.telcobright.summary.summarybeans.call.model.CallSummary;
+import com.telcobright.summary.summarybeans.call.model.Cdr;
+import com.telcobright.summary.summarybeans.call.model.Customer;
 
 import java.math.BigDecimal;
 

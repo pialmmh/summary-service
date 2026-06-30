@@ -1,6 +1,5 @@
-package com.telcobright.summary.summarybeans.call;
+package com.telcobright.summary.summarybeans.call.model;
 
-import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
 
@@ -14,11 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** The faithful 1:1 port invariants of the CallSummary entity: build, merge, the Multiply quirk, key, SQL. */
 class CallSummaryTest {
 
-    private static final WindowSize DAILY = WindowSize.parse("daily");
-
+    /** A daily-bucketed SG10 call built through the real bean path (the builder is internal to the category). */
     private CallSummary call() {
-        CdrBlobEntry e = CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 14, 30));
-        return CallSummaryBuilder.build(e.cdr(), e.customer(), DAILY);
+        return CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 14, 30));
     }
 
     @Test
@@ -57,8 +54,8 @@ class CallSummaryTest {
     void tuple_key_is_equal_for_same_dimensions_but_differs_by_destination() {
         assertEquals(call().tupleKey(), call().tupleKey());
 
-        CdrBlobEntry other = CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 14, 30), 99);
-        assertNotEquals(call().tupleKey(), CallSummaryBuilder.build(other.cdr(), other.customer(), DAILY).tupleKey());
+        CallSummary other = CdrTestSupport.daySummary(CdrTestSupport.at(2026, 6, 19, 14, 30), 99);
+        assertNotEquals(call().tupleKey(), other.tupleKey());
     }
 
     @Test

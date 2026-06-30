@@ -81,6 +81,18 @@ public final class WindowSize {
         };
     }
 
+    /** The token this window contributes to a derived table name (e.g. {@code day}, {@code hr}, {@code 5min}). */
+    public String tableToken() {
+        return switch (unit) {
+            case MINUTES -> minutes + "min";
+            case HOUR -> "hr";
+            case DAY -> "day";
+            case WEEK -> "week";
+            case MONTH -> "month";
+            case YEAR -> "year";
+        };
+    }
+
     @Override
     public String toString() {
         return token;

@@ -112,6 +112,13 @@ Within a category, a shared base bean holds the decode/build/map logic and **eac
 `summarybeans/call/DailySummary.java` over `CallSummaryBean` (the entity is `CallSummary`, renamed from
 `CdrSummary`). This makes the catalog browsable ("open the folder, see every counter the category emits").
 
+The category package holds **only the high-level window beans** (constructor / startup + the bean's processing
+surface); the complexity is nested (user, 2026-06-29): `<category>/internal` for the shared `CallSummaryBean`
+machinery + `CallSummaryBuilder` + `CdrBlobMapper`, and `<category>/model` for the `CallSummary` row entity +
+the inbound `Cdr`/`Customer`/`CdrBlobEntry` blob shapes. A reserved `summarybeans/sms` sibling (package-info
+only) marks where the next category lands — same shape. Tests mirror it: `…/call/internal/CallSummaryBeanTest`,
+`…/call/model/CallSummaryTest`, with the cross-window behaviour suite at `…/call/MultiWindowAggregationTest`.
+
 Wiring change: the per-entity `SummaryBeanFactory` + `BeanConfig` are **removed**. `SummaryBootstrap` now
 **CDI-discovers** all `SummaryBean`s (`@Any Instance<SummaryBean<?>>`) and activates the ones whose `name()` is
 in `summary.enabledSummary`; `table`/`service-group`/`context` come from `summary.beans.<name>`, the `window` is
@@ -119,6 +126,29 @@ the class, and `entity_type` is pinned `"cdr"` in the base. Tradeoff vs 12b: one
 can't spin up two hourly beans of the same category from YAML alone — that'd be a second class). The user chose
 this for the browsable per-window catalog. The load-once / segmented-write / one-txn / exactly-once rulings
 (§1–3, §13) are unchanged. Build green (33 unit + 1 MySQL IT) after the move.
+
+### 12e. Builder convention — every bean ships a fluent builder under `beans/` — RATIFIED (user, 2026-06-30)
+A library user assembles any bean the same brief way:
+`XxxBuilder.create(mapper).table(..).serviceGroup(..).context(..).build()`. The convention is **enforced by a
+base class**: `beans/SummaryBeanBuilder<T,B>` (recursive self-type) supplies the shared fluent chain and a
+`final build()` that validates the common invariant (a target table is required); a new bean joins simply by
+shipping a `XxxBuilder extends SummaryBeanBuilder` in `beans/`. `beans/` is the **public API** (the high-level
+entry points embedders import) — distinct from `bean/spi` (the contracts) and `summarybeans/<category>` (the
+impl). **Supplement, not replace** (user choice): the running Quarkus service still wires beans via CDI +
+`summary.beans.<name>` YAML + `SummaryBootstrap` discovery; the builders are the programmatic path (embedders +
+tests — `CdrTestSupport` builds daily/hourly through them). Build green (46 unit + 2 MySQL IT).
+
+### 12f. Table name DERIVED as `sum_voice_<window>_<table-suffix>` — RATIFIED (user, 2026-06-30; revised same day)
+The bean's target table is **derived** as `sum_voice_<window token>_<table-suffix>` (e.g. `sum_voice_day_3`).
+Window tokens `day`/`hr`/`5min`/`week`/`month`/`year` via `WindowSize.tableToken()`; prefix `sum_voice` owned by
+the call category in `CallSummaryBean`. The **suffix is config** (`summary.beans.<name>.table-suffix`, a string)
+— it selects one of the **pre-provisioned** sets (`sum_voice_{day,hr}_{1,2,3}`), created up front WITH all
+partitions because a 1000-partition table is far too slow to create on the fly; the bean only POINTS at an
+existing table. `service-group` and `table-suffix` are now BOTH required on the builder (service-group FILTERS
+records, table-suffix NAMES the table — fully decoupled); YAML drops the full `table:`. *(Supersedes the same-day
+first cut that derived the suffix from the service-group NUMBER — it invented names like `sum_voice_day_10`
+needing fresh partitioned tables; wrong.)* No forced divergence from billing: set the suffix to match the
+existing tables (`"3"` → `sum_voice_day_3`, or `"03"` to match billing's legacy `_03`). Build green (48u + 2 IT).
 
 ## 13. Input = MySQL outbox + per-bean offset + Kafka-ping — RATIFIED (v3, supersedes §4 and §11)
 Per `summary-service-outbox-design.md` (user + architect + dotnet). MySQL+Kafka can't be atomic (dual-write)
@@ -146,5 +176,6 @@ and full window recompute is impossible (millions of cdrs), so:
 ### 13a. PINNED by dotnet (no longer provisional)
 blob codec + `{Cdr,Customer}` field list; ping topic `cdr_summary_ping`; outbox DDL (`summary_affected` +
 `summary_offset.last_offset`, billing-core `src/Billing.Data/Sql/summary_outbox.sql`); `sum_voice` 47 cols
-(matches `CdrSummary`), SG10→`*_03`/SG11→`*_02`, RANGE-by-month partitions. The summary side decodes the C#
-PascalCase blob case-insensitively. Still open: architect Q2 (reaper deregister rule); `MediationContext` shape.
+(matches `CallSummary`), RANGE-by-month partitions. The table name is now DERIVED `sum_voice_<window>_<table-suffix>`
+where the suffix is config (§12f) — point it at the existing `_03`/`_02` (or `_3`/`_2`) tables, so no forced
+divergence. The summary side decodes the C# PascalCase blob case-insensitively. Still open: architect Q2 (reaper deregister rule); `MediationContext` shape.

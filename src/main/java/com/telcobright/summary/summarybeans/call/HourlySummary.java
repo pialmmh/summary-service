@@ -2,6 +2,7 @@ package com.telcobright.summary.summarybeans.call;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.WindowSize;
+import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -24,8 +25,8 @@ public final class HourlySummary extends CallSummaryBean {
     }
 
     /** Explicit wiring (tests / non-CDI). */
-    public HourlySummary(ObjectMapper blobMapper, String table, int serviceGroup, String context) {
-        super(blobMapper, NAME, table, serviceGroup, context);
+    public HourlySummary(ObjectMapper blobMapper, String tableSuffix, int serviceGroup, String context) {
+        super(blobMapper, NAME, tableSuffix, serviceGroup, context);
     }
 
     @Override

@@ -5,14 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.engine.internal.SummaryCache;
 import com.telcobright.summary.engine.spi.MergeMode;
-import com.telcobright.summary.summarybeans.call.CallSummary;
-import com.telcobright.summary.summarybeans.call.CallSummaryBean;
-import com.telcobright.summary.summarybeans.call.Cdr;
-import com.telcobright.summary.summarybeans.call.CdrBlobEntry;
-import com.telcobright.summary.summarybeans.call.CdrBlobMapper;
-import com.telcobright.summary.summarybeans.call.Customer;
-import com.telcobright.summary.summarybeans.call.DailySummary;
-import com.telcobright.summary.summarybeans.call.HourlySummary;
+import com.telcobright.summary.summarybeans.call.model.CallSummary;
+import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
+import com.telcobright.summary.summarybeans.call.model.Cdr;
+import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
+import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
+import com.telcobright.summary.summarybeans.call.model.Customer;
+import com.telcobright.summary.beans.DailySummaryBuilder;
+import com.telcobright.summary.beans.HourlySummaryBuilder;
 import com.telcobright.summary.outbox.internal.OutboxCodec;
 
 import java.math.BigDecimal;
@@ -22,17 +22,18 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * Builders for the outbox tests: ready call summary beans (daily / hourly / any window) wired explicitly (no
- * CDI / no config), SG10/SG11 {@code {Cdr, Customer}} blob entries mirroring the legacy fixtures (switch 1,
+ * Builders for the outbox tests: ready call summary beans (daily / hourly via the public builder API, any
+ * window) with no CDI / no config, SG10/SG11 {@code {Cdr, Customer}} blob entries mirroring the legacy fixtures (switch 1,
  * partner 5, one 60s connected/charged call costing 1.0, tax 0.5, NER success), data generators for many
  * windows / volume, and a {@link #rollup} helper that runs the real build→bucket→merge path so a test can
  * assert per-window aggregates by reading entity fields. Packing helpers gzip+base64 the way billing does.
  */
 public final class CdrTestSupport {
 
-    public static final String DAY_TABLE = "sum_voice_day_03";
-    public static final String HOUR_TABLE = "sum_voice_hr_03";
+    public static final String DAY_TABLE = "sum_voice_day_3";
+    public static final String HOUR_TABLE = "sum_voice_hr_3";
     private static final int SERVICE_GROUP = 10;
+    private static final String TABLE_SUFFIX = "3";
     private static final ObjectMapper MAPPER = CdrBlobMapper.create();
 
     private CdrTestSupport() {
@@ -41,17 +42,19 @@ public final class CdrTestSupport {
     // ---- beans ----
 
     public static CallSummaryBean dailyBean() {
-        return new DailySummary(MAPPER, DAY_TABLE, SERVICE_GROUP, "mediationContext");
+        return (CallSummaryBean) DailySummaryBuilder.create(MAPPER)   // derives DAY_TABLE = sum_voice_day_3
+                .serviceGroup(SERVICE_GROUP).tableSuffix(TABLE_SUFFIX).context("mediationContext").build();
     }
 
     public static CallSummaryBean hourlyBean() {
-        return new HourlySummary(MAPPER, HOUR_TABLE, SERVICE_GROUP, "mediationContext");
+        return (CallSummaryBean) HourlySummaryBuilder.create(MAPPER)  // derives HOUR_TABLE = sum_voice_hr_3
+                .serviceGroup(SERVICE_GROUP).tableSuffix(TABLE_SUFFIX).context("mediationContext").build();
     }
 
     /** A call bean fixed to ANY window (test-only) — lets one dataset be rolled up at 5min/weekly/monthly/…. */
-    public static CallSummaryBean beanForWindow(String window, String table) {
+    public static CallSummaryBean beanForWindow(String window) {
         WindowSize w = WindowSize.parse(window);
-        return new CallSummaryBean(MAPPER, "test-" + window, table, SERVICE_GROUP, null) {
+        return new CallSummaryBean(MAPPER, "test-" + window, TABLE_SUFFIX, SERVICE_GROUP, null) {
             @Override
             public WindowSize window() {
                 return w;
