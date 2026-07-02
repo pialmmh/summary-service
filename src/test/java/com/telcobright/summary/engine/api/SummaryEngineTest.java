@@ -13,6 +13,7 @@ import static com.telcobright.summary.testkit.CdrTestSupport.at;
 import static com.telcobright.summary.testkit.CdrTestSupport.daySummary;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The full load-merge-write pipeline over the fake store, typed on CallSummary: load-once, insert, update. */
@@ -73,5 +74,18 @@ class SummaryEngineTest {
         assertEquals(0, result.eventsProcessed());
         assertTrue(store.executedSql().isEmpty(), "no SQL for an empty batch");
         assertEquals(0, store.loadCount(DAY_TABLE));
+    }
+
+    @Test
+    void replace_windows_is_a_prototype_that_throws_until_implemented() {
+        // REPLACE (drop the window, recreate from ALL its inputs) is a settings-visible prototype only —
+        // all outbox polls are INCREMENTAL (user directive 2026-07-03)
+        FakeSummaryStore store = new FakeSummaryStore();
+
+        UnsupportedOperationException e = assertThrows(UnsupportedOperationException.class,
+                () -> engine.replaceWindows(bean, List.of(daySummary(at(2026, 6, 19, 14, 30))), store, 1000));
+
+        assertTrue(e.getMessage().contains("not implemented"), e.getMessage());
+        assertTrue(store.executedSql().isEmpty(), "the prototype must not touch the database");
     }
 }

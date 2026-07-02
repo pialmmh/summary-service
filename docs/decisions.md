@@ -307,3 +307,25 @@ Nothing was wrong with it; the "provisional shape" flag was a deferred TYPING de
   dimension not on the blob), the typed shape is ADOPTED from billing-core java's
   `com.telcobright.billing.mediation.context.MediationContext` (copy or shared module — decide then) —
   never invented on this side. Until such a consumer exists, this item is CLOSED, not open.
+
+## 14. Generic input axis: SummaryGenerator<I,T> + per-bean mode (incremental | replace-prototype) — user directive 2026-07-03
+The user's model — `Summary<T>` with `T = the INPUT type` (e.g. a cdr), a base class holding the generation
+METHOD PROTOTYPES with per-implementation logic, shared append (add/subtract), and two api modes — mapped onto
+what exists honestly: the engine/cache/append/window machinery was ALREADY generic and reused (it is typed on
+the summary ENTITY; voice + chargeable both ride it unchanged). What was missing and is now formalized:
+- **`bean/spi/SummaryGenerator<I, T extends SummaryEntity<T>>`** — the input-typed base: abstract
+  `generateOne(I, window)` (the one prototype an implementation writes; logic differs per summary kind) +
+  shared `final generate(batch, window)`. Append stays the reusable entity contract (`merge`/`multiply`)
+  applied by the engine's MergeMode. Category generators: `CallSummaryGenerator` (`I = RatedCall(cdr,
+  customerLeg)` — the legacy (cdr, acc_chargeable) signature as a record) and `ChargeableSummaryGenerator`
+  (`I = Chargeable`); the beans' `buildBatch` now assembles inputs (decode/pick/filter) and delegates
+  generation through the generator. Naming: the user's `CdrSummary<Cdr>` ≈ `CallSummaryGenerator` — the
+  `*Summary` names stay on the ENTITIES (§12d catalog), the generator suffix marks the input-typed contract.
+- **`bean/spi/SummaryMode` + `SummaryBean.mode()`** — the per-bean SETTING (yml `summary.beans.<name>.mode`,
+  default `incremental`). Cdr processing runs INCREMENTAL; ALL outbox polls are incremental by definition.
+- **REPLACE = PROTOTYPE ONLY (per the user):** `SummaryEngine.replaceWindows(bean, fresh, store, segment)`
+  documents the intended semantics (caller supplies ALL inputs of the window(s); drop the windows' rows;
+  write the fresh aggregation — an overwrite, naturally idempotent) and THROWS
+  `UnsupportedOperationException` until implemented. The drain routes a `mode: replace` bean into it, so a
+  misconfigured bean fails LOUDLY every poll — a config fault, deliberately never quarantined/dead-lettered.
+- Tests: 80 unit + 8 MySQL IT green (mode default, prototype throw, loud-not-quarantined routing).

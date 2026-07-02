@@ -1,6 +1,9 @@
 package com.telcobright.summary.outbox.api;
 
+import com.telcobright.summary.bean.spi.SummaryMode;
+import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
+import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.testkit.CdrTestSupport;
@@ -182,6 +185,35 @@ class OutboxReaderTest {
         assertEquals(1, outbox.readOffset(ENTITY, BEAN), "offset stops just before the poison row");
         assertTrue(store.ranSqlMatching("insert into " + DAY_TABLE), "the clean row's summaries are written");
         assertTrue(outbox.deadLetters().isEmpty(), "the poison row's streak only starts once it is the head");
+    }
+
+    @Test
+    void a_replace_mode_bean_fails_loudly_and_is_never_quarantined() {
+        // mode is a bean SETTING; REPLACE is a prototype — the drain must fail LOUD (config fault),
+        // never dead-letter data over it
+        FakeOutboxStore outbox = new FakeOutboxStore();
+        outbox.seed(1, encodedBatch(List.of(sg10Entry(at(2026, 6, 19, 10, 0)))));
+        FakeSummaryStore store = new FakeSummaryStore();
+        FakeUnitOfWorkFactory factory = new FakeUnitOfWorkFactory(store, outbox);
+        OutboxReader reader = reader(factory);
+        CallSummaryBean replaceBean = new CallSummaryBean(CdrBlobMapper.create(), BEAN, "03", 10, null) {
+            @Override
+            public WindowSize window() {
+                return WindowSize.parse("daily");
+            }
+
+            @Override
+            public SummaryMode mode() {
+                return SummaryMode.REPLACE;
+            }
+        };
+
+        for (int attempt = 0; attempt < QUARANTINE_AFTER + 1; attempt++) {
+            assertThrows(UnsupportedOperationException.class, () -> reader.drainOnce(replaceBean));
+        }
+
+        assertEquals(0, outbox.readOffset(ENTITY, BEAN), "offset pinned — nothing consumed");
+        assertTrue(outbox.deadLetters().isEmpty(), "a config fault is not poison — no data is dead-lettered");
     }
 
     @Test

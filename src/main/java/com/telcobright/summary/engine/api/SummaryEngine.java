@@ -71,4 +71,19 @@ public class SummaryEngine {
         }
         return result;
     }
+
+    /**
+     * REPLACE mode — PROTOTYPE ONLY (user directive 2026-07-03). Intended semantics: the caller supplies ALL
+     * inputs of the window(s), generated to fresh entities; the windows' existing rows are DROPPED and the
+     * fresh aggregation written wholesale — an overwrite, naturally idempotent (the correction shape).
+     * ALL outbox polls run {@link com.telcobright.summary.bean.spi.SummaryMode#INCREMENTAL}; a bean configured
+     * {@code mode: replace} reaches this and fails loudly until it is implemented.
+     *
+     * @throws UnsupportedOperationException always — not implemented yet
+     */
+    public <T extends SummaryEntity<T>> BatchResult replaceWindows(SummaryBean<T> bean, List<T> fresh,
+                                                                   SummaryStore store, int segmentSize) {
+        throw new UnsupportedOperationException("REPLACE mode is not implemented yet — bean '" + bean.name()
+                + "' must run incremental (all outbox polls are incremental; see SummaryMode)");
+    }
 }

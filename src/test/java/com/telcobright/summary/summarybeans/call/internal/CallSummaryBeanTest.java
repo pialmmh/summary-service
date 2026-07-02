@@ -1,5 +1,6 @@
 package com.telcobright.summary.summarybeans.call.internal;
 
+import com.telcobright.summary.bean.spi.SummaryMode;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
@@ -124,6 +125,14 @@ class CallSummaryBeanTest {
         assertEquals(CallSummary.INSERT_COLUMNS, daily.insertColumnsCsv());
         assertEquals("tup_starttime", daily.bucketColumn());
         assertEquals("cdr", daily.entityType());
+    }
+
+    @Test
+    void mode_is_a_bean_setting_defaulting_to_incremental() {
+        // cdr processing runs INCREMENTAL — every outbox poll does; REPLACE stays a prototype
+        assertEquals(SummaryMode.INCREMENTAL, daily.mode());
+        assertEquals(SummaryMode.INCREMENTAL, SummaryMode.parse(null));
+        assertEquals(SummaryMode.REPLACE, SummaryMode.parse("Replace"));
     }
 
     @Test

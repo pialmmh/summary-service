@@ -2,10 +2,12 @@ package com.telcobright.summary.summarybeans.call.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
+import com.telcobright.summary.bean.spi.SummaryMode;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
 import com.telcobright.summary.summarybeans.call.model.Chargeable;
+import com.telcobright.summary.summarybeans.call.model.RatedCall;
 
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
@@ -37,14 +39,16 @@ import java.util.List;
 public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
 
     private static final Logger LOG = Logger.getLogger(CallSummaryBean.class);
+    private static final CallSummaryGenerator GENERATOR = new CallSummaryGenerator();   // stateless, shared
 
     private final ObjectMapper blobMapper;
     private final String name;
-    private final String tableSuffix;   // selects the pre-provisioned set, e.g. "3" -> sum_voice_<window>_3
+    private final String tableSuffix;   // selects the pre-provisioned set, e.g. "03" -> sum_voice_<window>_03
     private final int serviceGroup;
     private final String context;
+    private final SummaryMode mode;
 
-    /** CDI path: read {@code table-suffix}/{@code service-group}/{@code context} from {@code summary.beans.<name>}. */
+    /** CDI path: read {@code table-suffix}/{@code service-group}/{@code context}/{@code mode} from {@code summary.beans.<name>}. */
     protected CallSummaryBean(ObjectMapper blobMapper, String name) {
         this(blobMapper, name,
                 optString(name, "table-suffix"),
@@ -52,7 +56,7 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
                 optString(name, "context"));
     }
 
-    /** Explicit path (tests / non-CDI wiring): the settings are passed in directly. */
+    /** Explicit path (tests / non-CDI wiring): the settings are passed in directly; mode from config (default incremental). */
     protected CallSummaryBean(ObjectMapper blobMapper, String name, String tableSuffix, int serviceGroup, String context) {
         // a case-insensitive + JavaTime copy for the C# PascalCase outbox blob
         this.blobMapper = CdrBlobMapper.from(blobMapper);
@@ -60,6 +64,13 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
         this.tableSuffix = tableSuffix;
         this.serviceGroup = serviceGroup;
         this.context = context;
+        this.mode = SummaryMode.parse(optString(name, "mode"));
+    }
+
+    /** The per-bean fold setting — cdr processing runs INCREMENTAL (all outbox polls do). */
+    @Override
+    public SummaryMode mode() {
+        return mode;
     }
 
     /** The one thing a per-window subclass fixes — its time bucket (hourly / daily / 5min / weekly / …). */
@@ -122,7 +133,7 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
     @Override
     public List<CallSummary> buildBatch(byte[] decompressedRowJson) {
         List<CdrBlobEntry> entries = decode(decompressedRowJson);
-        List<CallSummary> built = new ArrayList<>(entries.size());
+        List<RatedCall> kept = new ArrayList<>(entries.size());
         int skippedMalformed = 0;
         for (CdrBlobEntry entry : entries) {
             Chargeable customerLeg = entry.customerLeg();   // v2 legs list, v1 single leg — dual-decode
@@ -133,13 +144,13 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
             if (customerLeg.servicegroup() != serviceGroup) {
                 continue;   // not this bean's service group
             }
-            built.add(CallSummaryBuilder.build(entry.cdr(), customerLeg, window()));
+            kept.add(new RatedCall(entry.cdr(), customerLeg));
         }
         if (skippedMalformed > 0) {
             LOG.warnf("bean=%s skipped %d malformed blob entr%s (null cdr/leg/StartTime)", name,
                     skippedMalformed, skippedMalformed == 1 ? "y" : "ies");
         }
-        return built;
+        return GENERATOR.generate(kept, window());
     }
 
     @Override

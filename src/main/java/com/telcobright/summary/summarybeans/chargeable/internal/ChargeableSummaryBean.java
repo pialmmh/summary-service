@@ -2,6 +2,7 @@ package com.telcobright.summary.summarybeans.chargeable.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
+import com.telcobright.summary.bean.spi.SummaryMode;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
@@ -29,21 +30,30 @@ import java.util.List;
 public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSummary> {
 
     private static final Logger LOG = Logger.getLogger(ChargeableSummaryBean.class);
+    private static final ChargeableSummaryGenerator GENERATOR = new ChargeableSummaryGenerator();   // stateless, shared
 
     private final ObjectMapper blobMapper;
     private final String name;
     private final String context;
+    private final SummaryMode mode;
 
-    /** CDI path: only {@code context} comes from {@code summary.beans.<name>} (no service-group / table-suffix). */
+    /** CDI path: only {@code context}/{@code mode} come from {@code summary.beans.<name>} (no service-group / table-suffix). */
     protected ChargeableSummaryBean(ObjectMapper blobMapper, String name) {
         this(blobMapper, name, optString(name, "context"));
     }
 
-    /** Explicit path (tests / non-CDI wiring). */
+    /** Explicit path (tests / non-CDI wiring); mode from config (default incremental). */
     protected ChargeableSummaryBean(ObjectMapper blobMapper, String name, String context) {
         this.blobMapper = CdrBlobMapper.from(blobMapper);
         this.name = name;
         this.context = context;
+        this.mode = SummaryMode.parse(optString(name, "mode"));
+    }
+
+    /** The per-bean fold setting — all outbox polls run INCREMENTAL. */
+    @Override
+    public SummaryMode mode() {
+        return mode;
     }
 
     @Override
@@ -90,7 +100,7 @@ public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSum
     @Override
     public List<ChargeableSummary> buildBatch(byte[] decompressedRowJson) {
         List<CdrBlobEntry> entries = decode(decompressedRowJson);
-        List<ChargeableSummary> built = new ArrayList<>();
+        List<Chargeable> kept = new ArrayList<>();
         int skippedMalformed = 0;
         for (CdrBlobEntry entry : entries) {
             for (Chargeable leg : entry.legs()) {           // EVERY leg — customer and supplier rows both roll up
@@ -98,13 +108,13 @@ public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSum
                     skippedMalformed++;                     // billing always stamps it; guard, never NPE the drain
                     continue;
                 }
-                built.add(ChargeableSummaryBuilder.build(leg, window()));
+                kept.add(leg);
             }
         }
         if (skippedMalformed > 0) {
             LOG.warnf("bean=%s skipped %d malformed chargeable leg(s) (null leg/transactionTime)", name, skippedMalformed);
         }
-        return built;
+        return GENERATOR.generate(kept, window());
     }
 
     @Override

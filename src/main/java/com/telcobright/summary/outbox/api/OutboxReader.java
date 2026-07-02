@@ -2,6 +2,7 @@ package com.telcobright.summary.outbox.api;
 
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryEntity;
+import com.telcobright.summary.bean.spi.SummaryMode;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.engine.spi.MissingWindowException;
 import com.telcobright.summary.outbox.internal.OutboxCodec;
@@ -163,7 +164,13 @@ public class OutboxReader {
                     break;
                 }
                 try {
-                    engine.runBatch(bean, entities, row.mergeMode(), unitOfWork.store(), segmentSize);
+                    if (bean.mode() == SummaryMode.REPLACE) {
+                        // prototype path: throws until replace is implemented — a misconfigured bean fails
+                        // LOUDLY (never quarantined: it is a config fault, not a data fault)
+                        engine.replaceWindows(bean, entities, unitOfWork.store(), segmentSize);
+                    } else {
+                        engine.runBatch(bean, entities, row.mergeMode(), unitOfWork.store(), segmentSize);
+                    }
                 } catch (MissingWindowException subtractOnMissing) { // ruling A1: quarantinable, not a wedge
                     poison = subtractOnMissing;                      // (thrown pre-flush -> this row wrote nothing)
                     poisonRow = row;

@@ -30,6 +30,15 @@ public interface SummaryBean<T extends SummaryEntity<T>> {
         return null;
     }
 
+    /**
+     * How this bean folds summaries into its windows — the per-bean setting. ALL outbox polls are
+     * INCREMENTAL today (the default); {@code REPLACE} (drop the window, recreate from all its inputs) is a
+     * prototype the engine does not implement yet.
+     */
+    default SummaryMode mode() {
+        return SummaryMode.INCREMENTAL;
+    }
+
     /** Target MySQL table for this bean's window. */
     String table();
 
