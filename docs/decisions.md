@@ -294,3 +294,16 @@ The billing work order (`/tmp/shared-instruction/summary-service-work-order.md`)
 - Tests: **77 unit + 8 MySQL IT** (subtract correction arithmetic, chargeable self-provision with REAL
   partitions + rollup, both proven against MySQL). Still open: `MediationContext` real shape (provisional,
   not load-bearing); the correction PRODUCER (billing's next round, with `correction_id`).
+
+### 13e. MediationContext — CLOSED as "same as billing, typed on first use" (2026-07-02)
+Nothing was wrong with it; the "provisional shape" flag was a deferred TYPING decision, now pinned:
+- We already load THE SAME context billing loads — same config-manager api (`POST /get-specific-tenant-root`),
+  same tenant chain, loaded once at activation, shared read-only (`ContextRegistry`).
+- NO summary bean reads a field from it, and none should today: the legacy summary stamps
+  (`SgDomOffnetOut/In.SetServiceGroupWiseSummaryParams`) read only cdr + chargeable — MediationContext is a
+  MEDIATION/RATING input on billing's side, and its results are already stamped on the cdr before the outbox.
+  The blob arrives post-mediation. Typing it now = dead code that drifts.
+- Therefore ours holds the payload RAW. The moment a future bean needs a context lookup (e.g. a partner-name
+  dimension not on the blob), the typed shape is ADOPTED from billing-core java's
+  `com.telcobright.billing.mediation.context.MediationContext` (copy or shared module — decide then) —
+  never invented on this side. Until such a consumer exists, this item is CLOSED, not open.
