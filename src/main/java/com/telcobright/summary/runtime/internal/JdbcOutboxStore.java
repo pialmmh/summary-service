@@ -28,7 +28,9 @@ final class JdbcOutboxStore implements OutboxStore {
 
     @Override
     public long readOffset(String entityType, String beanName) {
-        String sql = "select last_offset from summary_offset where entity_type=? and bean_name=?";
+        // FOR UPDATE (dotnet A1c belt-and-braces): under the ratified single-active topology the row lock is
+        // free; if a second instance ever starts by accident, its drain blocks here instead of double-counting
+        String sql = "select last_offset from summary_offset where entity_type=? and bean_name=? for update";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, entityType);
             ps.setString(2, beanName);
@@ -56,7 +58,7 @@ final class JdbcOutboxStore implements OutboxStore {
 
     @Override
     public List<OutboxRow> readAfter(String entityType, long afterId, int limit) {
-        String sql = "select id, data from summary_affected where entity_type=? and id>? order by id asc limit ?";
+        String sql = "select id, op, data from summary_affected where entity_type=? and id>? order by id asc limit ?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, entityType);
             ps.setLong(2, afterId);
@@ -64,7 +66,8 @@ final class JdbcOutboxStore implements OutboxStore {
             try (ResultSet rs = ps.executeQuery()) {
                 List<OutboxRow> rows = new ArrayList<>();
                 while (rs.next()) {
-                    rows.add(new OutboxRow(rs.getLong("id"), rs.getString("data")));
+                    String op = rs.getString("op");
+                    rows.add(new OutboxRow(rs.getLong("id"), op == null ? "add" : op, rs.getString("data")));
                 }
                 return rows;
             }
@@ -119,7 +122,7 @@ final class JdbcOutboxStore implements OutboxStore {
 
     @Override
     public void deadLetter(String entityType, String beanName, OutboxRow row, String error) {
-        String sql = "insert into summary_deadletter(entity_type,bean_name,outbox_id,data,error) values(?,?,?,?,?)";
+        String sql = "insert into summary_affected_dlq(entity_type,bean_name,outbox_id,data,error) values(?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, entityType);
             ps.setString(2, beanName);

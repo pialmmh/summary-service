@@ -19,7 +19,7 @@ import com.telcobright.summary.summarybeans.call.model.CallSummary;
  * {@code sum_voice_day_<table-suffix>} (the suffix selects one of the pre-provisioned table sets). (The running Quarkus service still wires this bean via CDI + YAML — this builder is the
  * programmatic API for embedders and tests.)
  */
-public final class DailySummaryBuilder extends SummaryBeanBuilder<CallSummary, DailySummaryBuilder> {
+public final class DailySummaryBuilder extends CallBeanBuilder<DailySummaryBuilder> {
 
     private DailySummaryBuilder(ObjectMapper blobMapper) {
         super(blobMapper);

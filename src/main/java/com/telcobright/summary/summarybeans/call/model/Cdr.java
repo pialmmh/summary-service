@@ -37,6 +37,12 @@ public record Cdr(
         String matchedPrefixY,
         BigDecimal outPartnerCost,
         BigDecimal supplierRate,
-        BigDecimal tax2
+        BigDecimal tax2,
+        // -- the 5 SG10 faithfulness fields (work order §2; absent until billing's package/Z flows exist) --
+        String matchedPrefixCustomer,
+        BigDecimal zAmount,            // C# ZAmount — ans tax -> vat
+        BigDecimal costAnsIn,          // -> longDecimalAmount1 (anscost)
+        String additionalSystemCodes,  // JSON STRING carrying the package amount -> parse -> longDecimalAmount2
+        String additionalPartyNumber   // JSON STRING carrying the package id     -> parse -> intAmount1
 ) {
 }

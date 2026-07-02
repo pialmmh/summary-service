@@ -240,3 +240,57 @@ All engine-math parity with legacy re-confirmed (41-point diff, incl. the produc
 - Tests: 60 unit + 6 MySQL IT (reaper min/delete, crash-redelivery replay, quarantine, head-init now proven
   against real MySQL). Still open: correction-path INPUT (needs a dotnet-ratified contract addition), Q2
   deregister rule, `MediationContext` real shape.
+
+### 13d. CONTRACT v2 cut — 2026-07-02 (work order + dotnet answers A1–A6 + user directive; one coordinated cut)
+The billing work order (`/tmp/shared-instruction/summary-service-work-order.md`) + the answered Q1–Q6
+(`…questions-for-dotnet.md`) + the user's self-provisioning directive, all landed together:
+- **Blob v2 (§1a, BREAKING at the producer; tolerant here):** entries are now `{Cdr, Chargeables:[ALL legs]}`.
+  `Customer` → `Chargeable` (it is the acc_chargeable row) with the full leg field set; `CdrBlobEntry` reads
+  BOTH shapes PERMANENTLY (A3: v1 `{Cdr, Customer}` decodes as a single-element leg list — never depend on a
+  drained outbox). The voice bean picks the customer leg (`assignedDirection == 1`, else first — billing's own
+  `Entry.Customer()` rule) then filters by SG as before.
+- **`op` plumbing (§1b):** `summary_affected.op ENUM('add','subtract') DEFAULT 'add'` (absent/NULL → add, A3).
+  `OutboxRow(id, op, data)`; the drain runs the ENGINE PER OUTBOX ROW in id order with the row's `MergeMode` —
+  one row = one packed billing batch, so load-once holds at exactly the legacy batch granularity, and a later
+  row re-reads windows an earlier row wrote in the same tx (subtract-behind-add is correct). A correction =
+  `subtract`(OLD)+`add`(NEW), consecutive ids, one billing tx; half-applied-until-repair ACCEPTED (A2), no
+  `op='overwrite'` ever, `correction_id` comes later with the correction producer (we read columns by name).
+- **SUBTRACT-on-missing = poison (A1=B, billing's keep-throw withdrawn):** `MissingWindowException` (thrown
+  pre-flush — the row wrote nothing) joins the decode/build failures in the quarantine policy; after
+  `quarantine-after` consecutive head-row failures the row is dead-lettered COMPLETE and un-applied (the
+  repair ticket). SQL failures still never quarantine. DLQ renamed `summary_deadletter` → **`summary_affected_dlq`**.
+- **SG10 faithfulness (§2):** `Cdr` +5 fields; the SG10 branch now stamps `tup_matchedprefixcustomer` from
+  `cdr.MatchedPrefixCustomer` (the chargeable's prefix was legacy-overwritten dead code), `vat = ZAmount` +
+  `tup_vatcurrency='BDT'`, `longDecimalAmount1 = CostAnsIn`, `longDecimalAmount2 = AdditionalSystemCodes`,
+  `intAmount1 = AdditionalPartyNumber` — the last two are JSON STRINGS (legacy repurposed free-text columns):
+  parsed, null/blank/unparsable → 0 + warn (A4). Both SG branches gained the legacy `ChargingStatus != 1`
+  early-return: a non-charged call gets counts/durations + its pre-charge stamps only.
+- **Suffixes (§3, A6):** SG10 → `03`, SG11 → `02` — billing's LIVE sets, recorded here as the decision (no
+  greenfield `_3`). Java billing writes NOTHING to sum_voice_*; REQUIRED cutover step: stop the legacy .NET
+  summary jobs before going live on the same tables.
+- **Chargeable category (§4, net-new):** `summarybeans/chargeable/` — `ChargeableSummary` (key = sg/sf/
+  direction/product/uom/prefix + `tup_transactiontime`; measures totalcount + 14 amounts, `multiply` scales
+  ALL — no legacy quirk), base bean consumes the SAME `cdr` stream (blob model/mapper reused from the call
+  category — one pinned contract), EVERY leg of EVERY entry becomes a row (no SG/direction filter; direction
+  is a key column). Tables FIXED per window: `sum_chargeable_day`/`_hr`, DECIMAL(20,8) (billing rounds
+  HALF_EVEN at 8dp; the chargeable KEY has no decimal column, so 6dp key canonicalization stays voice-only).
+  Bucket = the leg's own `transactionTime` (always present, == StartTime today, authoritative if that ever
+  diverges — A4). `beans/` restructured for the second category: `SummaryBeanBuilder` (generic root:
+  mapper+context+final build→validate) + `CallBeanBuilder` (the voice layer requiring SG+suffix) +
+  `Daily/HourlyChargeableSummaryBuilder` (no required fields). §12e's convention unchanged for users.
+- **Self-provisioning DDL (user directive, supersedes A5's manual-deploy split):** `SummaryBean.tableDdl()` —
+  each bean CREATEs its table IF NOT EXISTS at worker start, carrying the FULL daily partition set inside the
+  CREATE (house rule; horizon via `summary.ddl.partition-start`/`partition-days`, default current-year Jan 1 ×
+  730 + pMAX; partitioned form uses PK `(id, bucket)` as MySQL requires). Service-level: `summary_offset`,
+  `summary_affected_dlq` (+ a dev copy of `summary_affected`) ensured once per process. The ONLY remaining ops
+  item is the GRANT (CREATE/ALTER on the tenant schema).
+- **Q2 RESOLVED (work order §5.2):** the reaper watermark runs over the CONFIGURED (registered) beans, not
+  just running workers — a hot-stopped bean's unread rows survive until it catches up or its offset row is
+  explicitly decommissioned. Plus: `readOffset … FOR UPDATE` (A1c belt-and-braces for an accidental second
+  instance) and entry-level null guards in every buildBatch (skip + count + warn, never NPE the drain).
+- Producer-side guarantees now relied on (A/§1c): outbox ids are COMMIT-ordered (GET_LOCK held across commit)
+  — closes the §13c serial-producer assumption at the producer; chargeables carry real ProductId/uom;
+  SfA2Z supplier TaxAmount1 is null (faithful).
+- Tests: **77 unit + 8 MySQL IT** (subtract correction arithmetic, chargeable self-provision with REAL
+  partitions + rollup, both proven against MySQL). Still open: `MediationContext` real shape (provisional,
+  not load-bearing); the correction PRODUCER (billing's next round, with `correction_id`).

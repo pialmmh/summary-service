@@ -1,6 +1,7 @@
 package com.telcobright.summary.outbox.api;
 
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
+import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.FakeOutboxStore;
@@ -80,6 +81,49 @@ class OutboxReaderTest {
         assertEquals(0, outbox.readOffset(ENTITY, BEAN), "offset NOT advanced -> batch redelivers, no double-count");
         assertTrue(factory.last.rolledBack);
         assertFalse(factory.last.committed);
+    }
+
+    @Test
+    void a_subtract_row_decrements_the_loaded_window() {
+        // a billing correction's subtract row (the OLD values) folds in as MergeMode.SUBTRACT — the window,
+        // committed earlier at 2 calls, decrements to 1 (add-then-subtract ACROSS rows in one tx is proven
+        // against real MySQL in the IT; the fake cannot read back its own writes)
+        FakeOutboxStore outbox = new FakeOutboxStore();
+        outbox.seed(1, "subtract", encodedBatch(List.of(sg10Entry(at(2026, 6, 19, 10, 0)))));
+        FakeSummaryStore store = new FakeSummaryStore();
+        CallSummary existing = CdrTestSupport.daySummary(at(2026, 6, 19, 10, 0));
+        existing.merge(CdrTestSupport.daySummary(at(2026, 6, 19, 10, 0)));   // the window holds 2 calls
+        existing.setId(100L);
+        store.seed(DAY_TABLE, at(2026, 6, 19, 0, 0), existing);
+        FakeUnitOfWorkFactory factory = new FakeUnitOfWorkFactory(store, outbox);
+
+        assertEquals(1, reader(factory).drain(bean), "the subtract row is consumed like any other");
+
+        String update = store.firstSqlMatching("update " + DAY_TABLE);
+        assertTrue(update != null && update.contains("totalcalls=1,"), "2 calls - 1 = 1 after the subtract: " + update);
+        assertEquals(1, outbox.readOffset(ENTITY, BEAN), "offset advanced past the correction row");
+    }
+
+    @Test
+    void subtract_on_a_missing_window_dead_letters_after_the_threshold() {
+        // ruling A1=B: a subtract whose target window never existed (head-init skipped it, or its add was
+        // dead-lettered) must NOT wedge the bean forever — same quarantine policy as a poison blob
+        FakeOutboxStore outbox = new FakeOutboxStore();
+        outbox.seed(1, "subtract", encodedBatch(List.of(sg10Entry(at(2026, 6, 19, 10, 0)))));
+        FakeSummaryStore store = new FakeSummaryStore();   // empty: nothing to subtract from
+        FakeUnitOfWorkFactory factory = new FakeUnitOfWorkFactory(store, outbox);
+        OutboxReader reader = reader(factory);
+
+        for (int attempt = 1; attempt < QUARANTINE_AFTER; attempt++) {
+            assertThrows(RuntimeException.class, () -> reader.drainOnce(bean));
+            assertEquals(0, outbox.readOffset(ENTITY, BEAN));
+        }
+
+        assertEquals(1, reader.drainOnce(bean), "threshold reached -> the subtract row is dead-lettered");
+        assertEquals(1, outbox.deadLetters().size(), "the un-applied correction is preserved as the repair ticket");
+        assertEquals(1, outbox.readOffset(ENTITY, BEAN));
+        assertEquals(null, store.firstSqlMatching("update"), "nothing was half-applied");
+        assertEquals(null, store.firstSqlMatching("insert"), "nothing was half-applied");
     }
 
     @Test

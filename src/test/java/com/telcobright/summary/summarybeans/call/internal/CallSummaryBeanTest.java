@@ -1,8 +1,6 @@
 package com.telcobright.summary.summarybeans.call.internal;
 
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
-import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
-import com.telcobright.summary.summarybeans.call.model.Customer;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
 
@@ -43,8 +41,9 @@ class CallSummaryBeanTest {
     }
 
     @Test
-    void decodes_the_csharp_pascalcase_blob() {
-        // exactly the PINNED on-the-wire shape: C# PascalCase keys, ISO datetimes, nulls omitted
+    void decodes_the_legacy_v1_blob_shape_permanently() {
+        // the v1 on-the-wire shape ({Cdr, Customer}) — tolerated FOREVER per dotnet ruling A3, so stray
+        // pre-upgrade outbox rows can never be silently lost
         String json = "[{\"Cdr\":{\"SwitchId\":1,\"InPartnerId\":5,\"IncomingRoute\":\"in\",\"OutgoingRoute\":\"out\","
                 + "\"OriginatingIP\":\"1.1.1.1\",\"TerminatingIP\":\"2.2.2.2\",\"CountryCode\":\"880\","
                 + "\"ConnectTime\":\"2026-06-19T14:30:00\",\"NERSuccess\":1,\"ChargingStatus\":1,\"DurationSec\":60,"
@@ -63,6 +62,63 @@ class CallSummaryBeanTest {
     }
 
     @Test
+    void decodes_the_v2_blob_and_picks_the_customer_leg() {
+        // blob v2 (PINNED): {Cdr, Chargeables:[ALL legs]} — the voice bean reads assignedDirection==1 and
+        // must NOT take the supplier leg's numbers; the 5 restored SG10 cdr fields wire through, including
+        // the two STRING-typed package fields (parsed, per dotnet ruling A4)
+        String json = "[{\"Cdr\":{\"SwitchId\":1,\"InPartnerId\":5,\"CountryCode\":\"880\","
+                + "\"ConnectTime\":\"2026-06-19T14:30:00\",\"NERSuccess\":1,\"ChargingStatus\":1,\"DurationSec\":60,"
+                + "\"StartTime\":\"2026-06-19T14:30:00\",\"AnsIdTerm\":42,\"MatchedPrefixSupplier\":\"1712\","
+                + "\"MatchedPrefixCustomer\":\"1712C\",\"ZAmount\":0.25,\"CostAnsIn\":0.3,"
+                + "\"AdditionalSystemCodes\":\"12.5\",\"AdditionalPartyNumber\":\"77\"},"
+                + "\"Chargeables\":["
+                + "{\"servicegroup\":10,\"servicefamily\":10,\"assignedDirection\":2,\"Prefix\":\"1712S\","
+                + "\"unitPriceOrCharge\":9.9,\"idBilledUom\":\"USD\",\"BilledAmount\":9.9},"
+                + "{\"servicegroup\":10,\"servicefamily\":10,\"assignedDirection\":1,\"Prefix\":\"1712\","
+                + "\"unitPriceOrCharge\":1.0,\"idBilledUom\":\"BDT\",\"BilledAmount\":1.0,\"TaxAmount1\":0.5}"
+                + "]}]";
+
+        List<CallSummary> built = daily.buildBatch(json.getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(1, built.size(), "one summary per cdr, not per leg");
+        CallSummary s = built.get(0);
+        assertEquals(0, s.customercost.compareTo(new BigDecimal("1.0")), "customer leg's cost, NOT the supplier's 9.9");
+        assertEquals("BDT", s.tup_customercurrency, "customer leg picked by direction, not list order");
+        assertEquals("1712C", s.tup_matchedprefixcustomer, "from cdr.MatchedPrefixCustomer (work order §2)");
+        assertEquals(0, s.vat.compareTo(new BigDecimal("0.25")), "vat = cdr.ZAmount");
+        assertEquals("BDT", s.tup_vatcurrency);
+        assertEquals(0, s.longDecimalAmount1.compareTo(new BigDecimal("0.3")), "anscost = cdr.CostAnsIn");
+        assertEquals(0, s.longDecimalAmount2.compareTo(new BigDecimal("12.5")), "package amount parsed from STRING");
+        assertEquals(77, s.intAmount1, "package id parsed from STRING");
+    }
+
+    @Test
+    void a_non_charged_call_gets_only_the_pre_charge_stamps() {
+        // legacy early-return: ChargingStatus != 1 -> counts/durations + country/destId/prefixsupplier only,
+        // NO rate/cost/tax/currency block
+        String json = "[{\"Cdr\":{\"SwitchId\":1,\"CountryCode\":\"880\",\"ChargingStatus\":0,\"DurationSec\":60,"
+                + "\"StartTime\":\"2026-06-19T14:30:00\",\"AnsIdTerm\":42,\"MatchedPrefixSupplier\":\"1712\","
+                + "\"MatchedPrefixCustomer\":\"1712C\",\"ZAmount\":0.25},"
+                + "\"Chargeables\":[{\"servicegroup\":10,\"assignedDirection\":1,\"unitPriceOrCharge\":1.0,"
+                + "\"idBilledUom\":\"BDT\",\"BilledAmount\":1.0,\"TaxAmount1\":0.5}]}]";
+
+        List<CallSummary> built = daily.buildBatch(json.getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(1, built.size(), "the call still counts");
+        CallSummary s = built.get(0);
+        assertEquals(1, s.totalcalls);
+        assertEquals(0, s.successfulcalls, "ChargingStatus 0 sums as 0");
+        assertEquals("880", s.tup_countryorareacode);
+        assertEquals("42", s.tup_destinationId);
+        assertEquals("1712", s.tup_matchedprefixsupplier);
+        assertEquals(0, s.customercost.compareTo(BigDecimal.ZERO), "cost block skipped for a non-charged call");
+        assertEquals("", s.tup_customercurrency);
+        assertEquals("", s.tup_matchedprefixcustomer, "customer prefix is a POST-charge stamp on SG10");
+        assertEquals(0, s.vat.compareTo(BigDecimal.ZERO), "vat block skipped");
+        assertEquals("", s.tup_vatcurrency);
+    }
+
+    @Test
     void exposes_its_table_columns_and_bucket() {
         assertEquals(CdrTestSupport.DAY_TABLE, daily.table());
         assertEquals(CallSummary.INSERT_COLUMNS, daily.insertColumnsCsv());
@@ -76,14 +132,10 @@ class CallSummaryBeanTest {
         // The builder must canonicalize BEFORE the tuple key is taken, or a reloaded row keys differently
         // from a fresh build of the same call -> duplicate windows / uq_tuple violations.
         LocalDateTime t = CdrTestSupport.at(2026, 6, 19, 14, 30);
-        CdrBlobEntry base = CdrTestSupport.sg10Entry(t);
-        Customer rateA = new Customer(10, "1712", new BigDecimal("1.5000004"), "BDT",
-                new BigDecimal("1.0"), new BigDecimal("0.5"), null, null);
-        Customer rateB = new Customer(10, "1712", new BigDecimal("1.4999996"), "BDT",
-                new BigDecimal("1.0"), new BigDecimal("0.5"), null, null);
 
         Collection<CallSummary> rows = CdrTestSupport.rollup(daily,
-                List.of(new CdrBlobEntry(base.cdr(), rateA), new CdrBlobEntry(base.cdr(), rateB)));
+                List.of(CdrTestSupport.sg10EntryWithRate(t, new BigDecimal("1.5000004")),
+                        CdrTestSupport.sg10EntryWithRate(t, new BigDecimal("1.4999996"))));
 
         assertEquals(1, rows.size(), "both rates canonicalize to 1.500000 -> ONE window, not two");
         CallSummary merged = rows.iterator().next();

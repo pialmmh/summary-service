@@ -3,6 +3,7 @@ package com.telcobright.summary.engine.internal;
 import com.telcobright.summary.bean.spi.SummaryEntity;
 import com.telcobright.summary.bean.spi.SummaryKey;
 import com.telcobright.summary.engine.spi.MergeMode;
+import com.telcobright.summary.engine.spi.MissingWindowException;
 import com.telcobright.summary.engine.spi.SummaryStore;
 
 import java.util.Collection;
@@ -50,7 +51,8 @@ public final class SummaryCache<T extends SummaryEntity<T>> {
         T existing = cache.get(key);
         if (existing == null) {
             if (mode == MergeMode.SUBTRACT) {
-                throw new IllegalStateException("cannot SUBTRACT a window that was not loaded: " + table);
+                throw new MissingWindowException("cannot SUBTRACT a window that was not loaded: " + table
+                        + " key=" + key);
             }
             T fresh = delta.cloneWithFakeId();   // id stays null -> AUTO_INCREMENT assigns it on INSERT
             cache.put(key, fresh);

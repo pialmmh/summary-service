@@ -5,8 +5,10 @@ import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
+import com.telcobright.summary.summarybeans.call.model.Chargeable;
 
 import org.eclipse.microprofile.config.ConfigProvider;
+import org.jboss.logging.Logger;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -18,9 +20,10 @@ import java.util.List;
 
 /**
  * The shared <b>call</b> summary machinery over the {@link CallSummary} entity (the 47-col {@code sum_voice}
- * row). It decodes an outbox row's batch of {@code {Cdr, Customer}} entries, keeps the ones for its configured
- * service group, and builds a bucketed {@link CallSummary} per entry via {@link CallSummaryBuilder}; the engine
- * does the load-merge-write. Everything here is window-independent — the concrete per-window beans
+ * row). It decodes an outbox row's batch of {@code {Cdr, Chargeables[]}} entries (v1 {@code {Cdr, Customer}}
+ * tolerated permanently), picks each entry's CUSTOMER leg, keeps the ones for its configured service group,
+ * and builds a bucketed {@link CallSummary} per entry via {@link CallSummaryBuilder}; the engine does the
+ * load-merge-write. Everything here is window-independent — the concrete per-window beans
  * ({@code HourlySummary}, {@code DailySummary}, …) add ONE thing: {@link #window()}.
  *
  * <p>This is the extension point for the {@code call} category: a new window = a new tiny subclass in the parent
@@ -32,6 +35,8 @@ import java.util.List;
  * the blob — the MediationContext is not load-bearing here (per the pinned contract).
  */
 public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
+
+    private static final Logger LOG = Logger.getLogger(CallSummaryBean.class);
 
     private final ObjectMapper blobMapper;
     private final String name;
@@ -98,6 +103,12 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
         return "sum_voice_" + window().tableToken() + "_" + tableSuffix;
     }
 
+    /** Self-provisioning DDL: the canonical sum_voice shape with the full daily partition set in the CREATE. */
+    @Override
+    public String tableDdl() {
+        return SumVoiceDdl.createTableIfNotExists(table());
+    }
+
     @Override
     public String insertColumnsCsv() {
         return CallSummary.INSERT_COLUMNS;
@@ -112,14 +123,21 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
     public List<CallSummary> buildBatch(byte[] decompressedRowJson) {
         List<CdrBlobEntry> entries = decode(decompressedRowJson);
         List<CallSummary> built = new ArrayList<>(entries.size());
+        int skippedMalformed = 0;
         for (CdrBlobEntry entry : entries) {
-            if (entry.cdr() == null || entry.customer() == null) {
+            Chargeable customerLeg = entry.customerLeg();   // v2 legs list, v1 single leg — dual-decode
+            if (entry.cdr() == null || customerLeg == null || entry.cdr().startTime() == null) {
+                skippedMalformed++;                          // never NPE the whole drain on one bad entry
                 continue;
             }
-            if (entry.customer().servicegroup() != serviceGroup) {
+            if (customerLeg.servicegroup() != serviceGroup) {
                 continue;   // not this bean's service group
             }
-            built.add(CallSummaryBuilder.build(entry.cdr(), entry.customer(), window()));
+            built.add(CallSummaryBuilder.build(entry.cdr(), customerLeg, window()));
+        }
+        if (skippedMalformed > 0) {
+            LOG.warnf("bean=%s skipped %d malformed blob entr%s (null cdr/leg/StartTime)", name,
+                    skippedMalformed, skippedMalformed == 1 ? "y" : "ies");
         }
         return built;
     }

@@ -34,7 +34,7 @@ public interface OutboxStore {
     int deleteUpTo(String entityType, long maxIdInclusive);
 
     /**
-     * Copy a poison outbox row into {@code summary_deadletter} for this bean (same transaction as the offset
+     * Copy a poison outbox row into {@code summary_affected_dlq} for this bean (same transaction as the offset
      * advance that skips it) — the quarantine record an operator repairs from.
      */
     void deadLetter(String entityType, String beanName, OutboxRow row, String error);

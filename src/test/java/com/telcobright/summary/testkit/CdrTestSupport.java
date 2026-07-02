@@ -10,7 +10,7 @@ import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.summarybeans.call.model.Cdr;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
-import com.telcobright.summary.summarybeans.call.model.Customer;
+import com.telcobright.summary.summarybeans.call.model.Chargeable;
 import com.telcobright.summary.beans.DailySummaryBuilder;
 import com.telcobright.summary.beans.HourlySummaryBuilder;
 import com.telcobright.summary.outbox.internal.OutboxCodec;
@@ -30,10 +30,10 @@ import java.util.List;
  */
 public final class CdrTestSupport {
 
-    public static final String DAY_TABLE = "sum_voice_day_3";
-    public static final String HOUR_TABLE = "sum_voice_hr_3";
+    public static final String DAY_TABLE = "sum_voice_day_03";
+    public static final String HOUR_TABLE = "sum_voice_hr_03";
     private static final int SERVICE_GROUP = 10;
-    private static final String TABLE_SUFFIX = "3";
+    private static final String TABLE_SUFFIX = "03";
     private static final ObjectMapper MAPPER = CdrBlobMapper.create();
 
     private CdrTestSupport() {
@@ -42,12 +42,12 @@ public final class CdrTestSupport {
     // ---- beans ----
 
     public static CallSummaryBean dailyBean() {
-        return (CallSummaryBean) DailySummaryBuilder.create(MAPPER)   // derives DAY_TABLE = sum_voice_day_3
+        return (CallSummaryBean) DailySummaryBuilder.create(MAPPER)   // derives DAY_TABLE = sum_voice_day_03
                 .serviceGroup(SERVICE_GROUP).tableSuffix(TABLE_SUFFIX).context("mediationContext").build();
     }
 
     public static CallSummaryBean hourlyBean() {
-        return (CallSummaryBean) HourlySummaryBuilder.create(MAPPER)  // derives HOUR_TABLE = sum_voice_hr_3
+        return (CallSummaryBean) HourlySummaryBuilder.create(MAPPER)  // derives HOUR_TABLE = sum_voice_hr_03
                 .serviceGroup(SERVICE_GROUP).tableSuffix(TABLE_SUFFIX).context("mediationContext").build();
     }
 
@@ -66,7 +66,7 @@ public final class CdrTestSupport {
         return LocalDateTime.of(year, month, day, hour, minute, 0);
     }
 
-    // ---- blob entries ----
+    // ---- blob entries (v2: {Cdr, Chargeables[ALL legs]}; a v1 helper kept for the dual-decode tests) ----
 
     public static CdrBlobEntry sg10Entry(LocalDateTime start) {
         return sg10Entry(start, 42);
@@ -76,23 +76,63 @@ public final class CdrTestSupport {
         return sg10Entry(start, ansIdTerm, bd("60"), bd("1.0"));
     }
 
-    /** An SG10 call whose destination (ansIdTerm) varies the tuple key, and whose duration/cost are controllable. */
+    /**
+     * An SG10 call whose destination (ansIdTerm) varies the tuple key, and whose duration/cost are
+     * controllable. v2 entry: customer leg (direction 1) + supplier leg (direction 2) — the voice bean must
+     * pick the customer leg; the chargeable bean rolls up both.
+     */
     public static CdrBlobEntry sg10Entry(LocalDateTime start, int ansIdTerm, BigDecimal durationSec, BigDecimal cost) {
-        Cdr cdr = new Cdr(1, 5, 0, "in", "out", "1.1.1.1", "2.2.2.2", "880",
+        return new CdrBlobEntry(sg10Cdr(start, ansIdTerm, durationSec),
+                List.of(sg10CustomerLeg(start, cost), sg10SupplierLeg(start)));
+    }
+
+    /** The same SG10 call in the LEGACY v1 blob shape ({@code {Cdr, Customer}}) — the dual-decode case. */
+    public static CdrBlobEntry sg10EntryV1(LocalDateTime start) {
+        return new CdrBlobEntry(sg10Cdr(start, 42, bd("60")), sg10CustomerLeg(start, bd("1.0")), null);
+    }
+
+    /** An SG10 entry whose customer-leg RATE is controllable (key-canonicalization tests). */
+    public static CdrBlobEntry sg10EntryWithRate(LocalDateTime start, BigDecimal rate) {
+        Chargeable leg = new Chargeable(10, 10, 1, 7001L, "BDT", "1712", start,
+                rate, bd("1.0"), bd("1"),
+                bd("0.5"), null, null, null, null, null, null, null, null, null, null, null);
+        return new CdrBlobEntry(sg10Cdr(start, 42, bd("60")), List.of(leg));
+    }
+
+    private static Cdr sg10Cdr(LocalDateTime start, int ansIdTerm, BigDecimal durationSec) {
+        return new Cdr(1, 5, 0, "in", "out", "1.1.1.1", "2.2.2.2", "880",
                 start, 1, 1,
                 durationSec, durationSec, durationSec, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                start, ansIdTerm, null, "1712", null, BigDecimal.ZERO, bd("0.8"), BigDecimal.ZERO);
-        Customer customer = new Customer(10, "1712", bd("1.0"), "BDT", cost, bd("0.5"), null, null);
-        return new CdrBlobEntry(cdr, customer);
+                start, ansIdTerm, null, "1712", null, BigDecimal.ZERO, bd("0.8"), BigDecimal.ZERO,
+                // the 5 SG10 faithfulness fields (work order §2): prefix-customer from the CDR, vat=ZAmount,
+                // anscost, and the two STRING-typed package fields the builder must parse
+                "1712C", bd("0.25"), bd("0.3"), "12.5", "77");
+    }
+
+    private static Chargeable sg10CustomerLeg(LocalDateTime start, BigDecimal cost) {
+        return new Chargeable(10, 10, 1, 7001L, "BDT", "1712", start,
+                bd("1.0"), cost, bd("1"),
+                bd("0.5"), null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    private static Chargeable sg10SupplierLeg(LocalDateTime start) {
+        return new Chargeable(10, 10, 2, 7002L, "BDT", "1712S", start,
+                bd("0.8"), bd("0.8"), bd("1"),
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     public static CdrBlobEntry sg11Entry(LocalDateTime start) {
         Cdr cdr = new Cdr(1, 5, 0, "in", "out", "1.1.1.1", "2.2.2.2", "880",
                 start, 1, 1,
                 bd("60"), bd("60"), bd("60"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                start, null, 7, null, "1713", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
-        Customer customer = new Customer(11, null, null, null, bd("2.0"), bd("0.3"), bd("1.5"), bd("5.0"));
-        return new CdrBlobEntry(cdr, customer);
+                start, null, 7, null, "1713", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                null, null, null, null, null);
+        Chargeable customerLeg = new Chargeable(11, 4, 1, 7003L, null, null, start,
+                null, bd("2.0"), bd("1"),
+                bd("0.3"), null, null, null, null, null,
+                bd("5.0"), null, null,        // otherAmount1 = x amount
+                bd("1.5"), null, null);       // otherDecAmount1 = x rate
+        return new CdrBlobEntry(cdr, List.of(customerLeg));
     }
 
     // ---- data generators (deterministic, so expected aggregates are computable) ----

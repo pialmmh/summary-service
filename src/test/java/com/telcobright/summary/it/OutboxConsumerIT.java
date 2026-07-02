@@ -1,7 +1,11 @@
 package com.telcobright.summary.it;
 
+import com.telcobright.summary.bean.spi.SummaryBean;
+import com.telcobright.summary.beans.DailyChargeableSummaryBuilder;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
+import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
+import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.outbox.api.OutboxReader;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
@@ -28,9 +32,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * INTEGRATION (local lxc MySQL): the full outbox consumer over real MySQL. Seeds {@code summary_affected} with
- * base64(gzip(JSON {Cdr,Customer})) rows (what billing writes), runs the daily bean's drain, and verifies the
- * summaries land, the per-bean {@code last_offset} advances, and a re-drain is a no-op (exactly-once). SELF-SKIPS
- * if MySQL is unreachable; password via {@code -Dsummary.it.mysql.password=…} (no credential in git).
+ * base64(gzip(JSON {Cdr,Chargeables[]})) v2 rows (+ op add/subtract — what billing writes), drains the voice
+ * and chargeable beans, and verifies summaries land, {@code last_offset} advances per bean, re-drains are
+ * no-ops (exactly-once), corrections decrement, the reaper trims, poison rows dead-letter, head-init seeds,
+ * and the chargeable table SELF-PROVISIONS with real partitions. SELF-SKIPS if MySQL is unreachable; password
+ * via {@code -Dsummary.it.mysql.password=…} (no credential in git).
  */
 class OutboxConsumerIT {
 
@@ -155,7 +161,7 @@ class OutboxConsumerIT {
         }
 
         assertEquals(1, quickQuarantine.drainOnce(bean), "threshold reached -> row consumed as a dead letter");
-        assertEquals(1, count("summary_deadletter"), "the poison blob is preserved for repair");
+        assertEquals(1, count("summary_affected_dlq"), "the poison blob is preserved for repair");
         assertEquals(1, offset("dailyCallSummary"), "offset advanced past the poison row");
 
         assertEquals(1, quickQuarantine.drain(bean), "the clean row behind it drains normally");
@@ -179,6 +185,61 @@ class OutboxConsumerIT {
         seedOutbox(3, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 21, 8, 0)))));
         assertEquals(1, reader.drain(bean), "rows landing after enablement flow normally");
         assertEquals(3, offset("dailyCallSummary"));
+    }
+
+    @Test
+    void a_subtract_correction_row_decrements_the_committed_window() {
+        // original batch: two calls in one day window
+        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(
+                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)),
+                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 15, 0)))));
+        assertEquals(1, reader.drain(bean));
+        assertEquals(2, sumTotalCalls(), "window committed at 2 calls");
+
+        // a billing correction removes one of them: op='subtract' with the OLD values
+        seedOutbox(2, "subtract", CdrTestSupport.encodedBatch(List.of(
+                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
+        assertEquals(1, reader.drain(bean));
+
+        assertEquals(1, sumTotalCalls(), "2 - 1 = 1 after the subtract row");
+        assertEquals(1, count(DAY_TABLE), "still ONE window row (decremented in place)");
+        assertEquals(2, offset("dailyCallSummary"));
+
+        // exactly-once still holds across ops
+        assertEquals(0, reader.drain(bean));
+        assertEquals(1, sumTotalCalls());
+    }
+
+    @Test
+    void the_chargeable_bean_self_provisions_its_partitioned_table_and_rolls_up_every_leg() {
+        System.setProperty("summary.ddl.partition-start", "2026-06-01");
+        System.setProperty("summary.ddl.partition-days", "60");   // small horizon: fast CREATE, real partitions
+        try {
+            SummaryBean<ChargeableSummary> chargeableDaily =
+                    DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build();
+            reader.ensureProvisioned(chargeableDaily);             // CREATE ... PARTITION BY RANGE COLUMNS(...)
+            reader.ensureProvisioned(chargeableDaily);             // idempotent over the existing table
+
+            // sg10Entry = customer + supplier legs; sg11Entry = one leg -> 3 chargeable rows from 2 cdrs
+            seedOutbox(1, CdrTestSupport.encodedBatch(List.of(
+                    CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)),
+                    CdrTestSupport.sg11Entry(CdrTestSupport.at(2026, 6, 19, 15, 0)))));
+
+            assertEquals(1, reader.drain(chargeableDaily), "same outbox stream, its own offset bookmark");
+
+            assertEquals(3, count("sum_chargeable_day"), "every leg is a row: 2 SG10 legs + 1 SG11 leg");
+            assertEquals(1, queryLong("select count(*) from sum_chargeable_day where tup_assigneddirection=2"),
+                    "the supplier leg keys separately");
+            assertEquals(0, new java.math.BigDecimal("3.8").compareTo(   // 1.0 customer + 0.8 supplier + 2.0 sg11
+                    queryDecimal("select coalesce(sum(BilledAmount),0) from sum_chargeable_day")));
+            assertEquals(1, offset("dailyChargeableSummary"), "independent bookmark from the voice beans");
+
+            assertEquals(0, reader.drain(chargeableDaily), "re-drain is a no-op (exactly-once per bean)");
+            assertEquals(3, count("sum_chargeable_day"));
+        } finally {
+            System.clearProperty("summary.ddl.partition-start");
+            System.clearProperty("summary.ddl.partition-days");
+        }
     }
 
     // ---- schema + helpers ----
@@ -209,14 +270,17 @@ class OutboxConsumerIT {
         exec(conn, "use " + DB);
         exec(conn, "drop table if exists summary_affected");
         exec(conn, "drop table if exists summary_offset");
-        exec(conn, "drop table if exists summary_deadletter");
+        exec(conn, "drop table if exists summary_affected_dlq");
         exec(conn, "drop table if exists " + DAY_TABLE);
         exec(conn, "drop table if exists " + HOUR_TABLE);
         exec(conn, "create table summary_affected (id bigint not null auto_increment, entity_type varchar(32) not null,"
+                + " op enum('add','subtract') not null default 'add',"
                 + " data longtext not null, primary key(id), key ix_entity(entity_type,id)) engine=innodb default charset=utf8mb4");
+        exec(conn, "drop table if exists sum_chargeable_day");
+        exec(conn, "drop table if exists sum_chargeable_hr");
         exec(conn, "create table summary_offset (entity_type varchar(32) not null, bean_name varchar(64) not null,"
                 + " last_offset bigint not null default 0, primary key(entity_type,bean_name)) engine=innodb default charset=utf8mb4");
-        exec(conn, "create table summary_deadletter (id bigint not null auto_increment, entity_type varchar(32) not null,"
+        exec(conn, "create table summary_affected_dlq (id bigint not null auto_increment, entity_type varchar(32) not null,"
                 + " bean_name varchar(64) not null, outbox_id bigint not null, data longtext not null,"
                 + " error varchar(512) not null, created_at timestamp not null default current_timestamp,"
                 + " primary key(id), key ix_bean(entity_type,bean_name,outbox_id)) engine=innodb default charset=utf8mb4");
@@ -257,10 +321,15 @@ class OutboxConsumerIT {
     }
 
     private void seedOutbox(long id, String data) {
-        String sql = "insert into summary_affected(id, entity_type, data) values(?, 'cdr', ?)";
+        seedOutbox(id, "add", data);
+    }
+
+    private void seedOutbox(long id, String op, String data) {
+        String sql = "insert into summary_affected(id, entity_type, op, data) values(?, 'cdr', ?, ?)";
         try (Connection c = dbConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, id);
-            ps.setString(2, data);
+            ps.setString(2, op);
+            ps.setString(3, data);
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("seed failed", e);
@@ -283,6 +352,15 @@ class OutboxConsumerIT {
         try (Connection c = dbConnection(); Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
             rs.next();
             return rs.getLong(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException(sql, e);
+        }
+    }
+
+    private java.math.BigDecimal queryDecimal(String sql) {
+        try (Connection c = dbConnection(); Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            rs.next();
+            return rs.getBigDecimal(1);
         } catch (SQLException e) {
             throw new IllegalStateException(sql, e);
         }

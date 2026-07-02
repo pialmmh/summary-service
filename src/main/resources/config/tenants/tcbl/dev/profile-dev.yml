@@ -39,37 +39,51 @@ summary:
     segment-size: 1000                           # rows per multi-row extended INSERT
     reaper-interval-seconds: 60                  # trims summary_affected past min(last_offset)
     quarantine-after: 8                          # consecutive decode/build failures on the SAME head row before
-                                                 # it is copied to summary_deadletter and skipped (per bean)
+                                                 # it is copied to summary_affected_dlq and skipped (per bean)
+
+  # 2b) Self-provisioning DDL (user directive): each bean CREATEs its table IF NOT EXISTS at activation,
+  #     with the FULL daily partition set inside the CREATE (house rule). The MySQL user needs CREATE/ALTER
+  #     on the tenant schema — the only remaining ops item. Defaults shown; uncomment to override.
+  # ddl:
+  #   partition-start: "2026-01-01"              # first daily partition (default: Jan 1 of the current year)
+  #   partition-days: 730                        # partitions created up front (+ a pMAX catch-all)
 
   # 3) SUMMARY beans to activate — each name = a per-window bean CLASS under summarybeans/<category>/.
   #    The window is fixed by the class (DailySummary/HourlySummary); the table is DERIVED as
-  #    sum_voice_<window>_<table-suffix> — the suffix picks one of the PRE-PROVISIONED sets (sum_voice_day_3 etc).
+  #    sum_voice_<window>_<table-suffix> — the suffix picks one of the PRE-PROVISIONED sets (sum_voice_day_03 etc).
   #    service-group FILTERS records; table-suffix NAMES the table. Each runs as its OWN parallel worker.
   #    Legacy billing summarised SG10 AND SG11 — BOTH must stay covered or their records are silently skipped
   #    (the offset still advances and the reaper deletes the rows: unrecoverable). The Sg11 pair below has no
   #    catalog class; its `window:` key makes the bootstrap CONFIG-INSTANTIATE a call bean under that name.
-  #    At cutover, point the suffixes at billing's REAL sets (SG10 -> "03", SG11 -> "02") if those are the names.
+  #    Suffixes point at billing's LIVE sets (SG10 -> "03", SG11 -> "02") per dotnet A6. REQUIRED cutover step:
+  #    the legacy .NET summary jobs MUST be stopped before this service goes live on the same tables.
   enabledSummary:
-    - dailyCallSummary                           # -> summarybeans/call/DailySummary.java  (sum_voice_day_3)
-    - hourlyCallSummary                          # -> summarybeans/call/HourlySummary.java (sum_voice_hr_3)
-    - dailyCallSummarySg11                       # config-instantiated (window key below)   (sum_voice_day_2)
-    - hourlyCallSummarySg11                      # config-instantiated                      (sum_voice_hr_2)
+    - dailyCallSummary                           # -> summarybeans/call/DailySummary.java  (sum_voice_day_03)
+    - hourlyCallSummary                          # -> summarybeans/call/HourlySummary.java (sum_voice_hr_03)
+    - dailyCallSummarySg11                       # config-instantiated (window key below)   (sum_voice_day_02)
+    - hourlyCallSummarySg11                      # config-instantiated                      (sum_voice_hr_02)
+    - dailyChargeableSummary                     # -> summarybeans/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
+    - hourlyChargeableSummary                    # -> summarybeans/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
   beans:
     dailyCallSummary:
       service-group: 10                          # keep SG10 records
-      table-suffix: "3"                          # -> sum_voice_day_3 (pre-provisioned set)
+      table-suffix: "03"                         # -> sum_voice_day_03 (billing's live SG10 set)
       context: mediationContext
     hourlyCallSummary:
       service-group: 10
-      table-suffix: "3"                          # -> sum_voice_hr_3
+      table-suffix: "03"                         # -> sum_voice_hr_03
       context: mediationContext
     dailyCallSummarySg11:
       window: daily                              # no catalog class -> config-instantiated call bean
       service-group: 11
-      table-suffix: "2"                          # -> sum_voice_day_2 (use "02" at cutover if legacy names apply)
+      table-suffix: "02"                         # -> sum_voice_day_02 (billing's live SG11 set)
       context: mediationContext
     hourlyCallSummarySg11:
       window: hourly
       service-group: 11
-      table-suffix: "2"                          # -> sum_voice_hr_2
+      table-suffix: "02"                         # -> sum_voice_hr_02
+      context: mediationContext
+    dailyChargeableSummary:
+      context: mediationContext                  # chargeable beans: EVERY leg, EVERY SG; table fixed per window
+    hourlyChargeableSummary:
       context: mediationContext

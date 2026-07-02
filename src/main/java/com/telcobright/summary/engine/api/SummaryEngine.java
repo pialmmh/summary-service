@@ -34,8 +34,18 @@ public class SummaryEngine {
         return runBatch(bean, entities, store, DEFAULT_SEGMENT_SIZE);
     }
 
-    /** Load -> merge -> write the whole batch for one bean. Caller owns the transaction. */
+    /** Increment-only convenience: the whole batch folds in as {@link MergeMode#ADD}. */
     public <T extends SummaryEntity<T>> BatchResult runBatch(SummaryBean<T> bean, List<T> entities,
+                                                             SummaryStore store, int segmentSize) {
+        return runBatch(bean, entities, MergeMode.ADD, store, segmentSize);
+    }
+
+    /**
+     * Load -> merge -> write the whole batch for one bean, folding every entity in with {@code mode} (an
+     * outbox row carries ONE op — a normal batch is ADD; a correction's old-values row is SUBTRACT). Caller
+     * owns the transaction.
+     */
+    public <T extends SummaryEntity<T>> BatchResult runBatch(SummaryBean<T> bean, List<T> entities, MergeMode mode,
                                                              SummaryStore store, int segmentSize) {
         if (entities.isEmpty()) {
             return BatchResult.empty(bean.name());
@@ -48,7 +58,7 @@ public class SummaryEngine {
         store.load(bean.table(), bean.insertColumnsCsv(), bean.bucketColumn(), bucketsInvolved, bean::mapRow)
                 .forEach(cache::populateExisting);
         for (T entity : entities) {
-            cache.merge(entity, MergeMode.ADD);
+            cache.merge(entity, mode);
         }
         int inserts = cache.insertedCount();
         int updates = cache.updatedCount();

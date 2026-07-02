@@ -22,6 +22,10 @@ public final class FakeOutboxStore implements OutboxStore {
         rows.add(new OutboxRow(id, data));
     }
 
+    public void seed(long id, String op, String data) {
+        rows.add(new OutboxRow(id, op, data));
+    }
+
     public void failReads() {
         this.failReads = true;
     }

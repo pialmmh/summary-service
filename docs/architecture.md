@@ -32,12 +32,18 @@ summary-service (incremental time-windowed counters from a MySQL outbox)
 ├── ping/internal · PingListener (Kafka cdr_summary_ping → wake workers)
 ├── config/internal · TenantProfileConfigSource, ProfileYamlLoader
 ├── beans/                       (PUBLIC API — fluent builders, the high-level entry points lib users import)
-│   · SummaryBeanBuilder<T,B> (the enforced contract) · DailySummaryBuilder · HourlySummaryBuilder
-└── summarybeans/                (one sub-package per category — call today; sms/packetflow/session/voip/video later)
+│   · SummaryBeanBuilder<T,B> (root: mapper+context+final build→validate) · CallBeanBuilder (voice: SG+suffix)
+│   · DailySummaryBuilder · HourlySummaryBuilder · Daily/HourlyChargeableSummaryBuilder
+└── summarybeans/                (one sub-package per category — call + chargeable today; sms/packetflow later)
     ├── call ·  HourlySummary · DailySummary        (HIGH-LEVEL window beans only)
     │   │       · CallSummaries (factory for CONFIG-INSTANTIATED extra instances, e.g. the SG11 pair — §12g)
     │   ├── internal · CallSummaryBean (shared base) · CallSummaryBuilder (+ key canonicalization) · CdrBlobMapper
-    │   └── model    · CallSummary (entity, 47 cols) · Cdr/Customer/CdrBlobEntry
+    │   │            · SumVoiceDdl (self-provisioning CREATE with full partitions)
+    │   └── model    · CallSummary (entity, 47 cols) · Cdr/Chargeable/CdrBlobEntry (blob v2, v1 tolerated —
+    │                  the ONE pinned blob contract, shared by both categories)
+    ├── chargeable · HourlyChargeableSummary · DailyChargeableSummary   (EVERY leg, every SG — §13d)
+    │   ├── internal · ChargeableSummaryBean (base) · ChargeableSummaryBuilder · SumChargeableDdl
+    │   └── model    · ChargeableSummary (7-col key + 15 measures, DECIMAL(20,8))
     └── sms  ·  (future — same shape as call)
 ```
 
@@ -66,9 +72,11 @@ Runs when a worker wakes (ping or fallback timer) for a bean that has un-consume
    service group, bucket each via `WindowSize`) → entities. A row that fails HERE (deterministic on data) is
    poison: after `quarantine-after` consecutive failures at the head it is copied to `summary_deadletter` and
    skipped in the same tx; clean rows before it commit as a prefix. SQL failures are never quarantined.
-5. `SummaryEngine.runBatch` computes the involved windows, `SummaryStore.load`s them ONCE, merges every entity
-   (`SummaryCache<T>`), and flushes segmented INSERT/UPDATE (`… WHERE id=? AND tup_starttime=?` — partition
-   pruning, §13b) through the same connection.
+5. `SummaryEngine.runBatch` runs PER ROW with the row's `op` (`add` → ADD, `subtract` → SUBTRACT — a billing
+   correction is subtract(OLD)+add(NEW) in id order): computes the involved windows, `SummaryStore.load`s them
+   ONCE, merges every entity (`SummaryCache<T>`), and flushes segmented INSERT/UPDATE (`… WHERE id=? AND
+   <bucket>=?` — partition pruning, §13b) through the same connection. A SUBTRACT on a missing window is
+   poison (ruling A1) and follows step 4's quarantine.
 6. `outbox().advanceOffset(entity, bean, lastRowId)`; `UnitOfWork.commit()` — summaries + offset together.
 7. On ANY exception in 2–6, `OutboxReader` rolls back; the offset is unchanged and the rows redeliver (the
    worker backs off linearly to 60s while failing, with an escalating error count).

@@ -7,13 +7,16 @@
  *
  * <p>The internal complexity is nested out of the way:
  * <ul>
- *   <li>{@code call.internal} — the shared {@code CallSummaryBean} machinery (blob decode, service-group
- *       filter, per-record build), the {@code CallSummaryBuilder}, and the blob {@code CdrBlobMapper};</li>
- *   <li>{@code call.model} — the {@code CallSummary} row entity and the inbound {@code Cdr} / {@code Customer}
- *       / {@code CdrBlobEntry} blob shapes.</li>
+ *   <li>{@code call.internal} — the shared {@code CallSummaryBean} machinery (blob decode, customer-leg pick,
+ *       service-group filter, per-record build), the {@code CallSummaryBuilder}, the blob {@code CdrBlobMapper},
+ *       and the self-provisioning {@code SumVoiceDdl};</li>
+ *   <li>{@code call.model} — the {@code CallSummary} row entity and the inbound blob shapes ({@code Cdr} /
+ *       {@code Chargeable} / {@code CdrBlobEntry}, blob v2 with permanent v1 tolerance) — ALSO consumed by the
+ *       {@code summarybeans.chargeable} category (one pinned blob contract, one decoder).</li>
  * </ul>
  *
- * <p>Add a window = add one tiny bean class here (e.g. {@code WeeklySummary}); add a category = add a sibling
- * package under {@code summarybeans} (e.g. {@code summarybeans.sms}) with the same shape.
+ * <p>Extra INSTANCES of a window (e.g. a second service group) are config-instantiated via
+ * {@link com.telcobright.summary.summarybeans.call.CallSummaries} (§12g). Add a window = add one tiny bean
+ * class here; add a category = add a sibling package under {@code summarybeans} with the same shape.
  */
 package com.telcobright.summary.summarybeans.call;

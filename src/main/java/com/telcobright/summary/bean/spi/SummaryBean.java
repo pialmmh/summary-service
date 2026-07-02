@@ -33,6 +33,17 @@ public interface SummaryBean<T extends SummaryEntity<T>> {
     /** Target MySQL table for this bean's window. */
     String table();
 
+    /**
+     * The full {@code CREATE TABLE IF NOT EXISTS} DDL for {@link #table()} — the bean SELF-PROVISIONS its
+     * table at activation (user directive 2026-07-02). Partitioned tables carry their FULL partition set
+     * inside this CREATE (house rule: never create bare then ALTER). Null = no self-provisioning (the table
+     * is managed elsewhere). The service's MySQL user needs CREATE (and ALTER for future partition ranges)
+     * on the tenant schema — the only remaining ops item.
+     */
+    default String tableDdl() {
+        return null;
+    }
+
     /** The INSERT column list (CSV, in value order, WITHOUT id — AUTO_INCREMENT assigns it). */
     String insertColumnsCsv();
 

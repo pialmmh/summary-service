@@ -58,11 +58,27 @@ public class SummaryBeanRegistry {
         return status;
     }
 
-    /** The names of running beans consuming the given outbox entity_type (the reaper's active-bean set). */
+    /** The names of running beans consuming the given outbox entity_type. */
     public Set<String> runningBeanNames(String entityType) {
         Set<String> names = new LinkedHashSet<>();
         workers.forEach((name, running) -> {
             if (running.bean().entityType().equals(entityType)) {
+                names.add(name);
+            }
+        });
+        return names;
+    }
+
+    /**
+     * The names of ALL registered (configured) beans for the entity_type — the reaper's watermark set
+     * (work order §5.2, resolving Q2): a hot-STOPPED bean's unread rows must survive until it catches up or
+     * its offset row is explicitly decommissioned, so the watermark covers configured beans, not just
+     * currently-running workers. A registered bean with no offset row yet pins the watermark at 0.
+     */
+    public Set<String> registeredBeanNames(String entityType) {
+        Set<String> names = new LinkedHashSet<>();
+        beans.forEach((name, bean) -> {
+            if (bean.entityType().equals(entityType)) {
                 names.add(name);
             }
         });
@@ -123,6 +139,8 @@ public class SummaryBeanRegistry {
     }
 
     private <T extends SummaryEntity<T>> void startWorker(SummaryBean<T> bean) {
+        reader.ensureInfraTables();      // summary_offset / DLQ (+ dev summary_affected) — once per process
+        reader.ensureProvisioned(bean);  // the bean's own table: CREATE IF NOT EXISTS with full partitions
         reader.initOffsetAtHead(bean);   // head-init BEFORE the first drain: a late-enabled bean starts from NOW
         OutboxWorker<T> worker = new OutboxWorker<>(bean, reader, pollIntervalSeconds);
         Thread thread = new Thread(worker, "summary-worker-" + bean.name());

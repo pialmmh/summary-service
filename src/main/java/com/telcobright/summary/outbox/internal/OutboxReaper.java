@@ -71,7 +71,9 @@ public class OutboxReaper {
 
     /** One reap pass; returns rows deleted. Visible for tests. */
     public int reapOnce() {
-        Set<String> activeBeans = registry.runningBeanNames(entityType);
+        // watermark over the CONFIGURED beans (work order §5.2, Q2 resolved): a hot-stopped bean's offset
+        // still gates deletion, so its unread rows survive until it catches up or is decommissioned
+        Set<String> activeBeans = registry.registeredBeanNames(entityType);
         if (activeBeans.isEmpty()) {
             return 0;
         }
