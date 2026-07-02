@@ -329,3 +329,47 @@ the summary ENTITY; voice + chargeable both ride it unchanged). What was missing
   `UnsupportedOperationException` until implemented. The drain routes a `mode: replace` bean into it, so a
   misconfigured bean fails LOUDLY every poll — a config fault, deliberately never quarantined/dead-lettered.
 - Tests: 80 unit + 8 MySQL IT green (mode default, prototype throw, loud-not-quarantined routing).
+
+## 15. DESIGN CLOSED — cutover seamlessness for cdr + ledger (user priority, 2026-07-03)
+The design is finished when both summary streams that exist in production keep working through cutover.
+
+### 15a. CDR summaries — OURS at cutover; seamless BY CONSTRUCTION
+- **Mid-period cutover is safe because load-merge-write MERGES ONTO legacy's partial windows:** the drain loads
+  the bucket's existing rows — including rows legacy .NET wrote before the cutover moment — and UPDATEs them
+  (id + bucket). A day/hour window half-filled by legacy finishes correctly under us; no duplicate windows, no
+  reset counters. This is why key faithfulness mattered: the tuple our builder produces must equal the tuple
+  legacy stored (§2 field repairs + 6dp/width canonicalization make it so).
+- Tables: billing's LIVE sets (SG10 → `sum_voice_{day,hr}_03`, SG11 → `_02`); our AUTO_INCREMENT inserts
+  coexist with legacy-written ids (we never touch legacy id ranges; UPDATE targets loaded rows only).
+- Scope: SG10 + SG11 — the pinned tenant's summarising service groups (legacy's map is per-tenant
+  `IServiceGroup.GetSummaryTargetTables()`; other tenants' SGs/sets `_01/_04/_05/_06` are out of scope until
+  such a tenant is onboarded — then: one config-instantiated bean per SG, §12g, zero code).
+- REQUIRED cutover order: (1) apply the GRANT; (2) stop legacy .NET summary jobs; (3) start billing's outbox
+  producer + `summary.autostart=true`. Between (2) and (3) the outbox buffers — nothing is lost (head-init
+  only affects beans enabled LATER, not this first start... the first start seeds at the then-current head, so
+  cut (3) BEFORE billing writes its first outbox row, or set the offset rows to 0 explicitly at first deploy).
+- Residual documented risk: MySQL ci collation vs our case-sensitive keys — a legacy row whose dimension
+  differs only by case from a fresh build yields two rows (real prod tables carry no uq_tuple); reports
+  grouping by the tuple still sum correctly. Accepted; no code.
+
+### 15b. LEDGER summaries — stay LEGACY/ACCOUNTING-owned; land here later as a THIRD category
+Legacy's ledger summary is `acc_ledger_summary(idAccount, transactionDate, AMOUNT)` fed from
+`acc_transaction` (double-entry, running balances) inside the ACCOUNTING job (`AccountingContext` — the same
+SummaryCache machinery, key `(glAccountId, transactionTime.Date)`); invoicing reads it
+(`InvoiceGenerationByLedgerSummary`). Java billing dropped balances/transactions FINAL — so there IS no
+transaction stream on the new stack, and summary-service MUST NOT derive ledger rows from chargeable legs
+(that would re-implement the double-entry accounting rules in the wrong service; glAccountId on a leg is one
+side of the entry only).
+**Ruling:** the cdr-summary cutover does not touch accounting — legacy .NET accounting/invoicing keeps
+producing `acc_transaction` + `acc_ledger_summary` exactly as today (seamless because we change nothing in
+that pipeline). When billing ports accounting and emits transactions into the outbox (a new
+`entity_type='transaction'`), the ledger rollup lands here as `summarybeans/ledger/` with ZERO engine work —
+the framework-closure proof: `LedgerSummary` entity (key idAccount + transactionDate bucket; measure AMOUNT),
+`LedgerSummaryGenerator extends SummaryGenerator<Transaction, LedgerSummary>`, a Daily bean, tableDdl.
+
+### 15c. What "finished" means (the framework is closed under extension)
+- new INPUT kind → a new category: entity + generator + window beans (+ builders, + tableDdl) — no core change
+  (chargeable proved it; ledger is the next worked example);
+- new WINDOW of a category → one subclass; new INSTANCE (another SG) → yml only (§12g);
+- fold modes: INCREMENTAL live (all outbox polls), SUBTRACT via `op` (corrections), REPLACE prototype (§14);
+- exactly-once, head-init, poison DLQ, reaper watermark, self-provisioning — all category-agnostic.
