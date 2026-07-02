@@ -10,7 +10,9 @@ ratified **engine** (load-once → merge → segmented insert → one-tx) and th
 > ping topic `cdr_summary_ping`; offset column **`last_offset`**; DDL = billing-core
 > `src/Billing.Data/Sql/summary_outbox.sql`; sum_voice 47 cols (matches `CallSummary`); table name now DERIVED
 > `sum_voice_<window>_<table-suffix>` (suffix is config — point it at the existing `_03`/`_02` tables, no forced divergence),
-> RANGE-by-month partitions. Architect **Q3 effectively answered** (builder reads only Cdr+Customer — context is
+> RANGE partitions **by date on `tup_starttime`** (one/day, ~1000 up front — NOT by month); the engine prunes
+> UPDATE/DELETE to the one day partition via `… WHERE id=? AND tup_starttime=?` (decisions §13b). Architect **Q3
+> effectively answered** (builder reads only Cdr+Customer — context is
 > NOT load-bearing). Architect **Q1 (topology) / Q2 (reaper set)** still open but don't block (defaults hold).
 
 ## 1. The two tables (PINNED — billing-core `src/Billing.Data/Sql/summary_outbox.sql`)
@@ -69,8 +71,9 @@ summary:
   outbox:
     ping-topic: cdr_summary_ping        # PINNED
     poll-interval-seconds: 5            # fallback poll if no ping
-    max-rows-per-tx: 50                 # outbox rows per drain tx
+    max-rows-per-tx: 1                  # 1 outbox row = 1 packed billing batch (~1000 cdrs) per tx (user-ratified; was 50)
     reaper-interval-seconds: 60
+    quarantine-after: 8                 # decode/build failures on the same head row before dead-lettering (§13c)
   # NOTE: shape below is SUPERSEDED — see decisions §12d (per-window classes + CDI discovery) and §12f
   # (derived table). Shipped reality: window + entity_type="cdr" are fixed by the bean class; the table
   # derives as sum_voice_<window>_<table-suffix>; service-group + table-suffix + context are config.
@@ -83,6 +86,14 @@ summary:
 `topic` (per-bean Kafka cdr topic) is **gone**; replaced by `entity` (outbox entity_type) + `context`.
 
 ## 6. File-by-file
+
+> **Shipped deltas vs this table** (decisions §13c audit): `JdbcOutboxStore` lives in `runtime/internal/` (not
+> `outbox/internal/`); the SPI method is `buildBatch(byte[])` (not `build`); the reaper uses a raw
+> `ScheduledExecutorService` and the config-manager client the JDK `HttpClient` — `quarkus-scheduler` /
+> `quarkus-rest-client` were never added; the `MORE/DRAINED` protocol shipped as loop-until-0-rows; the
+> `contexts:` block flattened to `summary.contexts.<name>.{base-url,tenant}`. New since the audit:
+> `summary_deadletter` (poison quarantine), `initOffsetAtHead` (head-init), `summarybeans/call/CallSummaries`
+> (config-instantiated instances, §12g).
 
 ### New
 | File | Role |
@@ -144,12 +155,13 @@ summary:
   + `Cdr`/`Customer` records. ✓
 - **outbox DDL** (`summary_affected` + `summary_offset.last_offset`) — PINNED (billing-core sql). ✓
 - **ping topic** `cdr_summary_ping` — PINNED. ✓
-- **sum_voice** 47 cols + SG routing — PINNED (matches `CdrSummary`); I add the RANGE-by-month partition note to
-  the provisional DDL.
+- **sum_voice** 47 cols + SG routing — PINNED (matches `CdrSummary`); partitioned by DATE on `tup_starttime`
+  (one/day) — the provisional DDL notes it and the engine prunes UPDATE/DELETE to the one day partition.
 - **Still open (architect, non-blocking):** Q1 deployment topology, Q2 reaper offset-set + bean deregister.
   **MediationContext shape** stays provisional but is NOT load-bearing for the CDR build (builder reads only
   Cdr+Customer), so it doesn't gate the build.
 
 ## 9. Defaults I'll use (call out — change if you prefer)
-- `max-rows-per-tx=50`, `reaper-interval=60s`, `poll-fallback=5s`, **gzip** codec, **one worker thread per bean**,
-  offset = last-processed outbox id (`id>offset`). Lands on **master** (per your choice), no deploy.
+- `max-rows-per-tx=1` (user-ratified 2026-07-02; one packed billing batch per tx — was 50), `reaper-interval=60s`,
+  `poll-fallback=5s`, `quarantine-after=8`, **gzip** codec (64 MiB decoded cap), **one worker thread per bean**,
+  offset = last-processed outbox id (`id>offset`), head-init on first start. Lands on **master** (per your choice), no deploy.

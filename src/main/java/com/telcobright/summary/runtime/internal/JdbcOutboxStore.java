@@ -41,6 +41,20 @@ final class JdbcOutboxStore implements OutboxStore {
     }
 
     @Override
+    public void initOffsetAtHead(String entityType, String beanName) {
+        String sql = "insert ignore into summary_offset(entity_type,bean_name,last_offset) "
+                + "select ?, ?, coalesce(max(id),0) from summary_affected where entity_type=?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, entityType);
+            ps.setString(2, beanName);
+            ps.setString(3, entityType);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new SummaryStoreException("initOffsetAtHead failed for " + beanName, e);
+        }
+    }
+
+    @Override
     public List<OutboxRow> readAfter(String entityType, long afterId, int limit) {
         String sql = "select id, data from summary_affected where entity_type=? and id>? order by id asc limit ?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -62,11 +76,12 @@ final class JdbcOutboxStore implements OutboxStore {
     @Override
     public void advanceOffset(String entityType, String beanName, long newOffset) {
         String sql = "insert into summary_offset(entity_type,bean_name,last_offset) values(?,?,?) "
-                + "on duplicate key update last_offset=values(last_offset)";
+                + "on duplicate key update last_offset=?";   // parameter twice, not VALUES() (deprecated in MySQL 8.0.20+)
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, entityType);
             ps.setString(2, beanName);
             ps.setLong(3, newOffset);
+            ps.setLong(4, newOffset);
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new SummaryStoreException("advanceOffset failed for " + beanName, e);
@@ -99,6 +114,21 @@ final class JdbcOutboxStore implements OutboxStore {
             }
         } catch (SQLException e) {
             throw new SummaryStoreException("minOffset failed for " + entityType, e);
+        }
+    }
+
+    @Override
+    public void deadLetter(String entityType, String beanName, OutboxRow row, String error) {
+        String sql = "insert into summary_deadletter(entity_type,bean_name,outbox_id,data,error) values(?,?,?,?,?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, entityType);
+            ps.setString(2, beanName);
+            ps.setLong(3, row.id());
+            ps.setString(4, row.data());
+            ps.setString(5, error);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new SummaryStoreException("deadLetter failed for " + beanName + " row " + row.id(), e);
         }
     }
 

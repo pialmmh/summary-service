@@ -11,8 +11,8 @@
 
     <!--
       summary-service — a standalone Quarkus service that generates time-windowed counters/summaries
-      for any event stream (CDRs today, any log/entity later). It OWNS summarisation; producers just
-      emit events to Kafka. See docs/ for the design and the ported pipeline.
+      for any event stream (CDRs today, any log/entity later). It OWNS summarisation; producers hand
+      batches off via a MySQL transactional OUTBOX (Kafka carries only a wakeup ping). See docs/.
     -->
 
     <properties>

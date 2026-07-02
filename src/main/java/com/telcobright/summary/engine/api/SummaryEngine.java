@@ -18,7 +18,7 @@ import java.util.Set;
  * The bean-agnostic load-merge-write pipeline, generic over the summary ENTITY {@code T}. For one bean's batch
  * of already-built entities it computes the distinct window buckets, loads those windows ONCE, merges every
  * entity into the cache, then writes the net change. It performs NO transaction control — the caller
- * ({@code BatchRunner}) owns the single commit, so a failure anywhere rolls the whole batch back.
+ * ({@code OutboxReader.drainOnce}) owns the single commit, so a failure anywhere rolls the whole batch back.
  *
  * <p>RULE ONE logging: per-batch detail is DEBUG-gated; failures surface to the worker.
  */
@@ -44,7 +44,7 @@ public class SummaryEngine {
         for (T entity : entities) {
             bucketsInvolved.add(bean.bucketOf(entity));
         }
-        SummaryCache<T> cache = new SummaryCache<>(bean.table(), bean.insertColumnsCsv());
+        SummaryCache<T> cache = new SummaryCache<>(bean.table(), bean.insertColumnsCsv(), bean.bucketColumn());
         store.load(bean.table(), bean.insertColumnsCsv(), bean.bucketColumn(), bucketsInvolved, bean::mapRow)
                 .forEach(cache::populateExisting);
         for (T entity : entities) {

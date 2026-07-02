@@ -7,9 +7,9 @@ import com.telcobright.summary.bean.spi.SummaryEntity;
 /**
  * The enforced builder CONTRACT for every summary bean — present and future. A concrete entry point (e.g.
  * {@link DailySummaryBuilder}) extends this with its own self-type {@code B}, inherits the fluent
- * {@link #table}/{@link #serviceGroup}/{@link #context} chain, and implements {@link #construct()} to assemble
- * its bean. {@link #build()} is shared and {@code final}: it validates the common invariants (a service group
- * and a table suffix are required) and then constructs — so no bean can skip that check.
+ * {@link #tableSuffix}/{@link #serviceGroup}/{@link #context} chain, and implements {@link #construct()} to
+ * assemble its bean. {@link #build()} is shared and {@code final}: it validates the common invariants (a service
+ * group and a well-formed table suffix are required) and then constructs — so no bean can skip that check.
  *
  * <p>This is the brevity convention: a library user configures any bean the same way —
  * {@code XxxBuilder.create(mapper).serviceGroup(..).tableSuffix(..).context(..).build()} — and a NEW bean joins the
@@ -62,6 +62,10 @@ public abstract class SummaryBeanBuilder<T extends SummaryEntity<T>, B extends S
         }
         if (tableSuffix == null || tableSuffix.isBlank()) {
             throw new IllegalStateException("a summary bean requires a table suffix — call .tableSuffix(..) before .build()");
+        }
+        if (!tableSuffix.matches("[A-Za-z0-9_]+")) {
+            throw new IllegalStateException("table suffix '" + tableSuffix
+                    + "' is invalid — only letters, digits and _ are allowed (it lands in a derived table name)");
         }
         return construct();
     }

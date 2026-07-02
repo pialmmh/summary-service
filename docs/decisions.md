@@ -20,12 +20,14 @@ billing-core's `CdrSummaryContext` / `SummaryCache` / `BatchSqlWriter`.
 ## 2. Load all involved windows ONCE — RATIFIED (the core invariant)
 Per batch, compute the distinct day/hour buckets, then load every existing row for those buckets in ONE query
 per window (`WindowsInvolved` → `SummaryStore.load`). Loading per event double-counts. Tested:
-`involved_windows_are_loaded_once_per_window_not_per_event`.
+`SummaryEngineTest.involved_windows_are_loaded_once_not_per_event`.
 
 ## 3. One transaction per batch — RATIFIED
-`BatchRunner` owns the single commit/rollback (the `MySqlCdrBatchRunner` rule). The engine, cache, and store
-NEVER commit or roll back. Any failure rolls the whole batch back. Tested unit (`BatchRunnerRollbackTest`) and
-against real MySQL (`CdrBatchAtomicityIT`).
+The drain (`OutboxReader.drainOnce`, via `JdbcUnitOfWork`) owns the single commit/rollback (the
+`MySqlCdrBatchRunner` rule; the interim `BatchRunner` was folded into the reader per the outbox plan). The
+engine, cache, and store NEVER commit or roll back. Any failure rolls the whole batch back. Tested unit
+(`OutboxReaderTest.a_write_failure_rolls_back…`) and against real MySQL
+(`OutboxConsumerIT.a_failed_drain_rolls_back_completely_and_the_redelivery_counts_once`).
 
 ## 4. Increment idempotency: commit the Kafka offset AFTER the DB commit — RATIFIED (v1 strategy)
 At-least-once Kafka + increment double-counts on redelivery. v1: the worker processes the whole batch in one
@@ -71,10 +73,11 @@ The consumed shape is the `{Cdr, Customer}` blob (not the old flattened `RatedCd
 `CdrSummaryBean`; `sum_voice` matches `CdrSummary` (47 cols).
 
 ## 11. Correction path — designed, increment shipped
-`MergeMode.OVERWRITE` and the `correction-topic` config exist; the cache supports overwrite (clone the
-recomputed entity, keep the loaded id). The dedicated correction consumer (recompute a window from
-source-of-truth and overwrite) is a thin follow-up — this delivers the increment pipeline as the brief's first
-deliverable specifies.
+`MergeMode.OVERWRITE` exists and the cache supports overwrite (clone the recomputed entity, keep the loaded
+id — and, since 2026-07-02, correctly replace a row first INSERTED in the same batch). There is NO
+`correction-topic` config and no correction consumer yet: §13 dropped full-window recompute as impossible at
+scale, and the pinned producer contract carries no correction rows — wiring a correction INPUT needs a
+contract addition ratified with dotnet (see §13c).
 
 ## 12. Generic axis = the typed entity `T` — RATIFIED (v2, supersedes §the v1 declarative model)
 Per `summary-service-entity-redesign.md` (dotnet, ratified + user directive). The engine is generic over the
@@ -176,6 +179,64 @@ and full window recompute is impossible (millions of cdrs), so:
 ### 13a. PINNED by dotnet (no longer provisional)
 blob codec + `{Cdr,Customer}` field list; ping topic `cdr_summary_ping`; outbox DDL (`summary_affected` +
 `summary_offset.last_offset`, billing-core `src/Billing.Data/Sql/summary_outbox.sql`); `sum_voice` 47 cols
-(matches `CallSummary`), RANGE-by-month partitions. The table name is now DERIVED `sum_voice_<window>_<table-suffix>`
+(matches `CallSummary`), RANGE partitions by **DATE on `tup_starttime`** (per the DBA — one partition per day,
+~1000 up front; NOT by month). The table name is now DERIVED `sum_voice_<window>_<table-suffix>`
 where the suffix is config (§12f) — point it at the existing `_03`/`_02` (or `_3`/`_2`) tables, so no forced
 divergence. The summary side decodes the C# PascalCase blob case-insensitively. Still open: architect Q2 (reaper deregister rule); `MediationContext` shape.
+
+### 13b. Partition-pruning WHERE on UPDATE/DELETE (delta #1 — DONE)
+The `sum_voice` tables are RANGE-partitioned **by date on `tup_starttime`** (§13a). `id` is the PK but NOT the
+partition key, so `UPDATE/DELETE … WHERE id=<id>` alone forces MySQL to probe **every** date partition (~1000).
+The engine now appends the row's bucket to the predicate — `… WHERE id=<id> AND tup_starttime='<bucket>'` — so
+MySQL prunes to the single day partition. The bucket value is the loaded row's own `tup_starttime`, which for a
+daily bean is the day-start and for an hourly bean an hour within that day — both map to the same date partition,
+so pruning is exact and never excludes the target row (DATETIME, no fractional seconds → literal equality holds).
+Mechanics: `SummaryEntity.bucketLiteral()` renders the literal; `SummaryEngine` passes `bean.bucketColumn()` into
+`SummaryCache`, which builds the WHERE. This restores billing-core's partition-pruning behaviour (billing did the
+same, keyed on its own date column). Correctness was never at risk (`id` is unique); this is a pure read-amplification fix.
+
+### 12g. Config-instantiated bean instances (SG coverage) — 2026-07-02
+The per-window catalog (§12d) fixes ONE name per class, so one class covers one service group — but legacy
+billing summarised SG10 AND SG11 in parallel, and with the reaper an un-covered SG is **unrecoverable** (records
+skipped while the offset advances, then the rows are deleted). Supplement: an `enabledSummary` name with **no
+catalog class** but a `summary.beans.<name>.window` key is materialised by `SummaryBootstrap` through
+`summarybeans/call/CallSummaries.forWindow(..)` as an EXTRA call-bean instance under its own name — own offset
+bookmark, own worker, own derived table. Dev profile now runs 4 beans: SG10 day/hr (suffix `3`, catalog classes)
++ SG11 day/hr (suffix `2`, config-instantiated). v1 assumes the `call` category; a `category:` key selects among
+factories once a second category exists. **Cutover duty:** every SG billing summarises must have beans here, and
+each SG's suffix must point at ITS legacy set (SG10→`03`, SG11→`02`) — nothing can enforce that pairing in code.
+
+### 13c. Audit hardening batch — 2026-07-02 (3-agent audit: legacy diff / scope diff / bug hunt)
+All engine-math parity with legacy re-confirmed (41-point diff, incl. the producer side). Landed fixes:
+- **Exactly-once under stop/start** (was CRITICAL): the drain loop moved into `OutboxWorker` (checks its stop
+  flag between per-tx steps); `SummaryBeanRegistry.stop()` keeps the entry until the thread is confirmed dead
+  and `start()` refuses while it is alive — two workers can never share one bean's offset. A worker killed by an
+  `Error` logs FATAL, keeps its entry (reaper keeps counting it → outbox preserved), `start()` respawns over it.
+- **OVERWRITE of a same-batch insert** silently wrote the stale values (the `inserted` map kept the old object) — fixed.
+- **SUBTRACT** negated the caller's delta in place — now negates a clone (a delta can feed day AND hour caches).
+- **Head-init** (per the architect ruling): `registry.start()` seeds `summary_offset` at MAX(outbox id) via
+  `INSERT IGNORE … SELECT` before the first drain — a late-enabled bean starts from NOW instead of consuming
+  nondeterministic reaper residue; also closes the reaper-vs-new-bean race.
+- **Poison-row quarantine**: a row that fails DECODE/BUILD (deterministic on data — SQL failures never qualify)
+  `quarantine-after` (default 8) consecutive times at the head is copied to summary-owned `summary_deadletter`
+  (per bean, blob preserved) and skipped in the same tx — one bad blob can no longer wedge a bean forever and
+  block the reaper for the whole entity. Clean rows before a poison row commit as a prefix. Worker retries back
+  off linearly to 60s with an escalating ERROR count. `OutboxCodec` caps decoded blobs at 64 MiB (poison, not OOM).
+- **Key canonicalization**: the builder scales `tup_customerrate`/`tup_supplierrate` to the column's 6dp
+  (HALF_UP, what MySQL stores) and clips key strings to their VARCHAR widths BEFORE the tuple key is taken —
+  otherwise a 7-dp rate keys differently from its own reloaded row (duplicate window → `uq_tuple` wedge, or
+  two rows that later poison `populateExisting`).
+- Smaller: connection no longer leaks when `setAutoCommit` fails mid-outage; `advanceOffset` upsert drops the
+  deprecated `VALUES()`; malformed profile yml logs + boots instead of crashing the ConfigSource; `table-suffix`
+  validated `[A-Za-z0-9_]+` at build/activation (it lands in Statement-built SQL with `allowMultiQueries` on);
+  one bean's bad config no longer breaks every other bean's CDI lookup (`Instance.handles()`);
+  `PingListener`/`OutboxReaper` now stopped by a `@PreDestroy`.
+- **`max-rows-per-tx` default 50 → 1** (user-ratified): billing already packs ~1000 cdrs per outbox row, so the
+  natural drain unit is one row = one tx (smallest tx, one-row poison blast radius); raise it only to amortise
+  hot-window catch-up after downtime.
+- **Pinned assumption (documented, not code):** outbox ids must become visible in commit order — holds because
+  billing is a SINGLE serial producer (one mediation pipeline). A concurrent-producer future needs a
+  gap-tolerant read before `id>offset` stays safe.
+- Tests: 60 unit + 6 MySQL IT (reaper min/delete, crash-redelivery replay, quarantine, head-init now proven
+  against real MySQL). Still open: correction-path INPUT (needs a dotnet-ratified contract addition), Q2
+  deregister rule, `MediationContext` real shape.

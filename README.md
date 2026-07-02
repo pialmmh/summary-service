@@ -16,19 +16,26 @@ consumes the outbox **exactly-once per bean**.
 - **Exactly-once per bean**: each bean writes its summaries **and** advances its offset in ONE MySQL
   transaction → no double-count on redelivery. Daily & hourly are **separate parallel workers** sharing a
   read-only `MediationContext` (loaded once from config-manager). A **reaper** trims consumed outbox rows.
-- The ratified engine (load-windows-once → merge → segmented insert → one-tx) + the `CdrSummary` entity
-  (faithful 1:1 port of `AbstractCdrSummary`, 47 cols) are **unchanged** — they read the blob now.
-- 33 unit tests + 1 MySQL integration test green. **Not deployed** — cutover = billing runs with
+- The ratified engine (load-windows-once → merge → segmented insert → one-tx) + the `CallSummary` entity
+  (faithful 1:1 port of `AbstractCdrSummary`, 47 cols) are **unchanged** — they read the blob now. UPDATE/DELETE
+  carry `id + tup_starttime` so MySQL prunes to the one date partition (§13b).
+- **Hardened (§13c)**: stop/start can never run two workers on one offset; a poison blob is quarantined to
+  `summary_deadletter` after N consecutive failures instead of wedging the bean + reaper; a late-enabled bean
+  **head-inits** its offset (starts from NOW — no partial backfill); key decimals/strings are canonicalized to
+  what MySQL stores before keying. Both legacy service groups are covered (SG10 via the catalog classes, SG11
+  via config-instantiated beans — §12g).
+- **60 unit tests + 6 MySQL integration tests** green (exactly-once, crash-redelivery replay, reaper, quarantine
+  and head-init all proven against real MySQL). **Not deployed** — cutover = billing runs with
   `Billing:Summary:Enabled=true` and summary-service runs with `summary.autostart=true`.
 - Contract is **PINNED** by dotnet (blob codec, ping topic, outbox DDL, sum_voice). The `MediationContext`
-  shape stays provisional but is not load-bearing for the CDR build. See `docs/decisions.md` §12–13.
+  shape stays provisional but is not load-bearing for the CDR build. See `docs/decisions.md` §12–13c.
 
 ## Build & test
 
 ```bash
-mvn test                 # 33 fast unit tests (no DB/Kafka needed — SPI fakes)
+mvn test                 # 60 fast unit tests (no DB/Kafka needed — SPI fakes)
 mvn package              # + Quarkus augmentation (builds the runnable app)
-mvn verify -Dsummary.it.mysql.password=…   # + MySQL integration test; SELF-SKIPS if MySQL is unreachable
+mvn verify -Dsummary.it.mysql.password=…   # + 6 MySQL integration tests; SELF-SKIP if MySQL is unreachable
 ```
 
 The integration test targets the local dev MySQL (`127.0.0.1:3306`, `root`); the password is supplied at run
@@ -58,20 +65,23 @@ clone, and SQL fragments (`bean/spi/SummaryEntity`). A category **base bean** (`
 outbox row's `{Cdr, Customer}` batch into bucketed entities; each **window is its own `@Singleton` class** —
 `HourlySummary`, `DailySummary` — fixing only `window()`. Browse the folder = see every counter the category emits.
 
-Activate a bean by listing its name in `summary.enabledSummary`; `table` / `service-group` / `context` come
-from `summary.beans.<name>` (the window is the class, discovered + registered by `SummaryBootstrap`). A new
-**category** = a new entity + base bean + window classes; a new **window** of an existing category = one tiny subclass.
+Activate a bean by listing its name in `summary.enabledSummary`; `table-suffix` / `service-group` / `context`
+come from `summary.beans.<name>` (the window is the class, discovered + registered by `SummaryBootstrap`). A new
+**category** = a new entity + base bean + window classes; a new **window** of an existing category = one tiny
+subclass. An enabled name with no catalog class but a `window:` key is **config-instantiated** (§12g) — an extra
+instance under its own name/offset/table, e.g. the SG11 pair (legacy summarised SG10 **and** SG11; both must stay covered).
 
 `window` (fixed per class) is one of: `5min` / `Nmin` (multiple of 5) / `hourly` / `daily` / `weekly`
 (Monday-start ISO week) / `monthly` / `yearly`.
 
 ## Configuration (routesphere-like)
 
-- `application.properties` — selects the active tenant/profile + `summary.autostart` (default off; gates the
-  workers, ping listener, and reaper).
+- `application.properties` — `summary.autostart` (default off; gates the workers, ping listener, and reaper).
+  The active tenant/profile is selected in `config/tenants.yml` (first entry flagged `enabled: true`).
 - `config/tenants.yml` + `config/tenants/<tenant>/<profile>/profile-<profile>.yml` — datasource, the
   `summary.contexts` (config-manager) block, the `summary.outbox` settings, and the **`enabledSummary`** list +
-  each bean's `table`/`service-group`/`context` (the window is the class). Flattened by `TenantProfileConfigSource`.
+  each bean's `table-suffix`/`service-group`/`context` (the window is the class — or the `window:` key for
+  config-instantiated instances). Flattened by `TenantProfileConfigSource`.
 - **DB credentials** are **inline** in the profile yml (no OpenBao), matching billing-core — fill the CCL creds
   at cutover (see `docs/decisions.md` §8). The integration-test password is supplied at run time, never committed.
 

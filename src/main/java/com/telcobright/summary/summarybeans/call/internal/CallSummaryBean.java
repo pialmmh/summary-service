@@ -89,6 +89,12 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
             throw new IllegalStateException(
                     "bean '" + name + "' needs a table-suffix (summary.beans." + name + ".table-suffix)");
         }
+        if (!tableSuffix.matches("[A-Za-z0-9_]+")) {
+            // the derived name is interpolated into Statement-built SQL (with allowMultiQueries on), so a
+            // stray yml value must die HERE at activation, not reach the database
+            throw new IllegalStateException("bean '" + name + "' has an invalid table-suffix '" + tableSuffix
+                    + "' — only letters, digits and _ are allowed");
+        }
         return "sum_voice_" + window().tableToken() + "_" + tableSuffix;
     }
 

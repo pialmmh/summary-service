@@ -35,4 +35,12 @@ public interface SummaryEntity<T extends SummaryEntity<T>> {
 
     /** The {@code col=val,col=val,…} counter assignments for an UPDATE (dimensions never change). */
     String updateAssignments();
+
+    /**
+     * The SQL literal of this row's window bucket — its {@code bucketColumn} value (e.g. {@code '2026-06-19
+     * 00:00:00'}). The engine appends {@code AND <bucketColumn>=<bucketLiteral>} to every UPDATE/DELETE so MySQL
+     * prunes to the single partition: the {@code sum_voice} tables are RANGE-partitioned by DATE on the bucket
+     * column, and {@code id} alone (not the partition key) would force a scan of every partition.
+     */
+    String bucketLiteral();
 }

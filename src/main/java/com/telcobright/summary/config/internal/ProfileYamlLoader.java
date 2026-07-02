@@ -59,8 +59,17 @@ public final class ProfileYamlLoader {
             if (in == null) {
                 return null;
             }
-            return new Yaml().load(in);
-        } catch (IOException e) {
+            Object loaded = new Yaml().load(in);
+            if (!(loaded instanceof Map<?, ?> map)) {
+                return null;   // scalar/list root -> treated as no config, not a boot crash
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> typed = (Map<String, Object>) map;
+            return typed;
+        } catch (IOException | RuntimeException e) {
+            // malformed yml (stray tab, bad indent) must NOT hard-fail boot inside the ConfigSource
+            // ServiceLoader; Quarkus logging is not up yet at this point, so stderr is the only channel
+            System.err.println("summary-service: could not parse " + resource + " — ignoring it: " + e);
             return null;
         }
     }

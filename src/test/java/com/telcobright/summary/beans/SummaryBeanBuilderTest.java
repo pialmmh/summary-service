@@ -84,4 +84,13 @@ class SummaryBeanBuilderTest {
                 () -> DailySummaryBuilder.create(MAPPER).serviceGroup(10).build());
         assertTrue(e.getMessage().contains("table suffix"), "the shared contract requires a table suffix");
     }
+
+    @Test
+    void a_malformed_table_suffix_is_rejected_by_the_contract() {
+        // the suffix lands in a derived table name inside Statement-built SQL (allowMultiQueries on) —
+        // anything beyond [A-Za-z0-9_] must die at build time, never reach the database
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> DailySummaryBuilder.create(MAPPER).serviceGroup(10).tableSuffix("3; drop table x;--").build());
+        assertTrue(e.getMessage().contains("invalid"), "malformed suffixes are refused: " + e.getMessage());
+    }
 }

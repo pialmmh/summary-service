@@ -74,14 +74,18 @@ public class SummaryBeanRegistry {
         if (bean == null) {
             throw new IllegalArgumentException("unknown summary bean: " + beanName);
         }
-        if (workers.containsKey(beanName)) {
-            return;
+        RunningWorker existing = workers.get(beanName);
+        if (existing != null) {
+            if (existing.thread().isAlive()) {
+                return;   // already running (or still winding down) — NEVER two workers on one bean's offset
+            }
+            workers.remove(beanName);   // died with an uncaught error — respawn below
         }
         startWorker(bean);
     }
 
     public synchronized void stop(String beanName) {
-        RunningWorker running = workers.remove(beanName);
+        RunningWorker running = workers.get(beanName);
         if (running == null) {
             return;
         }
@@ -91,6 +95,14 @@ public class SummaryBeanRegistry {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        if (running.thread().isAlive()) {
+            // keep the entry: removing it would let start() spawn a SECOND worker over the same offset
+            // (concurrent drains double-count). The worker checks its stop flag between per-tx steps,
+            // so this only happens with one drain step still in flight.
+            LOG.errorf("worker '%s' did not stop within 5s — entry kept, start() refused until it exits", beanName);
+            return;
+        }
+        workers.remove(beanName);
     }
 
     /** A ping arrived — nudge every running worker to drain now. */
@@ -111,9 +123,15 @@ public class SummaryBeanRegistry {
     }
 
     private <T extends SummaryEntity<T>> void startWorker(SummaryBean<T> bean) {
+        reader.initOffsetAtHead(bean);   // head-init BEFORE the first drain: a late-enabled bean starts from NOW
         OutboxWorker<T> worker = new OutboxWorker<>(bean, reader, pollIntervalSeconds);
         Thread thread = new Thread(worker, "summary-worker-" + bean.name());
         thread.setDaemon(true);
+        // an Error (e.g. OOM on an oversized blob) escapes the worker's own catch: log FATAL and KEEP the
+        // registry entry — the reaper keeps counting this bean, so its unread outbox rows are preserved
+        // until an operator intervenes (start() respawns over a dead thread).
+        thread.setUncaughtExceptionHandler((t, e) -> LOG.fatalf(e,
+                "worker '%s' DIED — offset frozen, outbox rows retained; fix the cause and start() it again", bean.name()));
         workers.put(bean.name(), new RunningWorker(worker, thread, bean));
         thread.start();
     }

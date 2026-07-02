@@ -35,6 +35,12 @@ public final class FakeOutboxStore implements OutboxStore {
     }
 
     @Override
+    public void initOffsetAtHead(String entityType, String beanName) {
+        offsets.computeIfAbsent(key(entityType, beanName),
+                k -> rows.stream().mapToLong(OutboxRow::id).max().orElse(0L));
+    }
+
+    @Override
     public List<OutboxRow> readAfter(String entityType, long afterId, int limit) {
         return rows.stream()
                 .filter(r -> r.id() > afterId)
@@ -71,6 +77,20 @@ public final class FakeOutboxStore implements OutboxStore {
     public int rowCount() {
         return rows.size();
     }
+
+    @Override
+    public void deadLetter(String entityType, String beanName, OutboxRow row, String error) {
+        deadLetters.add(new DeadLetter(entityType, beanName, row.id(), row.data(), error));
+    }
+
+    public List<DeadLetter> deadLetters() {
+        return deadLetters;
+    }
+
+    public record DeadLetter(String entityType, String beanName, long outboxId, String data, String error) {
+    }
+
+    private final List<DeadLetter> deadLetters = new ArrayList<>();
 
     private static String key(String entityType, String beanName) {
         return entityType + "|" + beanName;

@@ -1,12 +1,15 @@
 package com.telcobright.summary.summarybeans.call.internal;
 
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
+import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
+import com.telcobright.summary.summarybeans.call.model.Customer;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -65,5 +68,26 @@ class CallSummaryBeanTest {
         assertEquals(CallSummary.INSERT_COLUMNS, daily.insertColumnsCsv());
         assertEquals("tup_starttime", daily.bucketColumn());
         assertEquals("cdr", daily.entityType());
+    }
+
+    @Test
+    void key_decimals_are_canonicalized_to_the_columns_6dp_before_keying() {
+        // MySQL stores tup_customerrate as DECIMAL(18,6): 1.5000004 and 1.4999996 both land as 1.500000.
+        // The builder must canonicalize BEFORE the tuple key is taken, or a reloaded row keys differently
+        // from a fresh build of the same call -> duplicate windows / uq_tuple violations.
+        LocalDateTime t = CdrTestSupport.at(2026, 6, 19, 14, 30);
+        CdrBlobEntry base = CdrTestSupport.sg10Entry(t);
+        Customer rateA = new Customer(10, "1712", new BigDecimal("1.5000004"), "BDT",
+                new BigDecimal("1.0"), new BigDecimal("0.5"), null, null);
+        Customer rateB = new Customer(10, "1712", new BigDecimal("1.4999996"), "BDT",
+                new BigDecimal("1.0"), new BigDecimal("0.5"), null, null);
+
+        Collection<CallSummary> rows = CdrTestSupport.rollup(daily,
+                List.of(new CdrBlobEntry(base.cdr(), rateA), new CdrBlobEntry(base.cdr(), rateB)));
+
+        assertEquals(1, rows.size(), "both rates canonicalize to 1.500000 -> ONE window, not two");
+        CallSummary merged = rows.iterator().next();
+        assertEquals(2, merged.totalcalls);
+        assertEquals(new BigDecimal("1.500000"), merged.tup_customerrate, "stored exactly as MySQL will store it");
     }
 }

@@ -35,17 +35,25 @@ summary:
     ping-topic: cdr_summary_ping                # PINNED (matches billing-core producer)
     ping-bootstrap-servers: 103.95.96.78:9092   # CCL Kafka — same as billing-core (dotnet)
     poll-interval-seconds: 5                     # fallback drain if no ping arrives
-    max-rows-per-tx: 50                          # outbox rows merged per drain transaction
+    max-rows-per-tx: 1                           # 1 outbox row = 1 packed billing batch (~1000 cdrs) per drain tx
     segment-size: 1000                           # rows per multi-row extended INSERT
     reaper-interval-seconds: 60                  # trims summary_affected past min(last_offset)
+    quarantine-after: 8                          # consecutive decode/build failures on the SAME head row before
+                                                 # it is copied to summary_deadletter and skipped (per bean)
 
   # 3) SUMMARY beans to activate — each name = a per-window bean CLASS under summarybeans/<category>/.
   #    The window is fixed by the class (DailySummary/HourlySummary); the table is DERIVED as
   #    sum_voice_<window>_<table-suffix> — the suffix picks one of the PRE-PROVISIONED sets (sum_voice_day_3 etc).
   #    service-group FILTERS records; table-suffix NAMES the table. Each runs as its OWN parallel worker.
+  #    Legacy billing summarised SG10 AND SG11 — BOTH must stay covered or their records are silently skipped
+  #    (the offset still advances and the reaper deletes the rows: unrecoverable). The Sg11 pair below has no
+  #    catalog class; its `window:` key makes the bootstrap CONFIG-INSTANTIATE a call bean under that name.
+  #    At cutover, point the suffixes at billing's REAL sets (SG10 -> "03", SG11 -> "02") if those are the names.
   enabledSummary:
     - dailyCallSummary                           # -> summarybeans/call/DailySummary.java  (sum_voice_day_3)
     - hourlyCallSummary                          # -> summarybeans/call/HourlySummary.java (sum_voice_hr_3)
+    - dailyCallSummarySg11                       # config-instantiated (window key below)   (sum_voice_day_2)
+    - hourlyCallSummarySg11                      # config-instantiated                      (sum_voice_hr_2)
   beans:
     dailyCallSummary:
       service-group: 10                          # keep SG10 records
@@ -54,4 +62,14 @@ summary:
     hourlyCallSummary:
       service-group: 10
       table-suffix: "3"                          # -> sum_voice_hr_3
+      context: mediationContext
+    dailyCallSummarySg11:
+      window: daily                              # no catalog class -> config-instantiated call bean
+      service-group: 11
+      table-suffix: "2"                          # -> sum_voice_day_2 (use "02" at cutover if legacy names apply)
+      context: mediationContext
+    hourlyCallSummarySg11:
+      window: hourly
+      service-group: 11
+      table-suffix: "2"                          # -> sum_voice_hr_2
       context: mediationContext

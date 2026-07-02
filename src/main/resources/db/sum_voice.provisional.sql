@@ -8,14 +8,16 @@
 -- Set the suffix to match your real tables (e.g. "3" -> sum_voice_day_3, or "03" to match billing's legacy _03).
 --
 -- Engine contract this schema must satisfy:
---   * id BIGINT AUTO_INCREMENT PRIMARY KEY — the engine omits id on INSERT and UPDATEs by id.
+--   * id BIGINT AUTO_INCREMENT PRIMARY KEY — the engine omits id on INSERT and targets UPDATE/DELETE by id
+--     AND tup_starttime (the date-partition key), so MySQL prunes to the one day partition instead of scanning all.
 --   * an index on tup_starttime — the load query filters WHERE tup_starttime IN (...).
 --   * key columns NOT NULL DEFAULT '' / 0 — the engine renders absent strings as '' and matches the
 --     reloaded row on that; the UNIQUE KEY over the 20-column GetTupleKey tuple is an optional safety net
 --     (the engine de-dups in memory and updates by id). Drop it if the key length is a problem.
 --
--- Production note: align partitioning (e.g. RANGE on tup_starttime, all partitions created up front per
--- house rule) with billing-core's real tables at cutover.
+-- Production note: these tables are RANGE-partitioned BY DATE on tup_starttime (one partition per day, all
+-- ~1000 created up front per house rule — NOT by month), matching billing-core's real tables. This IT DDL omits
+-- the PARTITION clause (a single unpartitioned table is fine for correctness tests); add it to match prod.
 -- =====================================================================================
 
 CREATE DATABASE IF NOT EXISTS tcbl_summary CHARACTER SET utf8mb4;

@@ -14,6 +14,13 @@ public interface OutboxStore {
     /** This bean's last processed {@code summary_affected.id}; 0 if it has never run. */
     long readOffset(String entityType, String beanName);
 
+    /**
+     * Seed this bean's bookmark at the outbox HEAD (current max id) if it has no row yet — the head-init rule:
+     * a bean enabled AFTER the system has run must start from NOW, not from whatever arbitrary residue the
+     * reaper hasn't deleted yet (a partial backfill would masquerade as complete windows). No-op if a row exists.
+     */
+    void initOffsetAtHead(String entityType, String beanName);
+
     /** Up to {@code limit} outbox rows after {@code afterId}, ascending by id. */
     List<OutboxRow> readAfter(String entityType, long afterId, int limit);
 
@@ -25,4 +32,10 @@ public interface OutboxStore {
 
     /** Delete outbox rows with {@code id <= maxIdInclusive}; returns the number deleted. */
     int deleteUpTo(String entityType, long maxIdInclusive);
+
+    /**
+     * Copy a poison outbox row into {@code summary_deadletter} for this bean (same transaction as the offset
+     * advance that skips it) — the quarantine record an operator repairs from.
+     */
+    void deadLetter(String entityType, String beanName, OutboxRow row, String error);
 }

@@ -14,9 +14,10 @@ summary-service (incremental time-windowed counters from a MySQL outbox)
 │   ├── spi · SummaryStore (summary-row db seam), RowMapper, MergeMode, SummaryStoreException
 │   └── internal · SummaryCache<T>, SegmentedSqlWriter, CollectionSegmenter
 ├── outbox
-│   ├── api · OutboxReader (drain = the ONE tx per step: read offset+rows → merge → write summaries → advance offset)
-│   ├── spi · OutboxStore (offset/rows/reap DAO), OutboxRow
-│   └── internal · OutboxCodec (base64/gzip/json), OutboxReaper (scheduled trim)
+│   ├── api · OutboxReader (drain = the ONE tx per step: read offset+rows → merge → write summaries → advance offset;
+│   │         + head-init, + poison quarantine → summary_deadletter after quarantine-after consecutive failures)
+│   ├── spi · OutboxStore (offset/rows/reap/dead-letter DAO), OutboxRow
+│   └── internal · OutboxCodec (base64/gzip/json, 64 MiB decoded cap), OutboxReaper (scheduled trim)
 ├── runtime (the ONE transaction + JDBC)
 │   ├── spi · UnitOfWork (store() + outbox(), same connection), UnitOfWorkFactory
 │   └── internal · JdbcUnitOfWorkFactory, JdbcUnitOfWork, JdbcSummaryStore, JdbcOutboxStore
@@ -26,14 +27,16 @@ summary-service (incremental time-windowed counters from a MySQL outbox)
 ├── context (shared read-only, from config-manager)
 │   ├── api · ContextRegistry (load each context once)
 │   ├── spi · SummaryContext
-│   └── internal/cdr · ConfigManagerClient, MediationContext
+│   ├── internal · ConfigManagerClient
+│   └── cdr · MediationContext (PROVISIONAL shape; not load-bearing for the CDR build)
 ├── ping/internal · PingListener (Kafka cdr_summary_ping → wake workers)
 ├── config/internal · TenantProfileConfigSource, ProfileYamlLoader
 ├── beans/                       (PUBLIC API — fluent builders, the high-level entry points lib users import)
 │   · SummaryBeanBuilder<T,B> (the enforced contract) · DailySummaryBuilder · HourlySummaryBuilder
 └── summarybeans/                (one sub-package per category — call today; sms/packetflow/session/voip/video later)
     ├── call ·  HourlySummary · DailySummary        (HIGH-LEVEL window beans only)
-    │   ├── internal · CallSummaryBean (shared base) · CallSummaryBuilder · CdrBlobMapper
+    │   │       · CallSummaries (factory for CONFIG-INSTANTIATED extra instances, e.g. the SG11 pair — §12g)
+    │   ├── internal · CallSummaryBean (shared base) · CallSummaryBuilder (+ key canonicalization) · CdrBlobMapper
     │   └── model    · CallSummary (entity, 47 cols) · Cdr/Customer/CdrBlobEntry
     └── sms  ·  (future — same shape as call)
 ```
@@ -53,15 +56,22 @@ tenant (architect Q1).
 
 Runs when a worker wakes (ping or fallback timer) for a bean that has un-consumed outbox rows.
 
-1. `OutboxWorker` calls `OutboxReader.drain(bean)`.
-2. `OutboxReader` begins a `UnitOfWork` and reads `outbox().readOffset(entity, bean)`.
-3. `outbox().readAfter(entity, offset, maxRowsPerTx)` → the next `summary_affected` rows.
+1. `OutboxWorker` loops `OutboxReader.drainOnce(bean)` until caught up — checking its stop flag between the
+   bounded per-tx steps, so `stop()`/`start()` can never run two workers over one offset.
+2. `OutboxReader` begins a `UnitOfWork` and reads `outbox().readOffset(entity, bean)` (seeded at the outbox
+   HEAD by `initOffsetAtHead` when the worker first started — a late-enabled bean summarises from NOW).
+3. `outbox().readAfter(entity, offset, maxRowsPerTx)` → the next `summary_affected` rows (default 1 = one
+   packed billing batch of ~1000 cdrs per transaction).
 4. For each row: `OutboxCodec.decode` (base64→gunzip) → `bean.buildBatch` (parse `{Cdr,Customer}` array, filter
-   service group, bucket each via `WindowSize`) → entities.
+   service group, bucket each via `WindowSize`) → entities. A row that fails HERE (deterministic on data) is
+   poison: after `quarantine-after` consecutive failures at the head it is copied to `summary_deadletter` and
+   skipped in the same tx; clean rows before it commit as a prefix. SQL failures are never quarantined.
 5. `SummaryEngine.runBatch` computes the involved windows, `SummaryStore.load`s them ONCE, merges every entity
-   (`SummaryCache<T>`), and flushes segmented INSERT/UPDATE through the same connection.
+   (`SummaryCache<T>`), and flushes segmented INSERT/UPDATE (`… WHERE id=? AND tup_starttime=?` — partition
+   pruning, §13b) through the same connection.
 6. `outbox().advanceOffset(entity, bean, lastRowId)`; `UnitOfWork.commit()` — summaries + offset together.
-7. On ANY exception in 2–6, `OutboxReader` rolls back; the offset is unchanged and the rows redeliver.
+7. On ANY exception in 2–6, `OutboxReader` rolls back; the offset is unchanged and the rows redeliver (the
+   worker backs off linearly to 60s while failing, with an escalating error count).
 8. Separately, `OutboxReaper` deletes `summary_affected` rows with `id ≤ min(last_offset)` across the active beans.
 
 ## Why these seams
@@ -73,6 +83,7 @@ Runs when a worker wakes (ping or fallback timer) for a bean that has un-consume
   so the reader is tested with in-memory fakes and proven against real MySQL in the IT.
 - **`UnitOfWork` (runtime/spi)** — the transaction boundary that makes summaries + offset atomic (exactly-once).
 - **`SummaryBootstrap` (registry/internal)** — CDI-discovers every `SummaryBean` and activates the ones named
-  in `summary.enabledSummary`; `table`/`service-group`/`context` come from `summary.beans.<name>` (the window is
-  the class). No factory: adding a bean is adding a class + a YAML line.
+  in `summary.enabledSummary`; `table-suffix`/`service-group`/`context` come from `summary.beans.<name>` (the
+  window is the class). Adding a catalog bean is adding a class + a YAML line; an extra INSTANCE of a window
+  (e.g. a second service group) is YAML-only via the `window:` key → `CallSummaries.forWindow` (§12g).
 - **`ContextRegistry` (context/api)** — config-manager loaded once, shared read-only (not load-bearing for CDR v1).

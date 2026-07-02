@@ -27,12 +27,25 @@ public class JdbcUnitOfWorkFactory implements UnitOfWorkFactory {
 
     @Override
     public UnitOfWork begin() {
+        Connection connection;
         try {
-            Connection connection = dataSource.getConnection();
-            connection.setAutoCommit(false);
-            return new JdbcUnitOfWork(connection);
+            connection = dataSource.getConnection();
         } catch (SQLException e) {
             throw new SummaryStoreException("could not begin summary unit of work", e);
+        }
+        try {
+            connection.setAutoCommit(false);
+            return new JdbcUnitOfWork(connection);
+        } catch (SQLException | RuntimeException e) {
+            // a stale pooled connection failing here must go back closed, not leak checked-out of Agroal
+            // (leaked retries during a MySQL outage would drain the pool and outlive the outage)
+            try {
+                connection.close();
+            } catch (SQLException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e instanceof SQLException sql ? new SummaryStoreException("could not begin summary unit of work", sql)
+                    : (RuntimeException) e;
         }
     }
 }

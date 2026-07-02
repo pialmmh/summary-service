@@ -137,7 +137,7 @@ public final class CdrTestSupport {
 
     /** Build {@code calls} through {@code bean}, fold them into a cache, and return the aggregated window rows. */
     public static Collection<CallSummary> rollup(CallSummaryBean bean, List<CdrBlobEntry> calls) {
-        SummaryCache<CallSummary> cache = new SummaryCache<>(bean.table(), CallSummary.INSERT_COLUMNS);
+        SummaryCache<CallSummary> cache = new SummaryCache<>(bean.table(), CallSummary.INSERT_COLUMNS, CallSummary.BUCKET_COLUMN);
         for (CallSummary built : bean.buildBatch(batchJson(calls))) {
             cache.merge(built, MergeMode.ADD);
         }

@@ -327,4 +327,10 @@ public final class CallSummary implements SummaryEntity<CallSummary> {
                 + ",decimalAmount2=" + SqlLiterals.num(decimalAmount2)
                 + ",decimalAmount3=" + SqlLiterals.num(decimalAmount3);
     }
+
+    /** The date-partition key for this row: {@code tup_starttime} — the column these tables partition by date on. */
+    @Override
+    public String bucketLiteral() {
+        return SqlLiterals.datetime(tup_starttime);
+    }
 }

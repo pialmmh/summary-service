@@ -18,19 +18,23 @@ import java.util.Map;
  *
  * <p>Tracking rule (kept from legacy): a row INSERTed this batch and merged again stays an insert with the
  * accumulated value; only a LOADED row becomes an update — so every UPDATE/DELETE targets a row with a DB id.
+ * That WHERE also carries the row's {@code bucketColumn} value so MySQL prunes to the one date partition (the
+ * {@code sum_voice} tables are RANGE-partitioned by date; {@code id} alone would scan every partition).
  */
 public final class SummaryCache<T extends SummaryEntity<T>> {
 
     private final String table;
     private final String insertHeader;
+    private final String bucketColumn;
     private final Map<SummaryKey, T> cache = new LinkedHashMap<>();
     private final Map<SummaryKey, T> inserted = new LinkedHashMap<>();
     private final Map<SummaryKey, T> updated = new LinkedHashMap<>();
     private final Map<SummaryKey, T> deleted = new LinkedHashMap<>();
 
-    public SummaryCache(String table, String insertColumnsCsv) {
+    public SummaryCache(String table, String insertColumnsCsv, String bucketColumn) {
         this.table = table;
         this.insertHeader = "insert into " + table + " (" + insertColumnsCsv + ") values ";
+        this.bucketColumn = bucketColumn;
     }
 
     /** Seed with an already-persisted row (it carries its DB id). A later merge marks it Updated. */
@@ -56,13 +60,17 @@ public final class SummaryCache<T extends SummaryEntity<T>> {
         switch (mode) {
             case ADD -> existing.merge(delta);
             case SUBTRACT -> {
-                delta.multiply(-1);
-                existing.merge(delta);
+                T negated = delta.cloneWithFakeId();   // negate a COPY — the caller may reuse the delta (e.g. day + hour caches)
+                negated.multiply(-1);
+                existing.merge(negated);
             }
             case OVERWRITE -> {
                 T replacement = delta.cloneWithFakeId();
-                replacement.setId(existing.id());   // keep the loaded id; replace the counters wholesale
+                replacement.setId(existing.id());   // keep the loaded id (null if inserted this batch); replace the counters wholesale
                 cache.put(key, replacement);
+                if (inserted.containsKey(key)) {
+                    inserted.put(key, replacement); // the pending INSERT must carry the overwritten values, not the stale object
+                }
             }
         }
         if (!inserted.containsKey(key)) {
@@ -91,7 +99,8 @@ public final class SummaryCache<T extends SummaryEntity<T>> {
             return;
         }
         List<String> statements = updated.values().stream()
-                .map(e -> "update " + table + " set " + e.updateAssignments() + " where id=" + e.id()).toList();
+                .map(e -> "update " + table + " set " + e.updateAssignments()
+                        + " where id=" + e.id() + " and " + bucketColumn + "=" + e.bucketLiteral()).toList();
         SegmentedSqlWriter.writeStatementsInSegments(store, statements, segmentSize);
         updated.clear();
     }
@@ -101,7 +110,8 @@ public final class SummaryCache<T extends SummaryEntity<T>> {
             return;
         }
         List<String> statements = deleted.values().stream()
-                .map(e -> "delete from " + table + " where id=" + e.id()).toList();
+                .map(e -> "delete from " + table + " where id=" + e.id()
+                        + " and " + bucketColumn + "=" + e.bucketLiteral()).toList();
         SegmentedSqlWriter.writeStatementsInSegments(store, statements, segmentSize);
         deleted.clear();
     }

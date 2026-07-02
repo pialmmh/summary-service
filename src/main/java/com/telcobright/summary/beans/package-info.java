@@ -2,7 +2,8 @@
  * The <b>public API</b> of the summary library — the high-level, fluent entry points a user assembles a
  * summary bean with. One builder per bean: {@link com.telcobright.summary.beans.DailySummaryBuilder},
  * {@link com.telcobright.summary.beans.HourlySummaryBuilder}, each
- * {@code create(mapper).table(..).serviceGroup(..).context(..).build()}.
+ * {@code create(mapper).serviceGroup(..).tableSuffix(..).context(..).build()} (the table DERIVES as
+ * {@code sum_voice_<window>_<table-suffix>} — §12f).
  *
  * <p><b>Convention (enforced):</b> every summary bean — present and future — ships a builder here that extends
  * {@link com.telcobright.summary.beans.SummaryBeanBuilder} (the base contract). That base supplies the shared

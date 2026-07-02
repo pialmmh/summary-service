@@ -1,9 +1,11 @@
 package com.telcobright.summary.it;
 
+import com.telcobright.summary.summarybeans.call.CallSummaries;
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.outbox.api.OutboxReader;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
+import com.telcobright.summary.runtime.spi.UnitOfWork;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,9 +19,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -36,8 +40,10 @@ class OutboxConsumerIT {
     private static final String PASSWORD = System.getProperty("summary.it.mysql.password", "");
     private static final String DB = "summary_it";
     private static final String DAY_TABLE = CdrTestSupport.DAY_TABLE;
+    private static final String HOUR_TABLE = CdrTestSupport.HOUR_TABLE;
 
     private final CallSummaryBean bean = CdrTestSupport.dailyBean();
+    private DataSource dataSource;
     private OutboxReader reader;
 
     @BeforeEach
@@ -49,8 +55,8 @@ class OutboxConsumerIT {
         } catch (SQLException e) {
             throw new IllegalStateException("could not prepare the integration schema", e);
         }
-        DataSource dataSource = new DriverManagerDataSource(SERVER_URL.replace("/?", "/" + DB + "?"));
-        reader = new OutboxReader(new JdbcUnitOfWorkFactory(dataSource), new SummaryEngine(), 1000, 50);
+        dataSource = new DriverManagerDataSource(SERVER_URL.replace("/?", "/" + DB + "?"));
+        reader = new OutboxReader(new JdbcUnitOfWorkFactory(dataSource), new SummaryEngine(), 1000, 50, 8);
     }
 
     @Test
@@ -100,7 +106,95 @@ class OutboxConsumerIT {
         assertEquals(expectedCalls, sumTotalCalls());
     }
 
+    @Test
+    void the_reaper_deletes_rows_only_after_all_active_beans_passed_them() {
+        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
+        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 20, 9, 0)))));
+        Set<String> activeBeans = Set.of("dailyCallSummary", "hourlyCallSummary");
+
+        assertEquals(2, reader.drain(bean), "the daily bean catches up first");
+        assertEquals(0, reapLike(activeBeans), "hourly has no offset row yet -> nothing is safe to delete");
+        assertEquals(2, count("summary_affected"), "rows retained for the lagging bean");
+
+        CallSummaryBean hourly = CdrTestSupport.hourlyBean();
+        assertEquals(2, reader.drain(hourly), "the hourly bean catches up");
+        assertEquals(2, count(HOUR_TABLE), "two hour windows written");
+
+        assertEquals(2, reapLike(activeBeans), "both beans passed -> both rows reaped");
+        assertEquals(0, count("summary_affected"), "outbox trimmed");
+        assertEquals(0, reader.drain(bean), "post-reap drains are no-ops");
+    }
+
+    @Test
+    void a_failed_drain_rolls_back_completely_and_the_redelivery_counts_once() {
+        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
+
+        // same bean NAME (same offset bookmark) but a table that does not exist -> the tx fails mid-drain,
+        // exactly like a crash before commit
+        CallSummaryBean broken = (CallSummaryBean) CallSummaries.forWindow("dailyCallSummary", "daily", "9", 10, null);
+        assertThrows(RuntimeException.class, () -> reader.drain(broken));
+
+        assertEquals(0, offset("dailyCallSummary"), "offset unchanged after the failed transaction");
+        assertEquals(0, count(DAY_TABLE), "no partial summary rows leaked");
+
+        // the redelivery (healthy bean, same bookmark) processes the row exactly once
+        assertEquals(1, reader.drain(bean));
+        assertEquals(1, offset("dailyCallSummary"));
+        assertEquals(1, sumTotalCalls(), "counted exactly once despite the redelivery");
+    }
+
+    @Test
+    void a_poison_row_is_quarantined_to_the_deadletter_table_and_skipped() {
+        seedOutbox(1, "%%% not base64 %%%");
+        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
+        OutboxReader quickQuarantine = new OutboxReader(new JdbcUnitOfWorkFactory(dataSource), new SummaryEngine(), 1000, 50, 3);
+
+        for (int attempt = 1; attempt < 3; attempt++) {
+            assertThrows(RuntimeException.class, () -> quickQuarantine.drainOnce(bean));
+            assertEquals(0, offset("dailyCallSummary"));
+        }
+
+        assertEquals(1, quickQuarantine.drainOnce(bean), "threshold reached -> row consumed as a dead letter");
+        assertEquals(1, count("summary_deadletter"), "the poison blob is preserved for repair");
+        assertEquals(1, offset("dailyCallSummary"), "offset advanced past the poison row");
+
+        assertEquals(1, quickQuarantine.drain(bean), "the clean row behind it drains normally");
+        assertEquals(1, sumTotalCalls());
+    }
+
+    @Test
+    void head_init_seeds_a_late_enabled_bean_at_the_outbox_head() {
+        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
+        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 20, 9, 0)))));
+
+        reader.initOffsetAtHead(bean);
+
+        assertEquals(2, offset("dailyCallSummary"), "bookmark seeded at the current head");
+        assertEquals(0, reader.drain(bean), "pre-enablement residue is not consumed");
+        assertEquals(0, count(DAY_TABLE), "no partial backfill masquerading as complete windows");
+
+        reader.initOffsetAtHead(bean);
+        assertEquals(2, offset("dailyCallSummary"), "head-init is a no-op once the bookmark exists");
+
+        seedOutbox(3, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 21, 8, 0)))));
+        assertEquals(1, reader.drain(bean), "rows landing after enablement flow normally");
+        assertEquals(3, offset("dailyCallSummary"));
+    }
+
     // ---- schema + helpers ----
+
+    /** Mirrors OutboxReaper.reapOnce over a real UnitOfWork: min(last_offset) across the active set, then delete. */
+    private long reapLike(Set<String> activeBeans) {
+        UnitOfWork unitOfWork = new JdbcUnitOfWorkFactory(dataSource).begin();
+        try {
+            long min = unitOfWork.outbox().minOffset("cdr", activeBeans);
+            int deleted = min > 0 ? unitOfWork.outbox().deleteUpTo("cdr", min) : 0;
+            unitOfWork.commit();
+            return deleted;
+        } finally {
+            unitOfWork.close();
+        }
+    }
 
     private static Connection tryConnect(String url) {
         try {
@@ -115,12 +209,19 @@ class OutboxConsumerIT {
         exec(conn, "use " + DB);
         exec(conn, "drop table if exists summary_affected");
         exec(conn, "drop table if exists summary_offset");
+        exec(conn, "drop table if exists summary_deadletter");
         exec(conn, "drop table if exists " + DAY_TABLE);
+        exec(conn, "drop table if exists " + HOUR_TABLE);
         exec(conn, "create table summary_affected (id bigint not null auto_increment, entity_type varchar(32) not null,"
                 + " data longtext not null, primary key(id), key ix_entity(entity_type,id)) engine=innodb default charset=utf8mb4");
         exec(conn, "create table summary_offset (entity_type varchar(32) not null, bean_name varchar(64) not null,"
                 + " last_offset bigint not null default 0, primary key(entity_type,bean_name)) engine=innodb default charset=utf8mb4");
+        exec(conn, "create table summary_deadletter (id bigint not null auto_increment, entity_type varchar(32) not null,"
+                + " bean_name varchar(64) not null, outbox_id bigint not null, data longtext not null,"
+                + " error varchar(512) not null, created_at timestamp not null default current_timestamp,"
+                + " primary key(id), key ix_bean(entity_type,bean_name,outbox_id)) engine=innodb default charset=utf8mb4");
         exec(conn, createSumVoiceTable());
+        exec(conn, "create table " + HOUR_TABLE + " like " + DAY_TABLE);
     }
 
     private static String createSumVoiceTable() {
