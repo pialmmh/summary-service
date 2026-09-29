@@ -61,6 +61,7 @@ class AdSummaryBeanTest {
             assertEquals(1, s.views);
             assertEquals(1, s.shown);
             assertEquals(1, s.completed);
+            assertEquals(1, s.credited, "the credit child reached OPEN: the view was claimed (ruling 5.5)");
             assertEquals(0, s.failed);
             assertEquals(15, s.watchedsec);
             assertEquals(LocalDateTime.of(2026, 9, 29, 0, 0), s.tup_starttime);
@@ -95,10 +96,24 @@ class AdSummaryBeanTest {
         for (AdSummary s : built) {
             assertEquals(0, s.shown);
             assertEquals(0, s.completed);
+            assertEquals(0, s.credited);
             assertEquals(1, s.failed);
             assertEquals("failed", s.tup_outcome);
         }
         assertEquals(0, totalCharged(built).compareTo(new BigDecimal("0.90")), "0.50 + 0.40 stay charged");
+    }
+
+    @Test
+    void a_view_watched_to_the_end_but_never_claimed_counts_completed_not_credited() {
+        List<AdSummary> built = dailyBean().buildBatch(batchJson(List.of(twoTierEntry(at(2026, 9, 29, 10, 0), "ad-3b", "done", true, false, 15))));
+
+        assertEquals(2, built.size());
+        for (AdSummary s : built) {
+            assertEquals(1, s.shown);
+            assertEquals(1, s.completed, "the required seconds were watched");
+            assertEquals(0, s.credited, "the credit child never reached OPEN: the payload says credited=false");
+            assertEquals(0, s.failed);
+        }
     }
 
     @Test

@@ -41,10 +41,15 @@ final class AdTestSupport {
 
     /** Design §5 item 1: Unilever's view from dhaka-01, two tiers debited (res_44 0.50, btcl 0.40), shown, cleared normally. */
     static String twoTierEntry(LocalDateTime start, String sessionId) {
-        return twoTierEntry(start, sessionId, "done", true, 15);
+        return twoTierEntry(start, sessionId, "done", true, true, 15);
     }
 
     static String twoTierEntry(LocalDateTime start, String sessionId, String outcome, boolean answered, int billsec) {
+        return twoTierEntry(start, sessionId, outcome, answered, answered, billsec);
+    }
+
+    /** {@code credited} = the credit child reached OPEN (ARCH-0001 ruling 5.5): the advertiser's view was claimed. */
+    static String twoTierEntry(LocalDateTime start, String sessionId, String outcome, boolean answered, boolean credited, int billsec) {
         String s = TS.format(start);
         String cause = "done".equals(outcome) ? "NORMAL_CLEARING" : "NOT_SHOWN";
         return "{\"Cdr\":{\"SwitchId\":0,\"SessionId\":\"" + sessionId + "\",\"Tenant\":\"btcl\",\"InPartnerId\":61,\"OutPartnerId\":9,"
@@ -54,7 +59,7 @@ final class AdTestSupport {
                 + "\"MatchedPrefixCustomer\":\"1001\",\"OriginatingCallingNumber\":\"aa:bb\",\"OriginatingCalledNumber\":\"1001\",\"ServiceGroup\":30,"
                 + "\"CampaignId\":5,\"CampaignName\":\"lux-soap\",\"ContentId\":\"lux-30\",\"ContentPartnerId\":61,\"RuleCode\":\"1001\","
                 + "\"Zone\":\"dhaka-01\",\"Site\":\"dhaka-site-1\",\"District\":\"dhaka\",\"Gw\":\"bras-1\",\"App\":\"wifi\",\"MediaKind\":\"video\","
-                + "\"RequiredSeconds\":15,\"Answered\":" + answered + ",\"Outcome\":\"" + outcome + "\",\"HangupCause\":\"" + cause + "\",\"Fallback\":false,"
+                + "\"RequiredSeconds\":15,\"Answered\":" + answered + ",\"Credited\":" + credited + ",\"Outcome\":\"" + outcome + "\",\"HangupCause\":\"" + cause + "\",\"Fallback\":false,"
                 + "\"SomethingOfTomorrow\":{\"x\":1}},"
                 + "\"Chargeables\":["
                 + "{\"servicegroup\":30,\"servicefamily\":30,\"assignedDirection\":1,\"ProductId\":5,\"idBilledUom\":\"BDT\",\"Prefix\":\"1001\","
@@ -74,7 +79,7 @@ final class AdTestSupport {
                 + "\"ChargingStatus\":0,\"NERSuccess\":0,\"MatchedPrefixCustomer\":null,\"OriginatingCallingNumber\":\"cc:dd\",\"OriginatingCalledNumber\":null,"
                 + "\"ServiceGroup\":30,\"CampaignId\":null,\"CampaignName\":null,\"ContentId\":null,\"ContentPartnerId\":null,\"RuleCode\":null,"
                 + "\"Zone\":\"sylhet-09\",\"Site\":null,\"District\":null,\"Gw\":\"bras-1\",\"App\":\"wifi\",\"MediaKind\":null,\"RequiredSeconds\":0,"
-                + "\"Answered\":false,\"Outcome\":\"failed\",\"HangupCause\":\"NO_RULE\",\"Fallback\":false},\"Chargeables\":[]}";
+                + "\"Answered\":false,\"Credited\":false,\"Outcome\":\"failed\",\"HangupCause\":\"NO_RULE\",\"Fallback\":false},\"Chargeables\":[]}";
     }
 
     static byte[] batchJson(List<String> entries) {

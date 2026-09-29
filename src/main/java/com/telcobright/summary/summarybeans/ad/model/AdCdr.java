@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
  *
  * @param outcome  {@code done} (a normal clearing) | {@code failed} (every other cause)
  * @param answered the ad reached the screen
+ * @param credited the free session followed the view (ARCH-0001 ruling 5.5)
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record AdCdr(
@@ -39,6 +40,7 @@ public record AdCdr(
         String mediaKind,
         Integer requiredSeconds,
         Boolean answered,
+        Boolean credited,
         String outcome,
         String hangupCause,
         Boolean fallback
@@ -48,4 +50,5 @@ public record AdCdr(
 
     public boolean done() { return OUTCOME_DONE.equalsIgnoreCase(outcome == null ? "" : outcome.trim()); }
     public boolean wasShown() { return Boolean.TRUE.equals(answered) || connectTime != null; }
+    public boolean wasCredited() { return Boolean.TRUE.equals(credited); }
 }

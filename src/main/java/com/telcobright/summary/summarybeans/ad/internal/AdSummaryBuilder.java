@@ -16,8 +16,8 @@ import java.math.BigDecimal;
  *
  * <p>The measures: {@code views} 1 always; {@code shown} when the ad reached the screen; {@code completed}
  * when the call cleared normally after being shown; {@code failed} when it did not clear normally;
- * {@code watchedsec} = the billsec; {@code chargedamount} = the tier's debit. {@code credited} (the free session
- * that followed) is not on the blob this round — it stays 0 until the payload carries it (open question).
+ * {@code watchedsec} = the billsec; {@code chargedamount} = the tier's debit; {@code credited} when the free session
+ * followed the view (the blob's {@code Credited}, ARCH-0001 ruling 5.5).
  */
 final class AdSummaryBuilder {
 
@@ -45,7 +45,7 @@ final class AdSummaryBuilder {
         s.views = 1;
         s.shown = shown ? 1 : 0;
         s.completed = done && shown ? 1 : 0;
-        s.credited = 0;
+        s.credited = cdr.wasCredited() ? 1 : 0;
         s.failed = done ? 0 : 1;
         s.watchedsec = nz(cdr.durationSec());
         s.chargedamount = tier ? nzd(leg.billedAmount()) : BigDecimal.ZERO;
