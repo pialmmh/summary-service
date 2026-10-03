@@ -47,7 +47,8 @@ class OutboxConsumerIT {
             "jdbc:mysql://127.0.0.1:3306/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true");
     private static final String USER = System.getProperty("summary.it.mysql.user", "root");
     private static final String PASSWORD = System.getProperty("summary.it.mysql.password", "");
-    private static final String DB = "summary_it";
+    /** The throwaway database; {@code -Dsummary.it.mysql.db=…} lets two runs share one server without sharing tables. */
+    private static final String DB = System.getProperty("summary.it.mysql.db", "summary_it");
     private static final String DAY_TABLE = CdrTestSupport.DAY_TABLE;
     private static final String HOUR_TABLE = CdrTestSupport.HOUR_TABLE;
 
