@@ -19,6 +19,11 @@ import java.math.RoundingMode;
  * then — ONLY for a charged call ({@code ChargingStatus == 1}, the legacy early-return) — the
  * rate/cost/tax/currency block, then null-string defaults and key canonicalization.
  *
+ * <p>Service group 30 (the ad view, a Call since 2026-10-02) has no legacy: its branch is the customer-direction
+ * stamp alone, read from the one chargeable billing builds for a pre-rated record — and it does NOT return early
+ * on {@code ChargingStatus}. The common part gives the rest: in-partner = the payer, incoming route = the
+ * campaign's route, outgoing route = the zone, {@code connectedcalls} = shown, the durations = the seconds watched.
+ *
  * <p>Legacy quirk kept: SG10 sets {@code tup_matchedprefixcustomer} from the CHARGEABLE's prefix inside the
  * customer-direction stamp and then immediately overwrites it with {@code cdr.MatchedPrefixCustomer} — so the
  * CDR field is the surviving source (work order §2). {@code AdditionalSystemCodes}/{@code AdditionalPartyNumber}
@@ -27,6 +32,8 @@ import java.math.RoundingMode;
 final class CallSummaryBuilder {
 
     private static final Logger LOG = Logger.getLogger(CallSummaryBuilder.class);
+    /** The ad view's service group. */
+    static final int SERVICE_GROUP_AD = 30;
 
     private CallSummaryBuilder() {
     }
@@ -102,6 +109,17 @@ final class CallSummaryBuilder {
             s.tup_customerrate = nz(chargeable.otherDecAmount1()); // x rate
             s.longDecimalAmount1 = nz(chargeable.otherAmount1());  // x amount
             s.tax1 = nz(chargeable.taxAmount1());                  // btrc
+        } else if (chargeable.servicegroup() == SERVICE_GROUP_AD) {   // SG30 — the ad view as a Call (ad-is-a-call §5)
+            // PRE-RATED: the switch's settle step charged the tier and billing built ONE customer chargeable from
+            // what it charged. That chargeable is the truth here, so there is NO ChargingStatus early return:
+            // ChargingStatus is "shown" for group 30, and a view that was admitted and never shown is charged all
+            // the same (the owner: no return policy). Nothing is bought and no tax is on the record: the supplier,
+            // tax and VAT columns stay empty. A tier that paid from a package carries the package's unit as its
+            // "currency", so units and money key apart and are never summed into one row.
+            s.tup_matchedprefixcustomer = cdr.matchedPrefixCustomer();
+            s.tup_customerrate = nz(chargeable.unitPriceOrCharge());
+            s.tup_customercurrency = chargeable.idBilledUom();
+            s.customercost = nz(chargeable.billedAmount());
         } else {
             throw new IllegalArgumentException("no summary mapping for service group " + chargeable.servicegroup());
         }

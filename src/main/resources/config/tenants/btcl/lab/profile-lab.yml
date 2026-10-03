@@ -1,0 +1,43 @@
+# =====================================================================================
+# btcl / lab — summary-service for the wifi (ad) tenant: the ad view as a Call.
+#
+# The root tenant is btcl. An ad view's record is a cdr row of SERVICE GROUP 30 that billing-core writes in
+# each tier's schema, with one summary_affected row per tier. This profile lists every bean that sums group 30.
+# "lab" is the throwaway lab of tools/lab/pg-lab.sh (everything on 127.0.0.1, no password exists).
+# A deployment's profile is this file with its own addresses: docs/ad-as-call/postgres-ad-profile.md.
+# =====================================================================================
+
+summary:
+  # ---- the beans of service group 30 (brief S1, S4) ----
+  #   the AD category      : sum_ad_day_30 / sum_ad_hr_30 — by tenant, payer, campaign, rule, zone, site, app,
+  #                          media kind, outcome. Its window classes: summarybeans/ad.
+  #   the CALL category    : sum_voice_day_30 / sum_voice_hr_30 — the view as a call: by payer, campaign route,
+  #                          zone. No class of its own: the `window:` key makes the bootstrap instantiate a call
+  #                          bean under this name (its own bookmark, worker and table).
+  #   the CHARGEABLE one   : sum_chargeable_day / sum_chargeable_hr — every chargeable of every group, as it is.
+  # All six read the SAME outbox stream (entity cdr), each from its own bookmark.
+  enabledSummary:
+    - dailyAdSummary                             # -> summarybeans/ad/DailyAdSummary.java   (sum_ad_day_30)
+    - hourlyAdSummary                            # -> summarybeans/ad/HourlyAdSummary.java  (sum_ad_hr_30)
+    - dailyCallSummarySg30                       # config-instantiated                       (sum_voice_day_30)
+    - hourlyCallSummarySg30                      # config-instantiated                       (sum_voice_hr_30)
+    - dailyChargeableSummary                     # -> summarybeans/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
+    - hourlyChargeableSummary                    # -> summarybeans/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
+  beans:
+    dailyCallSummarySg30:
+      window: daily                              # no catalog class -> config-instantiated call bean
+      service-group: 30                          # keep the records whose customer chargeable is of group 30
+      table-suffix: "30"                         # -> sum_voice_day_30
+    hourlyCallSummarySg30:
+      window: hourly
+      service-group: 30
+      table-suffix: "30"                         # -> sum_voice_hr_30
+
+  # ---- the outbox ----
+  outbox:
+    entity-type: cdr
+    poll-interval-seconds: 5                     # the fallback drain when no ping arrives
+    max-rows-per-tx: 1                           # 1 outbox row = 1 billing batch per drain transaction
+    segment-size: 1000
+    reaper-interval-seconds: 60
+    quarantine-after: 8

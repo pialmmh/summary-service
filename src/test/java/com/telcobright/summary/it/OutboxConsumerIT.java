@@ -3,6 +3,7 @@ package com.telcobright.summary.it;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.beans.DailyChargeableSummaryBuilder;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
+import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
@@ -308,6 +309,44 @@ class OutboxConsumerIT {
         }
     }
 
+    @Test
+    void one_outbox_row_of_ad_views_feeds_the_ad_the_call_and_the_chargeable_tables() {
+        System.setProperty("summary.ddl.partition-start", "2026-09-01");
+        System.setProperty("summary.ddl.partition-days", "60");
+        try {
+            AdSummaryBean adDaily = AdTestSupport.dailyBean();
+            SummaryBean<CallSummary> call30 = CallSummaries.forWindow("dailyCallSummarySg30", "daily", "30", 30, null);
+            SummaryBean<ChargeableSummary> chargeable = DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build();
+            reader.ensureProvisioned(adDaily);
+            reader.ensureProvisioned(call30);          // sum_voice_day_30: made by the bean, full partitions inside the CREATE
+            reader.ensureProvisioned(chargeable);
+            java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
+            // shown and paid 0.50; admitted, never shown, still paid 0.50 (no return policy); refused, paid nothing
+            seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t),
+                    AdTestSupport.leafView(t.plusMinutes(5)).admittedNeverShown(), AdTestSupport.refusedView(t.plusMinutes(9)))));
+
+            assertEquals(1, reader.drain(adDaily));
+            assertEquals(1, reader.drain(call30), "the same row, its own bookmark");
+            assertEquals(1, reader.drain(chargeable), "the same row, its own bookmark");
+
+            assertEquals(3, queryLong("select coalesce(sum(views),0) from sum_ad_day_30"));
+            assertEquals(0, new java.math.BigDecimal("1.00").compareTo(queryDecimal("select sum(chargedamount) from sum_ad_day_30")));
+            assertEquals(3, queryLong("select coalesce(sum(totalcalls),0) from sum_voice_day_30"), "the three views as calls");
+            assertEquals(1, queryLong("select coalesce(sum(connectedcalls),0) from sum_voice_day_30"), "one was shown");
+            assertEquals(0, new java.math.BigDecimal("1.00").compareTo(queryDecimal("select sum(customercost) from sum_voice_day_30")),
+                    "0.50 + 0.50 + 0: the never-shown view's charge is there — no ChargingStatus early return for group 30");
+            assertEquals(0, new java.math.BigDecimal("1.00").compareTo(
+                    queryDecimal("select sum(BilledAmount) from sum_chargeable_day where tup_servicegroup=30")), "the three sums agree");
+            assertEquals(3, queryLong("select coalesce(sum(totalcount),0) from sum_chargeable_day where tup_servicegroup=30"));
+
+            assertEquals(0, reader.drain(call30), "re-drain is a no-op (exactly once per bean)");
+            assertEquals(3, queryLong("select coalesce(sum(totalcalls),0) from sum_voice_day_30"));
+        } finally {
+            System.clearProperty("summary.ddl.partition-start");
+            System.clearProperty("summary.ddl.partition-days");
+        }
+    }
+
     // ---- schema + helpers ----
 
     /** Mirrors OutboxReaper.reapOnce over a real UnitOfWork: min(last_offset) across the active set, then delete. */
@@ -342,6 +381,8 @@ class OutboxConsumerIT {
         exec(conn, "create table summary_affected (id bigint not null auto_increment, entity_type varchar(32) not null,"
                 + " op enum('add','subtract') not null default 'add',"
                 + " data longtext not null, primary key(id), key ix_entity(entity_type,id)) engine=innodb default charset=utf8mb4");
+        exec(conn, "drop table if exists sum_voice_day_30");
+        exec(conn, "drop table if exists sum_voice_hr_30");
         exec(conn, "drop table if exists sum_ad_day_30");
         exec(conn, "drop table if exists sum_ad_hr_30");
         exec(conn, "drop table if exists sum_chargeable_day");

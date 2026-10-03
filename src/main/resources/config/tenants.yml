@@ -14,3 +14,7 @@ tenants:
   - name: tcbl
     enabled: false
     profile: prod
+  # the wifi (ad) tenant: the ad view as a Call, service group 30, PostgreSQL (config/tenants/btcl/lab)
+  - name: btcl
+    enabled: false
+    profile: lab

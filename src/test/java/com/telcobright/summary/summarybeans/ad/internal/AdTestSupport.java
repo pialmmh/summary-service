@@ -142,6 +142,8 @@ public final class AdTestSupport {
             if (media != null) cdr.append(",\"Codec\":").append(quoted(media));
             String meta = metaText();
             if (meta != null) cdr.append(",\"AdditionalMetaData\":").append(quoted(meta));
+            cdr.append(",\"RoundedDuration\":").append(watched).append(",\"Duration1\":").append(watched);
+            if (shown) cdr.append(",\"PDD\":1.0");
             cdr.append(",\"SignalingStartTime\":").append(date(start));
             cdr.append(",\"ResellerHierarchy\":\"btcl > res_44\",\"ChannelCallUuid\":\"2f6c1c1e\"");
             if (cause != null) cdr.append(",\"HangupCause\":").append(quoted(cause));
