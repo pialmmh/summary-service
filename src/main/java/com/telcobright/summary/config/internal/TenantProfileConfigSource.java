@@ -36,6 +36,11 @@ public class TenantProfileConfigSource implements ConfigSource {
                 .orElseGet(Map::of);
     }
 
+    /** Over a given profile (a test's). */
+    TenantProfileConfigSource(Map<String, String> profile) {
+        this.properties = Map.copyOf(profile);
+    }
+
     /** Nothing is listed — see the class comment: a listed key would be baked into the jar as every tenant's default. */
     @Override
     public Map<String, String> getProperties() {

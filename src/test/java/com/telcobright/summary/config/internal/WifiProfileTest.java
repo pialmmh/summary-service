@@ -86,8 +86,10 @@ class WifiProfileTest {
             Map<String, String> profile = ProfileYamlLoader.loadProfile(ProfileYamlLoader.parseSelection(tenant));
             assertTrue(profile.keySet().stream().allMatch(key -> key.startsWith("summary.")), tenant + " holds summary.* keys only: " + profile.keySet());
         }
-        TenantProfileConfigSource source = new TenantProfileConfigSource();
+        // a profile that DOES carry one of Quarkus's keys: it is not answered, so it can never be baked as a default
+        TenantProfileConfigSource source = new TenantProfileConfigSource(Map.of("quarkus.http.host", "10.10.199.9", "summary.zone", "Asia/Dhaka"));
         assertEquals(null, source.getValue("quarkus.http.host"), "asked by name while the jar is built: nothing of a tenant may answer");
+        assertEquals("Asia/Dhaka", source.getValue("summary.zone"));
         assertEquals(null, source.getValue(null));
     }
 
