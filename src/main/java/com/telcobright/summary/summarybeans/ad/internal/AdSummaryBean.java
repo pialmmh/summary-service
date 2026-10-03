@@ -3,6 +3,7 @@ package com.telcobright.summary.summarybeans.ad.internal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryMode;
+import com.telcobright.summary.bean.spi.SummaryTableSpec;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.ad.model.AdCallEntry;
 import com.telcobright.summary.summarybeans.ad.model.AdSummary;
@@ -88,10 +89,10 @@ public abstract class AdSummaryBean implements SummaryBean<AdSummary> {
         return "sum_ad_" + window().tableToken() + "_" + TABLE_SUFFIX;
     }
 
-    /** Self-provisioning DDL: the canonical sum_ad shape with the full daily partition set in the CREATE. */
+    /** The table, described once for every engine; MySQL partitions it by day, the full set inside the CREATE. */
     @Override
-    public String tableDdl() {
-        return SumAdDdl.createTableIfNotExists(table());
+    public SummaryTableSpec tableSpec() {
+        return SumAdDdl.table(table());
     }
 
     @Override

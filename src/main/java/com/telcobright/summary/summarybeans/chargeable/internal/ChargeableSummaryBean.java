@@ -3,6 +3,7 @@ package com.telcobright.summary.summarybeans.chargeable.internal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryMode;
+import com.telcobright.summary.bean.spi.SummaryTableSpec;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
@@ -81,10 +82,10 @@ public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSum
         return "sum_chargeable_" + window().tableToken();
     }
 
-    /** Self-provisioning DDL: the canonical sum_chargeable shape with the full daily partition set in the CREATE. */
+    /** The table, described once for every engine; MySQL partitions it by day, the full set inside the CREATE. */
     @Override
-    public String tableDdl() {
-        return SumChargeableDdl.createTableIfNotExists(table());
+    public SummaryTableSpec tableSpec() {
+        return SumChargeableDdl.table(table());
     }
 
     @Override

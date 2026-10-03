@@ -1,73 +1,73 @@
 package com.telcobright.summary.summarybeans.call.internal;
 
-import com.telcobright.summary.bean.spi.DdlPartitions;
+import com.telcobright.summary.bean.spi.SummaryTableSpec;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 
 /**
- * The canonical {@code sum_voice_*} DDL the call beans SELF-PROVISION with at activation (user directive
- * 2026-07-02): {@code CREATE TABLE IF NOT EXISTS} carrying the FULL daily partition set up front. Because the
- * table is partitioned, every unique key must include the partition column — hence PK {@code (id,
- * tup_starttime)} and the {@code uq_tuple} safety net (which already ends on the bucket). Mirrors
- * {@code src/main/resources/db/sum_voice.provisional.sql} (the human-readable reference copy).
+ * The {@code sum_voice_*} table the call beans SELF-PROVISION with at activation (user directive 2026-07-02),
+ * described once for every engine ({@link SummaryTableSpec}; rendered by {@code TableDdl}). On MySQL it is
+ * partitioned by day with the FULL set inside the CREATE, so every unique key carries the partition column —
+ * hence PK {@code (id, tup_starttime)}. Mirrors {@code src/main/resources/db/sum_voice.provisional.sql} (the
+ * human-readable MySQL reference copy).
  */
 final class SumVoiceDdl {
 
     private SumVoiceDdl() {
     }
 
-    static String createTableIfNotExists(String table) {
-        return "CREATE TABLE IF NOT EXISTS " + table + " ("
-                + "id BIGINT NOT NULL AUTO_INCREMENT,"
-                + "tup_switchid INT NOT NULL DEFAULT 0,"
-                + "tup_inpartnerid INT NOT NULL DEFAULT 0,"
-                + "tup_outpartnerid INT NOT NULL DEFAULT 0,"
-                + "tup_incomingroute VARCHAR(64) NOT NULL DEFAULT '',"
-                + "tup_outgoingroute VARCHAR(64) NOT NULL DEFAULT '',"
-                + "tup_customerrate DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "tup_supplierrate DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "tup_incomingip VARCHAR(64) NOT NULL DEFAULT '',"
-                + "tup_outgoingip VARCHAR(64) NOT NULL DEFAULT '',"
-                + "tup_countryorareacode VARCHAR(32) NOT NULL DEFAULT '',"
-                + "tup_matchedprefixcustomer VARCHAR(32) NOT NULL DEFAULT '',"
-                + "tup_matchedprefixsupplier VARCHAR(32) NOT NULL DEFAULT '',"
-                + "tup_sourceId VARCHAR(32) NOT NULL DEFAULT '',"
-                + "tup_destinationId VARCHAR(32) NOT NULL DEFAULT '',"
-                + "tup_customercurrency VARCHAR(16) NOT NULL DEFAULT '',"
-                + "tup_suppliercurrency VARCHAR(16) NOT NULL DEFAULT '',"
-                + "tup_tax1currency VARCHAR(16) NOT NULL DEFAULT '',"
-                + "tup_tax2currency VARCHAR(16) NOT NULL DEFAULT '',"
-                + "tup_vatcurrency VARCHAR(16) NOT NULL DEFAULT '',"
-                + "tup_starttime DATETIME NOT NULL,"
-                + "totalcalls BIGINT NOT NULL DEFAULT 0,"
-                + "connectedcalls BIGINT NOT NULL DEFAULT 0,"
-                + "connectedcallsCC BIGINT NOT NULL DEFAULT 0,"
-                + "successfulcalls BIGINT NOT NULL DEFAULT 0,"
-                + "actualduration DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "roundedduration DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "duration1 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "duration2 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "duration3 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "PDD DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "customercost DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "suppliercost DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "tax1 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "tax2 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "vat DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "intAmount1 INT NOT NULL DEFAULT 0,"
-                + "intAmount2 INT NOT NULL DEFAULT 0,"
-                + "longAmount1 BIGINT NOT NULL DEFAULT 0,"
-                + "longAmount2 BIGINT NOT NULL DEFAULT 0,"
-                + "longDecimalAmount1 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "longDecimalAmount2 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "intAmount3 INT NOT NULL DEFAULT 0,"
-                + "longAmount3 BIGINT NOT NULL DEFAULT 0,"
-                + "longDecimalAmount3 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "decimalAmount1 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "decimalAmount2 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "decimalAmount3 DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "PRIMARY KEY (id, tup_starttime),"           // partition column must be in every unique key
-                + "KEY ix_starttime (tup_starttime)"
-                + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-                + DdlPartitions.dailyRangeFromConfig(CallSummary.BUCKET_COLUMN);
+    static SummaryTableSpec table(String name) {
+        return SummaryTableSpec.table(name)
+                .identity("id")
+                .integer("tup_switchid")
+                .integer("tup_inpartnerid")
+                .integer("tup_outpartnerid")
+                .varchar("tup_incomingroute", 64)
+                .varchar("tup_outgoingroute", 64)
+                .decimal("tup_customerrate", 18, 6)
+                .decimal("tup_supplierrate", 18, 6)
+                .varchar("tup_incomingip", 64)
+                .varchar("tup_outgoingip", 64)
+                .varchar("tup_countryorareacode", 32)
+                .varchar("tup_matchedprefixcustomer", 32)
+                .varchar("tup_matchedprefixsupplier", 32)
+                .varchar("tup_sourceId", 32)
+                .varchar("tup_destinationId", 32)
+                .varchar("tup_customercurrency", 16)
+                .varchar("tup_suppliercurrency", 16)
+                .varchar("tup_tax1currency", 16)
+                .varchar("tup_tax2currency", 16)
+                .varchar("tup_vatcurrency", 16)
+                .datetime("tup_starttime")
+                .bigint("totalcalls")
+                .bigint("connectedcalls")
+                .bigint("connectedcallsCC")
+                .bigint("successfulcalls")
+                .decimal("actualduration", 18, 6)
+                .decimal("roundedduration", 18, 6)
+                .decimal("duration1", 18, 6)
+                .decimal("duration2", 18, 6)
+                .decimal("duration3", 18, 6)
+                .decimal("PDD", 18, 6)
+                .decimal("customercost", 18, 6)
+                .decimal("suppliercost", 18, 6)
+                .decimal("tax1", 18, 6)
+                .decimal("tax2", 18, 6)
+                .decimal("vat", 18, 6)
+                .integer("intAmount1")
+                .integer("intAmount2")
+                .bigint("longAmount1")
+                .bigint("longAmount2")
+                .decimal("longDecimalAmount1", 18, 6)
+                .decimal("longDecimalAmount2", 18, 6)
+                .integer("intAmount3")
+                .bigint("longAmount3")
+                .decimal("longDecimalAmount3", 18, 6)
+                .decimal("decimalAmount1", 18, 6)
+                .decimal("decimalAmount2", 18, 6)
+                .decimal("decimalAmount3", 18, 6)
+                .primaryKey("id", CallSummary.BUCKET_COLUMN)      // the partition column is in every unique key
+                .index("ix_starttime", "tup_starttime")
+                .partitionedByDayOn(CallSummary.BUCKET_COLUMN)
+                .build();
     }
 }

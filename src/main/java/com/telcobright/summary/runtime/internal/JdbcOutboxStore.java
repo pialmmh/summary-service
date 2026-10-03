@@ -1,5 +1,6 @@
 package com.telcobright.summary.runtime.internal;
 
+import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.engine.spi.SummaryStoreException;
 import com.telcobright.summary.outbox.spi.OutboxRow;
 import com.telcobright.summary.outbox.spi.OutboxStore;
@@ -21,9 +22,11 @@ import java.util.StringJoiner;
 final class JdbcOutboxStore implements OutboxStore {
 
     private final Connection connection;
+    private final SqlDialect dialect;
 
-    JdbcOutboxStore(Connection connection) {
+    JdbcOutboxStore(Connection connection, SqlDialect dialect) {
         this.connection = connection;
+        this.dialect = dialect;
     }
 
     @Override
@@ -44,7 +47,12 @@ final class JdbcOutboxStore implements OutboxStore {
 
     @Override
     public void initOffsetAtHead(String entityType, String beanName) {
-        String sql = "insert ignore into summary_offset(entity_type,bean_name,last_offset) "
+        // "insert unless the bookmark exists": the two engines spell it differently, the row is the same
+        String sql = dialect == SqlDialect.POSTGRESQL
+                ? "insert into summary_offset(entity_type,bean_name,last_offset) "
+                + "select ?, ?, coalesce(max(id),0) from summary_affected where entity_type=? "
+                + "on conflict (entity_type, bean_name) do nothing"
+                : "insert ignore into summary_offset(entity_type,bean_name,last_offset) "
                 + "select ?, ?, coalesce(max(id),0) from summary_affected where entity_type=?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, entityType);
@@ -78,8 +86,11 @@ final class JdbcOutboxStore implements OutboxStore {
 
     @Override
     public void advanceOffset(String entityType, String beanName, long newOffset) {
+        // the upsert of the bookmark; the new offset is bound twice (MySQL: VALUES() is deprecated in 8.0.20+)
         String sql = "insert into summary_offset(entity_type,bean_name,last_offset) values(?,?,?) "
-                + "on duplicate key update last_offset=?";   // parameter twice, not VALUES() (deprecated in MySQL 8.0.20+)
+                + (dialect == SqlDialect.POSTGRESQL
+                ? "on conflict (entity_type, bean_name) do update set last_offset=?"
+                : "on duplicate key update last_offset=?");
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, entityType);
             ps.setString(2, beanName);

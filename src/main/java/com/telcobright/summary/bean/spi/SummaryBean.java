@@ -43,14 +43,29 @@ public interface SummaryBean<T extends SummaryEntity<T>> {
     String table();
 
     /**
-     * The full {@code CREATE TABLE IF NOT EXISTS} DDL for {@link #table()} — the bean SELF-PROVISIONS its
-     * table at activation (user directive 2026-07-02). Partitioned tables carry their FULL partition set
-     * inside this CREATE (house rule: never create bare then ALTER). Null = no self-provisioning (the table
-     * is managed elsewhere). The service's MySQL user needs CREATE (and ALTER for future partition ranges)
-     * on the tenant schema — the only remaining ops item.
+     * The table this bean rolls into, described ONCE for every engine — the bean SELF-PROVISIONS it at activation
+     * (user directive 2026-07-02): the store's edge renders the description for the engine it runs on and creates
+     * the table when it is absent. Null = no self-provisioning (the table is managed elsewhere). The service's
+     * database user needs CREATE on the tenant schema — the only remaining ops item.
      */
-    default String tableDdl() {
+    default SummaryTableSpec tableSpec() {
         return null;
+    }
+
+    /**
+     * The statements that make {@link #table()} on {@code dialect} when it is absent, in order; empty = no
+     * self-provisioning. MySQL: one {@code CREATE TABLE IF NOT EXISTS} carrying the FULL partition set (house
+     * rule: never create bare then ALTER). PostgreSQL: the plain table and its indexes.
+     */
+    default List<String> tableDdl(SqlDialect dialect) {
+        SummaryTableSpec spec = tableSpec();
+        return spec == null ? List.of() : TableDdl.createIfAbsent(spec, dialect);
+    }
+
+    /** The MySQL form as ONE statement (what this method always returned); null = no self-provisioning. */
+    default String tableDdl() {
+        SummaryTableSpec spec = tableSpec();
+        return spec == null ? null : TableDdl.mysql(spec);
     }
 
     /** The INSERT column list (CSV, in value order, WITHOUT id — AUTO_INCREMENT assigns it). */

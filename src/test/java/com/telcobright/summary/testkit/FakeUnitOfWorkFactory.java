@@ -1,5 +1,6 @@
 package com.telcobright.summary.testkit;
 
+import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.runtime.spi.UnitOfWork;
 import com.telcobright.summary.runtime.spi.UnitOfWorkFactory;
 
@@ -17,9 +18,13 @@ public final class FakeUnitOfWorkFactory implements UnitOfWorkFactory {
         this.outbox = outbox;
     }
 
+    /** The engine the units of work say they run on. */
+    public SqlDialect dialect = SqlDialect.MYSQL;
+
+    /** A named schema is the one the unit of work runs in; {@code null} = this factory's own ({@link #schema}). */
     @Override
-    public UnitOfWork begin() {
-        last = new FakeUnitOfWork(store, outbox, schema);
+    public UnitOfWork begin(String named) {
+        last = new FakeUnitOfWork(store, outbox, named != null ? named : schema, dialect);
         return last;
     }
 }

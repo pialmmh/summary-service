@@ -24,6 +24,33 @@ public final class ProfileYamlLoader {
     private ProfileYamlLoader() {
     }
 
+    /** Names the tenant and profile a START serves, over the registry file: {@code <tenant>/<profile>}. */
+    public static final String ACTIVE_TENANT_PROPERTY = "summary.active-tenant";
+    public static final String ACTIVE_TENANT_ENV = "SUMMARY_ACTIVE_TENANT";
+
+    /**
+     * The tenant and profile this START was told to serve — {@code -Dsummary.active-tenant=btcl/lab}, or the
+     * unit's {@code SUMMARY_ACTIVE_TENANT=btcl/lab} — when it was told. One jar holds every tenant's profile and
+     * no profile key is fixed at build time any more, so the same jar serves a MySQL tenant or a PostgreSQL one;
+     * this is how a deployment (and a test) says which, without rebuilding with another {@code tenants.yml}.
+     * A value that is not {@code <tenant>/<profile>} is a mistake that must be seen: it is refused.
+     */
+    public static Optional<ActiveTenant> selectedTenant() {
+        String chosen = System.getProperty(ACTIVE_TENANT_PROPERTY);
+        if (chosen == null || chosen.isBlank()) {
+            chosen = System.getenv(ACTIVE_TENANT_ENV);
+        }
+        return chosen == null || chosen.isBlank() ? Optional.empty() : Optional.of(parseSelection(chosen));
+    }
+
+    static ActiveTenant parseSelection(String chosen) {
+        String[] parts = chosen.trim().split("/");
+        if (parts.length != 2 || !parts[0].matches("[A-Za-z0-9_-]+") || !parts[1].matches("[A-Za-z0-9_-]+")) {
+            throw new IllegalArgumentException("the active tenant is '" + chosen + "' — it must be <tenant>/<profile>, e.g. btcl/lab");
+        }
+        return new ActiveTenant(parts[0], parts[1]);
+    }
+
     /** The first tenant flagged enabled in the registry file, if any. */
     public static Optional<ActiveTenant> activeTenant(String tenantsResource) {
         Map<String, Object> root = loadYaml(tenantsResource);
@@ -43,6 +70,9 @@ public final class ProfileYamlLoader {
         String path = "config/tenants/" + tenant.name() + "/" + tenant.profile() + "/profile-" + tenant.profile() + ".yml";
         Map<String, Object> root = loadYaml(path);
         if (root == null) {
+            // the logging is not up yet when the ConfigSource is made: stderr is the only channel
+            System.err.println("summary-service: the active tenant " + tenant.name() + "/" + tenant.profile() + " has no profile file "
+                    + path + " — the service starts with NO tenant configuration");
             return Map.of();
         }
         Map<String, String> flat = new LinkedHashMap<>();

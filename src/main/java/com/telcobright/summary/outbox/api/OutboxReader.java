@@ -79,8 +79,8 @@ public class OutboxReader {
         }
         UnitOfWork unitOfWork = unitOfWorkFactory.begin();
         try {
-            for (String ddl : OutboxInfraDdl.createStatements()) {
-                unitOfWork.store().executeNonQuery(ddl);   // DDL — autocommits server-side
+            for (String ddl : OutboxInfraDdl.createStatements(unitOfWork.dialect())) {
+                unitOfWork.store().executeNonQuery(ddl);   // MySQL commits each by itself; PostgreSQL with the commit below
             }
             unitOfWork.commit();
         } catch (RuntimeException failure) {
@@ -93,18 +93,21 @@ public class OutboxReader {
     }
 
     /**
-     * Self-provision the bean's target table (user directive 2026-07-02): run its {@code tableDdl()} —
-     * {@code CREATE TABLE IF NOT EXISTS} carrying the full partition set — before its first drain. A no-op
-     * when the table already exists (the pre-provisioned prod sets) or the bean ships no DDL.
+     * Self-provision the bean's target table (user directive 2026-07-02): render its description for the engine
+     * of the store and run it — {@code CREATE TABLE IF NOT EXISTS} — before its first drain. A no-op when the
+     * table already exists (the pre-provisioned prod sets) or the bean describes no table.
      */
     public void ensureProvisioned(SummaryBean<?> bean) {
-        String ddl = bean.tableDdl();
-        if (ddl == null) {
+        if (bean.tableSpec() == null) {
             return;
         }
         UnitOfWork unitOfWork = unitOfWorkFactory.begin();
         try {
-            unitOfWork.store().executeNonQuery(ddl);
+            // MySQL: ONE statement, the full partition set inside it. PostgreSQL: the table and its indexes, made
+            // in this ONE transaction — the table never exists without them.
+            for (String ddl : bean.tableDdl(unitOfWork.dialect())) {
+                unitOfWork.store().executeNonQuery(ddl);
+            }
             unitOfWork.commit();
             LOG.infof("bean=%s table %s ensured (CREATE IF NOT EXISTS)", bean.name(), bean.table());
         } catch (RuntimeException failure) {

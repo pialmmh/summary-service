@@ -8,6 +8,16 @@
 # =====================================================================================
 
 summary:
+  # ---- the store (brief S5): the switch database on PostgreSQL; a tenant is a SCHEMA of it ----
+  # The engine is chosen here, at run time (kind: mysql | postgresql): one jar serves either.
+  store:
+    kind: postgresql
+    url: jdbc:postgresql://127.0.0.1:7643/routesphere    # the lab's own container (tools/lab/pg-lab.sh up)
+    username: summary_service                            # USAGE + CREATE on each tier schema (prime-context's provisioning)
+    password: ""                                         # the lab trusts 127.0.0.1: no password exists
+    min-size: 0
+    max-size: 16
+
   # ---- the beans of service group 30 (brief S1, S4) ----
   #   the AD category      : sum_ad_day_30 / sum_ad_hr_30 — by tenant, payer, campaign, rule, zone, site, app,
   #                          media kind, outcome. Its window classes: summarybeans/ad.
@@ -36,6 +46,8 @@ summary:
   # ---- the outbox ----
   outbox:
     entity-type: cdr
+    ping-topic: cdr_summary_ping                 # billing-core's ping: {tenant, entity, rows}
+    ping-bootstrap-servers: 127.0.0.1:7692       # the lab's own broker (tools/lab/pg-lab.sh kafka)
     poll-interval-seconds: 5                     # the fallback drain when no ping arrives
     max-rows-per-tx: 1                           # 1 outbox row = 1 billing batch per drain transaction
     segment-size: 1000

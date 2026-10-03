@@ -1,48 +1,25 @@
 package com.telcobright.summary.it;
 
-import com.telcobright.summary.bean.spi.SummaryBean;
-import com.telcobright.summary.beans.DailyChargeableSummaryBuilder;
-import com.telcobright.summary.summarybeans.call.CallSummaries;
-import com.telcobright.summary.summarybeans.call.model.CallSummary;
-import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
-import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
-import com.telcobright.summary.engine.api.SummaryEngine;
-import com.telcobright.summary.outbox.api.OutboxReader;
-import com.telcobright.summary.outbox.internal.OutboxCodec;
-import com.telcobright.summary.summarybeans.ad.internal.AdSummaryBean;
-import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
-import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
-import com.telcobright.summary.runtime.spi.UnitOfWork;
+import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.testkit.CdrTestSupport;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
 import java.io.PrintWriter;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.List;
-import java.util.Set;
 import java.util.logging.Logger;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * INTEGRATION (local lxc MySQL): the full outbox consumer over real MySQL. Seeds {@code summary_affected} with
- * base64(gzip(JSON {Cdr,Chargeables[]})) v2 rows (+ op add/subtract — what billing writes), drains the voice
- * and chargeable beans, and verifies summaries land, {@code last_offset} advances per bean, re-drains are
- * no-ops (exactly-once), corrections decrement, the reaper trims, poison rows dead-letter, head-init seeds,
- * and the chargeable table SELF-PROVISIONS with real partitions. SELF-SKIPS if MySQL is unreachable; password
- * via {@code -Dsummary.it.mysql.password=…} (no credential in git).
+ * The outbox consumer's contract ({@link OutboxConsumerContract}) on MySQL — the tests this class always held, now
+ * shared word for word with PostgreSQL; the fixture is the one it always had (a throwaway database, the outbox and
+ * the voice tables made by hand as production has them). SELF-SKIPS if MySQL is unreachable; password via
+ * {@code -Dsummary.it.mysql.password=…} (no credential in git). The lab: {@code tools/lab/pg-lab.sh mysql}, then
+ * {@code -Dsummary.it.mysql.url=jdbc:mysql://127.0.0.1:7633/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true}.
  */
-class OutboxConsumerIT {
+class OutboxConsumerIT extends OutboxConsumerContract {
 
     private static final String SERVER_URL = System.getProperty("summary.it.mysql.url",
             "jdbc:mysql://127.0.0.1:3306/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true");
@@ -50,15 +27,19 @@ class OutboxConsumerIT {
     private static final String PASSWORD = System.getProperty("summary.it.mysql.password", "");
     /** The throwaway database; {@code -Dsummary.it.mysql.db=…} lets two runs share one server without sharing tables. */
     private static final String DB = System.getProperty("summary.it.mysql.db", "summary_it");
-    private static final String DAY_TABLE = CdrTestSupport.DAY_TABLE;
-    private static final String HOUR_TABLE = CdrTestSupport.HOUR_TABLE;
 
-    private final CallSummaryBean bean = CdrTestSupport.dailyBean();
-    private DataSource dataSource;
-    private OutboxReader reader;
+    @Override
+    protected SqlDialect dialect() {
+        return SqlDialect.MYSQL;
+    }
 
-    @BeforeEach
-    void setUp() {
+    @Override
+    protected String schemaName() {
+        return DB;
+    }
+
+    @Override
+    protected DataSource freshSchema() {
         Connection probe = tryConnect(SERVER_URL);
         assumeTrue(probe != null, "MySQL not reachable — skipping integration test");
         try (probe) {
@@ -66,300 +47,17 @@ class OutboxConsumerIT {
         } catch (SQLException e) {
             throw new IllegalStateException("could not prepare the integration schema", e);
         }
-        dataSource = new DriverManagerDataSource(SERVER_URL.replace("/?", "/" + DB + "?"));
-        reader = new OutboxReader(new JdbcUnitOfWorkFactory(dataSource), new SummaryEngine(), 1000, 50, 8);
+        return new DriverManagerDataSource(SERVER_URL.replace("/?", "/" + DB + "?"));
     }
 
-    @Test
-    void drains_the_outbox_writes_summaries_advances_offset_and_is_exactly_once() {
-        // row 1: two calls on the same day -> the daily bean merges them; row 2: another day
-        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(
-                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)),
-                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 15, 0)))));
-        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(
-                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 20, 9, 0)))));
-
-        int processed = reader.drain(bean);
-
-        assertEquals(2, processed, "two outbox rows consumed");
-        assertEquals(2, count(DAY_TABLE), "two day windows -> two summary rows");
-        assertEquals(3, sumTotalCalls(), "three calls counted across the windows");
-        assertEquals(2, offset("dailyCallSummary"), "last_offset advanced to the last row id");
-
-        // re-drain: nothing new, no double-count
-        int again = reader.drain(bean);
-        assertEquals(0, again);
-        assertEquals(2, count(DAY_TABLE));
-        assertEquals(3, sumTotalCalls());
+    @Override
+    protected Connection billingConnection() throws SQLException {
+        return dbConnection();
     }
 
-    @Test
-    void drains_a_week_of_outbox_rows_into_seven_day_windows() {
-        // 7 outbox rows, one per day June 19..25, with day-index calls (1,2,…,7) -> 28 calls, 7 day windows
-        int expectedCalls = 0;
-        for (int i = 0; i < 7; i++) {
-            int callsThatDay = i + 1;
-            seedOutbox(i + 1, CdrTestSupport.encodedBatch(
-                    CdrTestSupport.series(CdrTestSupport.at(2026, 6, 19 + i, 0, 0), 60, callsThatDay)));
-            expectedCalls += callsThatDay;
-        }
-
-        int processed = reader.drain(bean);
-
-        assertEquals(7, processed, "seven outbox rows consumed");
-        assertEquals(7, count(DAY_TABLE), "seven distinct day windows");
-        assertEquals(expectedCalls, sumTotalCalls(), "1+2+…+7 = 28 calls counted across the windows");
-        assertEquals(7, offset("dailyCallSummary"), "last_offset advanced to the last row id");
-
-        // re-drain is exactly-once
-        assertEquals(0, reader.drain(bean));
-        assertEquals(7, count(DAY_TABLE));
-        assertEquals(expectedCalls, sumTotalCalls());
-    }
-
-    @Test
-    void the_reaper_deletes_rows_only_after_all_active_beans_passed_them() {
-        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
-        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 20, 9, 0)))));
-        Set<String> activeBeans = Set.of("dailyCallSummary", "hourlyCallSummary");
-
-        assertEquals(2, reader.drain(bean), "the daily bean catches up first");
-        assertEquals(0, reapLike(activeBeans), "hourly has no offset row yet -> nothing is safe to delete");
-        assertEquals(2, count("summary_affected"), "rows retained for the lagging bean");
-
-        CallSummaryBean hourly = CdrTestSupport.hourlyBean();
-        assertEquals(2, reader.drain(hourly), "the hourly bean catches up");
-        assertEquals(2, count(HOUR_TABLE), "two hour windows written");
-
-        assertEquals(2, reapLike(activeBeans), "both beans passed -> both rows reaped");
-        assertEquals(0, count("summary_affected"), "outbox trimmed");
-        assertEquals(0, reader.drain(bean), "post-reap drains are no-ops");
-    }
-
-    @Test
-    void a_failed_drain_rolls_back_completely_and_the_redelivery_counts_once() {
-        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
-
-        // same bean NAME (same offset bookmark) but a table that does not exist -> the tx fails mid-drain,
-        // exactly like a crash before commit
-        CallSummaryBean broken = (CallSummaryBean) CallSummaries.forWindow("dailyCallSummary", "daily", "9", 10, null);
-        assertThrows(RuntimeException.class, () -> reader.drain(broken));
-
-        assertEquals(0, offset("dailyCallSummary"), "offset unchanged after the failed transaction");
-        assertEquals(0, count(DAY_TABLE), "no partial summary rows leaked");
-
-        // the redelivery (healthy bean, same bookmark) processes the row exactly once
-        assertEquals(1, reader.drain(bean));
-        assertEquals(1, offset("dailyCallSummary"));
-        assertEquals(1, sumTotalCalls(), "counted exactly once despite the redelivery");
-    }
-
-    @Test
-    void a_poison_row_is_quarantined_to_the_deadletter_table_and_skipped() {
-        seedOutbox(1, "%%% not base64 %%%");
-        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
-        OutboxReader quickQuarantine = new OutboxReader(new JdbcUnitOfWorkFactory(dataSource), new SummaryEngine(), 1000, 50, 3);
-
-        for (int attempt = 1; attempt < 3; attempt++) {
-            assertThrows(RuntimeException.class, () -> quickQuarantine.drainOnce(bean));
-            assertEquals(0, offset("dailyCallSummary"));
-        }
-
-        assertEquals(1, quickQuarantine.drainOnce(bean), "threshold reached -> row consumed as a dead letter");
-        assertEquals(1, count("summary_affected_dlq"), "the poison blob is preserved for repair");
-        assertEquals(1, offset("dailyCallSummary"), "offset advanced past the poison row");
-
-        assertEquals(1, quickQuarantine.drain(bean), "the clean row behind it drains normally");
-        assertEquals(1, sumTotalCalls());
-    }
-
-    @Test
-    void head_init_seeds_a_late_enabled_bean_at_the_outbox_head() {
-        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
-        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 20, 9, 0)))));
-
-        reader.initOffsetAtHead(bean);
-
-        assertEquals(2, offset("dailyCallSummary"), "bookmark seeded at the current head");
-        assertEquals(0, reader.drain(bean), "pre-enablement residue is not consumed");
-        assertEquals(0, count(DAY_TABLE), "no partial backfill masquerading as complete windows");
-
-        reader.initOffsetAtHead(bean);
-        assertEquals(2, offset("dailyCallSummary"), "head-init is a no-op once the bookmark exists");
-
-        seedOutbox(3, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 21, 8, 0)))));
-        assertEquals(1, reader.drain(bean), "rows landing after enablement flow normally");
-        assertEquals(3, offset("dailyCallSummary"));
-    }
-
-    @Test
-    void a_subtract_correction_row_decrements_the_committed_window() {
-        // original batch: two calls in one day window
-        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(
-                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)),
-                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 15, 0)))));
-        assertEquals(1, reader.drain(bean));
-        assertEquals(2, sumTotalCalls(), "window committed at 2 calls");
-
-        // a billing correction removes one of them: op='subtract' with the OLD values
-        seedOutbox(2, "subtract", CdrTestSupport.encodedBatch(List.of(
-                CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
-        assertEquals(1, reader.drain(bean));
-
-        assertEquals(1, sumTotalCalls(), "2 - 1 = 1 after the subtract row");
-        assertEquals(1, count(DAY_TABLE), "still ONE window row (decremented in place)");
-        assertEquals(2, offset("dailyCallSummary"));
-
-        // exactly-once still holds across ops
-        assertEquals(0, reader.drain(bean));
-        assertEquals(1, sumTotalCalls());
-    }
-
-    @Test
-    void the_chargeable_bean_self_provisions_its_partitioned_table_and_rolls_up_every_leg() {
-        System.setProperty("summary.ddl.partition-start", "2026-06-01");
-        System.setProperty("summary.ddl.partition-days", "60");   // small horizon: fast CREATE, real partitions
-        try {
-            SummaryBean<ChargeableSummary> chargeableDaily =
-                    DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build();
-            reader.ensureProvisioned(chargeableDaily);             // CREATE ... PARTITION BY RANGE COLUMNS(...)
-            reader.ensureProvisioned(chargeableDaily);             // idempotent over the existing table
-
-            // sg10Entry = customer + supplier legs; sg11Entry = one leg -> 3 chargeable rows from 2 cdrs
-            seedOutbox(1, CdrTestSupport.encodedBatch(List.of(
-                    CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)),
-                    CdrTestSupport.sg11Entry(CdrTestSupport.at(2026, 6, 19, 15, 0)))));
-
-            assertEquals(1, reader.drain(chargeableDaily), "same outbox stream, its own offset bookmark");
-
-            assertEquals(3, count("sum_chargeable_day"), "every leg is a row: 2 SG10 legs + 1 SG11 leg");
-            assertEquals(1, queryLong("select count(*) from sum_chargeable_day where tup_assigneddirection=2"),
-                    "the supplier leg keys separately");
-            assertEquals(0, new java.math.BigDecimal("3.8").compareTo(   // 1.0 customer + 0.8 supplier + 2.0 sg11
-                    queryDecimal("select coalesce(sum(BilledAmount),0) from sum_chargeable_day")));
-            assertEquals(1, offset("dailyChargeableSummary"), "independent bookmark from the voice beans");
-
-            assertEquals(0, reader.drain(chargeableDaily), "re-drain is a no-op (exactly-once per bean)");
-            assertEquals(3, count("sum_chargeable_day"));
-        } finally {
-            System.clearProperty("summary.ddl.partition-start");
-            System.clearProperty("summary.ddl.partition-days");
-        }
-    }
-
-    @Test
-    void the_ad_beans_read_the_cdr_stream_and_carry_the_schema_they_are_drained_for() {
-        System.setProperty("summary.ddl.partition-start", "2026-09-01");
-        System.setProperty("summary.ddl.partition-days", "60");
-        try {
-            AdSummaryBean adDaily = AdTestSupport.dailyBean();
-            reader.ensureProvisioned(adDaily);
-            // ONE outbox row, as billing writes a batch: an ad view (group 30), its refused twin, and a voice call (group 10)
-            String voice = CdrTestSupport.entryJson(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 9, 29, 10, 0)));
-            seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchJson(List.of(
-                    AdTestSupport.leafView(AdTestSupport.at(2026, 9, 29, 10, 0)).json(),
-                    AdTestSupport.refusedView(AdTestSupport.at(2026, 9, 29, 11, 0)).json(), voice))));
-
-            assertEquals(1, reader.drain(adDaily), "the ad bean drains the call's own stream, entity cdr");
-
-            assertEquals(2, count("sum_ad_day_30"), "the done view and the refused one key apart; the voice call is not an ad view");
-            assertEquals(2, queryLong("select coalesce(sum(views),0) from sum_ad_day_30"));
-            assertEquals(2, queryLong("select count(*) from sum_ad_day_30 where tup_tenant='" + DB + "'"),
-                    "tup_tenant is the schema's own name: the database this unit of work runs in");
-            assertEquals(0, new java.math.BigDecimal("0.50").compareTo(
-                    queryDecimal("select chargedamount from sum_ad_day_30 where tup_outcome='done'")));
-            assertEquals(0, java.math.BigDecimal.ZERO.compareTo(queryDecimal("select sum(chargedunits) from sum_ad_day_30")),
-                    "both views were paid in money: no units");
-            assertEquals(1, queryLong("select failed from sum_ad_day_30 where tup_outcome='failed'"));
-            assertEquals(1, offset("dailyAdSummary"), "its own bookmark on the shared stream");
-
-            assertEquals(1, reader.drain(bean), "the voice bean reads the SAME row from its own bookmark");
-            assertEquals(1, sumTotalCalls(), "and counts only its group-10 call");
-
-            assertEquals(0, reader.drain(adDaily), "re-drain is a no-op (exactly once per bean)");
-            assertEquals(2, queryLong("select coalesce(sum(views),0) from sum_ad_day_30"));
-        } finally {
-            System.clearProperty("summary.ddl.partition-start");
-            System.clearProperty("summary.ddl.partition-days");
-        }
-    }
-
-    @Test
-    void two_apps_that_share_32_characters_keep_their_own_rows_in_the_real_table() {
-        System.setProperty("summary.ddl.partition-start", "2026-09-01");
-        System.setProperty("summary.ddl.partition-days", "60");
-        try {
-            AdSummaryBean adDaily = AdTestSupport.dailyBean();
-            reader.ensureProvisioned(adDaily);
-            String shared = "wifi-captive-portal-dhaka-north-";               // 32 characters
-            String retail = shared + "retail-1", campus = shared + "campus-1";
-            java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
-            seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t).app(retail), AdTestSupport.leafView(t).app(campus))));
-            seedOutbox(2, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t.plusHours(1)).app(retail))));
-
-            assertEquals(2, reader.drain(adDaily));
-
-            assertEquals(2, count("sum_ad_day_30"), "a VARCHAR(32) column would refuse a 40-character name, or merge the two");
-            assertEquals(2, queryLong("select views from sum_ad_day_30 where tup_app='" + retail + "'"),
-                    "the second batch RELOADED the row and merged into it: the stored name keys as the built one");
-            assertEquals(1, queryLong("select views from sum_ad_day_30 where tup_app='" + campus + "'"));
-        } finally {
-            System.clearProperty("summary.ddl.partition-start");
-            System.clearProperty("summary.ddl.partition-days");
-        }
-    }
-
-    @Test
-    void one_outbox_row_of_ad_views_feeds_the_ad_the_call_and_the_chargeable_tables() {
-        System.setProperty("summary.ddl.partition-start", "2026-09-01");
-        System.setProperty("summary.ddl.partition-days", "60");
-        try {
-            AdSummaryBean adDaily = AdTestSupport.dailyBean();
-            SummaryBean<CallSummary> call30 = CallSummaries.forWindow("dailyCallSummarySg30", "daily", "30", 30, null);
-            SummaryBean<ChargeableSummary> chargeable = DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build();
-            reader.ensureProvisioned(adDaily);
-            reader.ensureProvisioned(call30);          // sum_voice_day_30: made by the bean, full partitions inside the CREATE
-            reader.ensureProvisioned(chargeable);
-            java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
-            // shown and paid 0.50; admitted, never shown, still paid 0.50 (no return policy); refused, paid nothing
-            seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t),
-                    AdTestSupport.leafView(t.plusMinutes(5)).admittedNeverShown(), AdTestSupport.refusedView(t.plusMinutes(9)))));
-
-            assertEquals(1, reader.drain(adDaily));
-            assertEquals(1, reader.drain(call30), "the same row, its own bookmark");
-            assertEquals(1, reader.drain(chargeable), "the same row, its own bookmark");
-
-            assertEquals(3, queryLong("select coalesce(sum(views),0) from sum_ad_day_30"));
-            assertEquals(0, new java.math.BigDecimal("1.00").compareTo(queryDecimal("select sum(chargedamount) from sum_ad_day_30")));
-            assertEquals(3, queryLong("select coalesce(sum(totalcalls),0) from sum_voice_day_30"), "the three views as calls");
-            assertEquals(1, queryLong("select coalesce(sum(connectedcalls),0) from sum_voice_day_30"), "one was shown");
-            assertEquals(0, new java.math.BigDecimal("1.00").compareTo(queryDecimal("select sum(customercost) from sum_voice_day_30")),
-                    "0.50 + 0.50 + 0: the never-shown view's charge is there — no ChargingStatus early return for group 30");
-            assertEquals(0, new java.math.BigDecimal("1.00").compareTo(
-                    queryDecimal("select sum(BilledAmount) from sum_chargeable_day where tup_servicegroup=30")), "the three sums agree");
-            assertEquals(3, queryLong("select coalesce(sum(totalcount),0) from sum_chargeable_day where tup_servicegroup=30"));
-
-            assertEquals(0, reader.drain(call30), "re-drain is a no-op (exactly once per bean)");
-            assertEquals(3, queryLong("select coalesce(sum(totalcalls),0) from sum_voice_day_30"));
-        } finally {
-            System.clearProperty("summary.ddl.partition-start");
-            System.clearProperty("summary.ddl.partition-days");
-        }
-    }
-
-    // ---- schema + helpers ----
-
-    /** Mirrors OutboxReaper.reapOnce over a real UnitOfWork: min(last_offset) across the active set, then delete. */
-    private long reapLike(Set<String> activeBeans) {
-        UnitOfWork unitOfWork = new JdbcUnitOfWorkFactory(dataSource).begin();
-        try {
-            long min = unitOfWork.outbox().minOffset("cdr", activeBeans);
-            int deleted = min > 0 ? unitOfWork.outbox().deleteUpTo("cdr", min) : 0;
-            unitOfWork.commit();
-            return deleted;
-        } finally {
-            unitOfWork.close();
-        }
+    @Override
+    protected Connection dbConnection() throws SQLException {
+        return DriverManager.getConnection(SERVER_URL.replace("/?", "/" + DB + "?"), USER, PASSWORD);
     }
 
     private static Connection tryConnect(String url) {
@@ -427,62 +125,6 @@ class OutboxConsumerIT {
                 + "decimalAmount1 decimal(18,6) not null default 0, decimalAmount2 decimal(18,6) not null default 0,"
                 + "decimalAmount3 decimal(18,6) not null default 0,"
                 + "primary key (id), key ix_starttime (tup_starttime)) engine=innodb default charset=utf8mb4";
-    }
-
-    private void seedOutbox(long id, String data) {
-        seedOutbox(id, "add", data);
-    }
-
-    private void seedOutbox(long id, String op, String data) {
-        String sql = "insert into summary_affected(id, entity_type, op, data) values(?, 'cdr', ?, ?)";
-        try (Connection c = dbConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, id);
-            ps.setString(2, op);
-            ps.setString(3, data);
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new IllegalStateException("seed failed", e);
-        }
-    }
-
-    private long count(String table) {
-        return queryLong("select count(*) from " + table);
-    }
-
-    private long sumTotalCalls() {
-        return queryLong("select coalesce(sum(totalcalls),0) from " + DAY_TABLE);
-    }
-
-    private long offset(String beanName) {
-        return queryLong("select coalesce(max(last_offset),0) from summary_offset where bean_name='" + beanName + "'");
-    }
-
-    private long queryLong(String sql) {
-        try (Connection c = dbConnection(); Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
-            rs.next();
-            return rs.getLong(1);
-        } catch (SQLException e) {
-            throw new IllegalStateException(sql, e);
-        }
-    }
-
-    private java.math.BigDecimal queryDecimal(String sql) {
-        try (Connection c = dbConnection(); Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
-            rs.next();
-            return rs.getBigDecimal(1);
-        } catch (SQLException e) {
-            throw new IllegalStateException(sql, e);
-        }
-    }
-
-    private Connection dbConnection() throws SQLException {
-        return DriverManager.getConnection(SERVER_URL.replace("/?", "/" + DB + "?"), USER, PASSWORD);
-    }
-
-    private static void exec(Connection conn, String sql) throws SQLException {
-        try (Statement st = conn.createStatement()) {
-            st.execute(sql);
-        }
     }
 
     /** Minimal DataSource over DriverManager — only getConnection() is used by the unit of work. */

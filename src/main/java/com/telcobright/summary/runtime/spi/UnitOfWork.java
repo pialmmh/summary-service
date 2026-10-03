@@ -1,5 +1,6 @@
 package com.telcobright.summary.runtime.spi;
 
+import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.engine.spi.SummaryStore;
 import com.telcobright.summary.outbox.spi.OutboxStore;
 
@@ -10,7 +11,7 @@ import com.telcobright.summary.outbox.spi.OutboxStore;
  * failure {@link #rollback()}s the whole drain. This is the only place a transaction is controlled (engine,
  * summary store, and outbox store never commit/rollback).
  *
- * <p>It is a seam so the reader is testable without a database: production is JDBC over a MySQL connection;
+ * <p>It is a seam so the reader is testable without a database: production is JDBC over a MySQL or a PostgreSQL connection;
  * tests inject a fake that records commit/rollback and whose stores can be made to fail mid-drain.
  */
 public interface UnitOfWork extends AutoCloseable {
@@ -20,6 +21,9 @@ public interface UnitOfWork extends AutoCloseable {
      * what an ad summary row carries as {@code tup_tenant}. Never null: the drain hands it to the bean as the tier.
      */
     String schema();
+
+    /** The engine this unit of work runs on — what a table's DDL is rendered for. */
+    SqlDialect dialect();
 
     SummaryStore store();
 

@@ -1,5 +1,6 @@
 package com.telcobright.summary.testkit;
 
+import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.engine.spi.SummaryStore;
 import com.telcobright.summary.outbox.spi.OutboxStore;
 import com.telcobright.summary.runtime.spi.UnitOfWork;
@@ -13,6 +14,7 @@ public final class FakeUnitOfWork implements UnitOfWork {
     private final FakeSummaryStore store;
     private final FakeOutboxStore outbox;
     private final String schema;
+    private final SqlDialect dialect;
     public boolean committed;
     public boolean rolledBack;
     public boolean closed;
@@ -22,9 +24,19 @@ public final class FakeUnitOfWork implements UnitOfWork {
     }
 
     public FakeUnitOfWork(FakeSummaryStore store, FakeOutboxStore outbox, String schema) {
+        this(store, outbox, schema, SqlDialect.MYSQL);
+    }
+
+    public FakeUnitOfWork(FakeSummaryStore store, FakeOutboxStore outbox, String schema, SqlDialect dialect) {
         this.store = store;
         this.outbox = outbox;
         this.schema = schema;
+        this.dialect = dialect;
+    }
+
+    @Override
+    public SqlDialect dialect() {
+        return dialect;
     }
 
     @Override

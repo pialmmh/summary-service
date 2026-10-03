@@ -7,20 +7,19 @@
 # intentionally left that way (no local fallback); fill the creds + bring up connectivity to run.
 # =====================================================================================
 
-quarkus:
-  datasource:
-    db-kind: mysql
-    # CCL DB — same as billing-core (dotnet): host 103.95.96.77, admin schema telcobright, reseller schemas
-    # res_NNN resolved per tenant at runtime. Credentials INLINE (no OpenBao), same as billing-core.
+summary:
+  # 0) THE STORE — where the outbox, the bookmarks and the summaries live. The engine is chosen HERE, at run time
+  #    (kind: mysql | postgresql): one jar serves either. Credentials INLINE (no OpenBao), same as billing-core.
+  store:
+    kind: mysql
+    # CCL DB — same as billing-core (dotnet): host 103.95.96.77, admin schema telcobright.
+    # allowMultiQueries=true — the engine runs ;-joined UPDATE/DELETE segments in one round trip.
+    url: jdbc:mysql://103.95.96.77:3306/telcobright?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&allowMultiQueries=true
     username: ""                                  # CCL DB user     — TODO: set (same value as billing-core)
     password: ""                                  # CCL DB password — TODO: set (same value as billing-core)
-    jdbc:
-      # allowMultiQueries=true — the engine runs ;-joined UPDATE/DELETE segments in one round trip.
-      url: jdbc:mysql://103.95.96.77:3306/telcobright?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&allowMultiQueries=true
-      min-size: 2
-      max-size: 16
+    min-size: 2
+    max-size: 16
 
-summary:
   # 1) CONTEXT beans — shared read-only, loaded ONCE from config-manager (same apis billing calls).
   #    config-manager is UNCHANGED; summary is just another client. Loaded lazily at bean activation.
   contexts:

@@ -10,6 +10,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -45,6 +46,79 @@ class WifiProfileTest {
             assertEquals(bean[0], built.name(), "its own name: its own bookmark and worker");
             assertEquals("cdr", built.entityType());
         }
+    }
+
+    @Test
+    void a_start_names_the_tenant_it_serves_and_the_same_jar_serves_either_engine() {
+        // no profile key is fixed at build time: the jar that serves tcbl on MySQL serves btcl on PostgreSQL when told
+        String before = System.getProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY);
+        try {
+            System.clearProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY);
+            TenantProfileConfigSource byRegistry = new TenantProfileConfigSource();
+            assertEquals("mysql", byRegistry.getValue("summary.store.kind"), "not told: the registry's first enabled entry, tcbl/dev");
+
+            System.setProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY, "btcl/lab");
+            TenantProfileConfigSource told = new TenantProfileConfigSource();
+            assertEquals("postgresql", told.getValue("summary.store.kind"), "told btcl/lab: the wifi tenant's store");
+            assertTrue(told.getValue("summary.store.url").startsWith("jdbc:postgresql://"));
+            assertTrue(told.getValue("summary.enabledSummary").contains("dailyAdSummary"));
+        } finally {
+            if (before == null) System.clearProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY); else System.setProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY, before);
+        }
+    }
+
+    @Test
+    void the_profile_source_answers_by_name_and_lists_nothing_so_no_tenants_value_is_baked_into_the_jar() {
+        // Quarkus records what a config source LISTS at build time as a run-time default of the jar. The build sees
+        // tcbl/dev: listed, its config-manager and its Kafka broker became the defaults of a start that serves btcl
+        // (found on the lab: the btcl/lab start dialled tcbl's config-manager). Listing nothing bakes nothing.
+        TenantProfileConfigSource source = new TenantProfileConfigSource();
+
+        assertTrue(source.getPropertyNames().isEmpty(), "no name is listed");
+        assertTrue(source.getProperties().isEmpty(), "no value is listed");
+        assertEquals("mysql", source.getValue("summary.store.kind"), "and a key is still answered by its name");
+        assertFalse(source.profile().isEmpty());
+    }
+
+    @Test
+    void a_profile_answers_the_services_keys_only_never_one_of_quarkus() {
+        for (String tenant : new String[] {"tcbl/dev", "btcl/lab"}) {
+            Map<String, String> profile = ProfileYamlLoader.loadProfile(ProfileYamlLoader.parseSelection(tenant));
+            assertTrue(profile.keySet().stream().allMatch(key -> key.startsWith("summary.")), tenant + " holds summary.* keys only: " + profile.keySet());
+        }
+        TenantProfileConfigSource source = new TenantProfileConfigSource();
+        assertEquals(null, source.getValue("quarkus.http.host"), "asked by name while the jar is built: nothing of a tenant may answer");
+        assertEquals(null, source.getValue(null));
+    }
+
+    @Test
+    void a_key_the_wifi_profile_does_not_set_is_not_set_never_another_tenants() {
+        // the keys that leaked: a context the chargeable beans of tcbl name, and tcbl's addresses
+        for (String key : new String[] {"summary.beans.dailyChargeableSummary.context", "summary.contexts.mediationContext.base-url",
+                "summary.contexts.mediationContext.tenant", "summary.beans.dailyCallSummary.table-suffix"}) {
+            assertEquals(null, PROFILE.get(key), key + " is tcbl's; the wifi tenant's profile does not set it");
+        }
+        assertTrue(PROFILE.values().stream().noneMatch(value -> value.contains("103.95.96.")), "no address of another tenant in the wifi profile");
+    }
+
+    @Test
+    void a_selection_that_is_not_tenant_slash_profile_is_refused() {
+        for (String wrong : new String[] {"btcl", "btcl/lab/x", "../etc/passwd", "btcl/ lab", "/lab"}) {
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> ProfileYamlLoader.parseSelection(wrong), wrong);
+            assertTrue(refused.getMessage().contains("must be <tenant>/<profile>"), refused.getMessage());
+        }
+        assertEquals(new ProfileYamlLoader.ActiveTenant("btcl", "lab"), ProfileYamlLoader.parseSelection(" btcl/lab "));
+    }
+
+    @Test
+    void the_wifi_tenants_store_is_postgresql_and_the_voice_tenants_is_mysql() {
+        Map<String, String> voice = ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("tcbl", "dev"));
+
+        assertEquals("postgresql", PROFILE.get("summary.store.kind"));
+        assertEquals("summary_service", PROFILE.get("summary.store.username"), "the role prime-context's provisioning lets into each tier schema");
+        assertEquals("mysql", voice.get("summary.store.kind"));
+        assertTrue(voice.get("summary.store.url").contains("allowMultiQueries=true"), "the ;-joined UPDATE segments need it on MySQL");
+        assertTrue(voice.keySet().stream().noneMatch(key -> key.startsWith("quarkus.datasource")), "no key that Quarkus fixes at build time is left");
     }
 
     @Test

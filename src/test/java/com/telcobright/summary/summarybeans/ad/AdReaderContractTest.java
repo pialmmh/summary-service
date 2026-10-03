@@ -1,5 +1,6 @@
 package com.telcobright.summary.summarybeans.ad;
 
+import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
 import com.telcobright.summary.summarybeans.ad.model.AdSummary;
 import org.junit.jupiter.api.Test;
@@ -84,6 +85,27 @@ class AdReaderContractTest {
         for (String column : AdSummary.INSERT_COLUMNS.split(",")) {
             assertEquals(portable(mysql.get(column)), portable(postgres.get(column)), column + " is the same type and width on both engines");
         }
+    }
+
+    @Test
+    void the_postgres_ddl_the_service_runs_is_the_reference_file_statement_for_statement() throws IOException {
+        // db/postgres/sum_ad.sql is what ad-sphere's side was given (brief §4.2); the service renders its own DDL
+        // from the bean's table description — the two must be one text, or the file lies
+        List<String> rendered = new ArrayList<>();
+        rendered.addAll(AdTestSupport.dailyBean().tableDdl(SqlDialect.POSTGRESQL));
+        rendered.addAll(AdTestSupport.hourlyBean().tableDdl(SqlDialect.POSTGRESQL));
+
+        List<String> reference = new ArrayList<>();
+        for (String statement : resource("db/postgres/sum_ad.sql").replaceAll("--[^\\n]*", "").split(";")) {
+            if (!statement.isBlank()) reference.add(oneLine(statement));
+        }
+
+        assertEquals(rendered.stream().map(AdReaderContractTest::oneLine).toList(), reference);
+    }
+
+    /** A statement with its layout taken out: one space between words, none around a comma or inside a parenthesis. */
+    private static String oneLine(String sql) {
+        return sql.replaceAll("\\s+", " ").replaceAll("\\s*,\\s*", ",").replaceAll("\\(\\s+", "(").replaceAll("\\s+\\)", ")").trim();
     }
 
     // ---- reading a CREATE TABLE ----

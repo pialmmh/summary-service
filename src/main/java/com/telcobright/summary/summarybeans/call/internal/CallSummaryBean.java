@@ -3,6 +3,7 @@ package com.telcobright.summary.summarybeans.call.internal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryMode;
+import com.telcobright.summary.bean.spi.SummaryTableSpec;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
@@ -114,10 +115,10 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
         return "sum_voice_" + window().tableToken() + "_" + tableSuffix;
     }
 
-    /** Self-provisioning DDL: the canonical sum_voice shape with the full daily partition set in the CREATE. */
+    /** The table, described once for every engine; MySQL partitions it by day, the full set inside the CREATE. */
     @Override
-    public String tableDdl() {
-        return SumVoiceDdl.createTableIfNotExists(table());
+    public SummaryTableSpec tableSpec() {
+        return SumVoiceDdl.table(table());
     }
 
     @Override
