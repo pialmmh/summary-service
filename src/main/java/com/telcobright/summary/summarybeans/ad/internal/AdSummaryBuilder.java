@@ -33,6 +33,11 @@ final class AdSummaryBuilder {
 
     static final String OUTCOME_DONE = "done";
     static final String OUTCOME_FAILED = "failed";
+    /**
+     * The width of {@code tup_app}: 64, the width of the app's name at its source (ad-sphere's {@code ad_caller.app},
+     * its start road refuses a longer one). It was 32: two apps sharing their first 32 characters merged into one row.
+     */
+    static final int APP_WIDTH = 64;
     /** The unit of money on a chargeable; every other unit is a package's. */
     static final String MONEY_UOM = "BDT";
 
@@ -52,7 +57,7 @@ final class AdSummaryBuilder {
         s.tup_rulecode = clip(orEmpty(cdr.originatingCalledNumber()), 20);
         s.tup_zone = clip(orEmpty(facts.zone()), 64);
         s.tup_site = clip(orEmpty(facts.site()), 64);
-        s.tup_app = clip(orEmpty(facts.app()), 32);
+        s.tup_app = clip(orEmpty(facts.app()), APP_WIDTH);
         s.tup_mediakind = clip(orEmpty(cdr.codec()), 16);
         s.tup_outcome = done ? OUTCOME_DONE : OUTCOME_FAILED;
         s.tup_starttime = window.bucketStart(cdr.startTime());

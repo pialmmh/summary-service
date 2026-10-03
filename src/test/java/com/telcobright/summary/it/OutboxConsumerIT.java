@@ -283,6 +283,31 @@ class OutboxConsumerIT {
         }
     }
 
+    @Test
+    void two_apps_that_share_32_characters_keep_their_own_rows_in_the_real_table() {
+        System.setProperty("summary.ddl.partition-start", "2026-09-01");
+        System.setProperty("summary.ddl.partition-days", "60");
+        try {
+            AdSummaryBean adDaily = AdTestSupport.dailyBean();
+            reader.ensureProvisioned(adDaily);
+            String shared = "wifi-captive-portal-dhaka-north-";               // 32 characters
+            String retail = shared + "retail-1", campus = shared + "campus-1";
+            java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
+            seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t).app(retail), AdTestSupport.leafView(t).app(campus))));
+            seedOutbox(2, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t.plusHours(1)).app(retail))));
+
+            assertEquals(2, reader.drain(adDaily));
+
+            assertEquals(2, count("sum_ad_day_30"), "a VARCHAR(32) column would refuse a 40-character name, or merge the two");
+            assertEquals(2, queryLong("select views from sum_ad_day_30 where tup_app='" + retail + "'"),
+                    "the second batch RELOADED the row and merged into it: the stored name keys as the built one");
+            assertEquals(1, queryLong("select views from sum_ad_day_30 where tup_app='" + campus + "'"));
+        } finally {
+            System.clearProperty("summary.ddl.partition-start");
+            System.clearProperty("summary.ddl.partition-days");
+        }
+    }
+
     // ---- schema + helpers ----
 
     /** Mirrors OutboxReaper.reapOnce over a real UnitOfWork: min(last_offset) across the active set, then delete. */

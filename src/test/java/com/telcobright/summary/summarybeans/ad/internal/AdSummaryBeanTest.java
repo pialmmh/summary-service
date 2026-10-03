@@ -293,6 +293,36 @@ class AdSummaryBeanTest {
     }
 
     @Test
+    void a_forty_character_app_name_keeps_its_own_rows() {
+        // S3: the app's name is 64 wide at its source; at 32 these two (equal in their first 32 characters) merged
+        String shared = "wifi-captive-portal-dhaka-north-";                   // 32 characters
+        String retail = shared + "retail-1", campus = shared + "campus-1";    // 40 each
+        assertEquals(32, shared.length());
+        assertEquals(40, retail.length());
+
+        Collection<AdSummary> rows = rollup(dailyBean(), LEAF, List.of(leafView(MORNING).app(retail), leafView(MORNING.plusMinutes(1)).app(campus),
+                leafView(MORNING.plusMinutes(2)).app(retail)));
+
+        assertEquals(2, rows.size(), "each app keeps its own row");
+        AdSummary ofRetail = rows.stream().filter(r -> r.tup_app.equals(retail)).findFirst().orElseThrow();
+        AdSummary ofCampus = rows.stream().filter(r -> r.tup_app.equals(campus)).findFirst().orElseThrow();
+        assertEquals(2, ofRetail.views);
+        assertEquals(1, ofCampus.views);
+        assertNotEquals(ofRetail.tupleKey(), ofCampus.tupleKey());
+    }
+
+    @Test
+    void an_app_name_past_the_column_is_cut_to_64_so_a_fresh_build_keys_as_its_reloaded_row() {
+        String tooLong = "a".repeat(63) + "bcdefgh";                           // 70 characters
+
+        AdSummary s = dailyBean().buildBatch(batchOf(leafView(MORNING).app(tooLong)), LEAF).get(0);
+
+        assertEquals(64, s.tup_app.length(), "what the VARCHAR(64) column will hold");
+        assertEquals("a".repeat(63) + "b", s.tup_app);
+        assertTrue(dailyBean().tableDdl().contains("tup_app VARCHAR(64) "), "and the column is that wide");
+    }
+
+    @Test
     void a_campaign_id_reads_as_a_number_or_as_digits_in_a_string() {
         assertEquals(12, campaignOf(leafView(MORNING).campaign(12)));
         assertEquals(12, campaignOf(leafView(MORNING).campaign("12")));

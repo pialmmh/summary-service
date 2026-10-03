@@ -23,7 +23,7 @@ final class SumAdDdl {
                 + "tup_rulecode VARCHAR(20) NOT NULL DEFAULT '',"
                 + "tup_zone VARCHAR(64) NOT NULL DEFAULT '',"
                 + "tup_site VARCHAR(64) NOT NULL DEFAULT '',"
-                + "tup_app VARCHAR(32) NOT NULL DEFAULT '',"
+                + "tup_app VARCHAR(64) NOT NULL DEFAULT '',"            // the app's name is 64 at its source (ad_caller.app)
                 + "tup_mediakind VARCHAR(16) NOT NULL DEFAULT '',"
                 + "tup_outcome VARCHAR(32) NOT NULL DEFAULT '',"
                 + "tup_starttime DATETIME NOT NULL,"
