@@ -7,6 +7,7 @@ import com.telcobright.summary.ping.internal.PingListener;
 import com.telcobright.summary.registry.api.SummaryBeanRegistry;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
 
+import io.quarkus.runtime.Quarkus;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -63,6 +64,9 @@ public class SummaryBootstrap {
     void onStart(@Observes StartupEvent event) {
         Config config = ConfigProvider.getConfig();
         List<String> enabled = config.getOptionalValues("summary.enabledSummary", String.class).orElse(List.of());
+        if (!showEndpointsAndDecide(config, enabled)) {
+            return;                                      // print-only: nothing is started, nothing is dialled
+        }
         for (String name : enabled) {
             activateBean(name);
         }
@@ -72,6 +76,33 @@ public class SummaryBootstrap {
         } else {
             LOG.infof("autostart off — %d bean(s) registered; workers/ping/reaper NOT started", enabled.size());
         }
+    }
+
+    /**
+     * BEFORE anything is dialled: say what this start resolved — the database, the brokers, each configuration
+     * source — and apply the two switches of {@link StartEndpoints}. Returns false when the start is print-only.
+     * A lab start that would leave this machine is refused here, in words, by an exception that fails the start.
+     */
+    private boolean showEndpointsAndDecide(Config config, List<String> enabled) {
+        List<StartEndpoints.Endpoint> endpoints = StartEndpoints.resolve(config, enabled);
+        boolean printOnly = config.getOptionalValue("summary.endpoints.print-only", Boolean.class).orElse(false);
+        for (StartEndpoints.Endpoint endpoint : endpoints) {
+            if (printOnly) {
+                System.out.println(endpoint.line());     // the lab script reads these lines
+            } else {
+                LOG.info(endpoint.line());
+            }
+        }
+        if (printOnly) {
+            int elsewhere = StartEndpoints.notLoopback(endpoints).size();
+            System.out.println(StartEndpoints.LINE_MARK + "S " + endpoints.size() + " resolved, " + elsewhere + " not on this machine — print-only: nothing was started");
+            Quarkus.asyncExit(elsewhere == 0 ? 0 : 3);
+            return false;
+        }
+        if (config.getOptionalValue("summary.endpoints.loopback-only", Boolean.class).orElse(false)) {
+            StartEndpoints.requireLoopbackOnly(endpoints);
+        }
+        return true;
     }
 
     @PreDestroy
