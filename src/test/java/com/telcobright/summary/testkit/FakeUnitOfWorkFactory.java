@@ -9,6 +9,8 @@ public final class FakeUnitOfWorkFactory implements UnitOfWorkFactory {
     public final FakeSummaryStore store;
     public final FakeOutboxStore outbox;
     public FakeUnitOfWork last;
+    /** The schema the next units of work say they run in ({@code null} = a unit of work that names none). */
+    public String schema = FakeUnitOfWork.SCHEMA;
 
     public FakeUnitOfWorkFactory(FakeSummaryStore store, FakeOutboxStore outbox) {
         this.store = store;
@@ -17,7 +19,7 @@ public final class FakeUnitOfWorkFactory implements UnitOfWorkFactory {
 
     @Override
     public UnitOfWork begin() {
-        last = new FakeUnitOfWork(store, outbox);
+        last = new FakeUnitOfWork(store, outbox, schema);
         return last;
     }
 }

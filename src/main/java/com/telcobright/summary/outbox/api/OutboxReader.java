@@ -143,6 +143,7 @@ public class OutboxReader {
     public <T extends SummaryEntity<T>> int drainOnce(SummaryBean<T> bean) {
         UnitOfWork unitOfWork = unitOfWorkFactory.begin();
         try {
+            String tier = tierOf(unitOfWork);
             long offset = unitOfWork.outbox().readOffset(bean.entityType(), bean.name());
             List<OutboxRow> rows = unitOfWork.outbox().readAfter(bean.entityType(), offset, maxRowsPerTx);
             if (rows.isEmpty()) {
@@ -157,7 +158,7 @@ public class OutboxReader {
             for (OutboxRow row : rows) {
                 List<T> entities;
                 try {
-                    entities = bean.buildBatch(OutboxCodec.decode(row.data()));
+                    entities = bean.buildBatch(OutboxCodec.decode(row.data()), tier);
                 } catch (RuntimeException decodeOrBuildFailure) {   // deterministic on the row's data -> poison
                     poison = decodeOrBuildFailure;
                     poisonRow = row;
@@ -199,6 +200,19 @@ public class OutboxReader {
         } finally {
             closeQuietly(unitOfWork);
         }
+    }
+
+    /**
+     * The tier a drain builds for = the schema its unit of work runs in. A unit of work that names none is a
+     * WIRING fault: it fails the drain here, before any row is read — so it can never be taken for a poison
+     * row and dead-letter data.
+     */
+    private static String tierOf(UnitOfWork unitOfWork) {
+        String tier = unitOfWork.schema();
+        if (tier == null || tier.isBlank()) {
+            throw new IllegalStateException("the unit of work names no schema — a drain must know the tier it serves");
+        }
+        return tier;
     }
 
     /** The failing row IS the head: quarantine it once the streak reaches the threshold, else rethrow. */

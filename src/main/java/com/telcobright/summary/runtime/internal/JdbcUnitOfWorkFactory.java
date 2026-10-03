@@ -19,6 +19,7 @@ import java.sql.SQLException;
 public class JdbcUnitOfWorkFactory implements UnitOfWorkFactory {
 
     private final DataSource dataSource;
+    private volatile String ownSchema;
 
     @Inject
     public JdbcUnitOfWorkFactory(DataSource dataSource) {
@@ -34,8 +35,9 @@ public class JdbcUnitOfWorkFactory implements UnitOfWorkFactory {
             throw new SummaryStoreException("could not begin summary unit of work", e);
         }
         try {
+            String schema = ownSchemaOf(connection);
             connection.setAutoCommit(false);
-            return new JdbcUnitOfWork(connection);
+            return new JdbcUnitOfWork(connection, schema);
         } catch (SQLException | RuntimeException e) {
             // a stale pooled connection failing here must go back closed, not leak checked-out of Agroal
             // (leaked retries during a MySQL outage would drain the pool and outlive the outage)
@@ -47,5 +49,19 @@ public class JdbcUnitOfWorkFactory implements UnitOfWorkFactory {
             throw e instanceof SQLException sql ? new SummaryStoreException("could not begin summary unit of work", sql)
                     : (RuntimeException) e;
         }
+    }
+
+    /** The connection's own schema, by name: the database a MySQL URL opens. Asked once, then remembered. */
+    private String ownSchemaOf(Connection connection) throws SQLException {
+        String known = ownSchema;
+        if (known != null) {
+            return known;
+        }
+        String name = connection.getCatalog();
+        if (name == null || name.isBlank()) {
+            throw new SQLException("the datasource URL names no database — a summary worker must know the schema it serves");
+        }
+        ownSchema = name;
+        return name;
     }
 }

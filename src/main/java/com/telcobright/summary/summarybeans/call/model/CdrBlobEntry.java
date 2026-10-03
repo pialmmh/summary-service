@@ -31,8 +31,18 @@ public record CdrBlobEntry(Cdr cdr, Chargeable customer, List<Chargeable> charge
      * (billing's own {@code Entry.Customer()} rule — the v1 blob carried no direction), else null.
      */
     public Chargeable customerLeg() {
-        List<Chargeable> legs = legs();
-        return legs.stream().filter(Chargeable::isCustomerLeg).findFirst()
+        return customerLegOf(chargeables, customer);
+    }
+
+    /**
+     * The customer-leg rule for any reader of the envelope (the ad category decodes its own view of the
+     * {@code Cdr} and picks the leg by this same rule): the v2 list's {@code assignedDirection == 1} leg, else
+     * its first leg; with no v2 list, the lone v1 customer leg; else null.
+     */
+    public static Chargeable customerLegOf(List<Chargeable> chargeables, Chargeable v1Customer) {
+        List<Chargeable> legs = chargeables != null && !chargeables.isEmpty() ? chargeables
+                : v1Customer != null ? List.of(v1Customer) : List.<Chargeable>of();
+        return legs.stream().filter(leg -> leg != null && leg.isCustomerLeg()).findFirst()
                 .orElse(legs.isEmpty() ? null : legs.get(0));
     }
 }

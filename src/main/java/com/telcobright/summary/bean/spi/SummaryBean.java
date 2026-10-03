@@ -64,10 +64,17 @@ public interface SummaryBean<T extends SummaryEntity<T>> {
 
     /**
      * Build the summary entities for ONE decompressed outbox row — its batch of records (the JSON array of
-     * {@code {Cdr, Customer}}). Records not for this bean (e.g. a different service group) are skipped; each
-     * kept record becomes one bucketed entity.
+     * {@code {Cdr, Chargeables}}) — read from the outbox of the tenant schema {@code tier} (the schema's own
+     * name: {@code btcl}, {@code res_44}). Records not for this bean (e.g. a different service group) are
+     * skipped; each kept record becomes one bucketed entity. A bean whose rows carry the tier (the ad summary's
+     * {@code tup_tenant}) takes it from here — the blob does not name it.
      */
-    List<T> buildBatch(byte[] decompressedRowJson);
+    List<T> buildBatch(byte[] decompressedRowJson, String tier);
+
+    /** The same for a bean that does not need the tier (tests and embedders; the drain always names it). */
+    default List<T> buildBatch(byte[] decompressedRowJson) {
+        return buildBatch(decompressedRowJson, null);
+    }
 
     /** The window bucket of an entity ({@code tup_starttime}); the distinct set is what the load query fetches. */
     LocalDateTime bucketOf(T entity);

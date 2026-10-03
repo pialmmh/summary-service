@@ -4,10 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryMode;
 import com.telcobright.summary.bean.spi.WindowSize;
-import com.telcobright.summary.summarybeans.ad.model.AdCdrEntry;
-import com.telcobright.summary.summarybeans.ad.model.AdLeg;
+import com.telcobright.summary.summarybeans.ad.model.AdCallEntry;
 import com.telcobright.summary.summarybeans.ad.model.AdSummary;
-import com.telcobright.summary.summarybeans.ad.model.AdTier;
+import com.telcobright.summary.summarybeans.ad.model.AdView;
+import com.telcobright.summary.summarybeans.ad.model.AdViewFacts;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
@@ -21,21 +21,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The shared <b>ad</b> summary machinery over the {@link AdSummary} entity (design AD-AS-CALL §2.9). It consumes
- * the {@code ad_cdr} outbox stream ad-sphere's terminal write fills (seed-callflow's {@code LevelCdrWriter}: one
- * {@code summary_affected} row per ended ad call, the v2 envelope {@code {Cdr, Chargeables:[every tier]}}) and
- * rolls up EVERY tier of every call into one row each — a reseller's summary is the rows where {@code tup_tenant}
- * = its database. A call nothing admitted (no tier) still counts once, on the entry tenant. The target table is
- * {@code sum_ad_<window token>_30} ({@code 30} = the ad service group, fixed). A per-window subclass adds only
- * {@link #window()}.
+ * The shared <b>ad</b> summary machinery over the {@link AdSummary} entity (ad-is-a-call §4.1, §5). An ad view is
+ * a Call: billing-core writes each tier's record as a {@code cdr} row of service group 30 in the tier's own
+ * schema, and that schema's outbox entry ({@code entity_type = 'cdr'}, blob v2 {@code {Cdr, Chargeables}}) is
+ * what this bean reads — the SAME stream the call and chargeable categories read. It keeps the entries whose
+ * {@code Cdr.ServiceGroup} is 30 and builds one row each; every other service group is not its business.
+ *
+ * <p>One pair of tables per tier schema: {@code sum_ad_<window token>_30} ({@code 30} = the ad service group,
+ * fixed). The row's {@code tup_tenant} is the tier the drain serves — the schema's own name — never read from the
+ * blob. A per-window subclass adds only {@link #window()}.
  */
 public abstract class AdSummaryBean implements SummaryBean<AdSummary> {
 
     private static final Logger LOG = Logger.getLogger(AdSummaryBean.class);
     private static final AdSummaryGenerator GENERATOR = new AdSummaryGenerator();   // stateless, shared
 
-    /** The outbox {@code entity_type} the ad category consumes — PINNED (design §3 item 7). */
-    public static final String ENTITY_TYPE = "ad_cdr";
+    /** The outbox {@code entity_type} the ad category consumes: the call's own stream (ad-is-a-call §5). */
+    public static final String ENTITY_TYPE = "cdr";
     /** The ad service group, the fixed suffix of the table. */
     public static final String TABLE_SUFFIX = "30";
 
@@ -103,30 +105,51 @@ public abstract class AdSummaryBean implements SummaryBean<AdSummary> {
     }
 
     @Override
-    public List<AdSummary> buildBatch(byte[] decompressedRowJson) {
-        List<AdCdrEntry> entries = decode(decompressedRowJson);
-        List<AdTier> kept = new ArrayList<>();
+    public List<AdSummary> buildBatch(byte[] decompressedRowJson, String tier) {
+        requireTier(tier);
+        List<AdCallEntry> entries = decode(decompressedRowJson);
+        List<AdView> kept = new ArrayList<>();
         int skippedMalformed = 0;
-        for (AdCdrEntry entry : entries) {
-            if (entry == null || entry.cdr() == null || entry.cdr().startTime() == null) {
+        int unreadableMeta = 0;
+        for (AdCallEntry entry : entries) {
+            if (entry == null || entry.cdr() == null) {
                 skippedMalformed++;                          // never NPE the whole drain on one bad entry
                 continue;
             }
-            List<AdLeg> tiers = entry.tiers();
-            if (tiers.isEmpty()) {
-                kept.add(new AdTier(entry.cdr(), null));     // nothing admitted: one failed row on the entry tenant
+            if (!entry.cdr().isAdView()) {
+                continue;                                    // a call of another service group: not this bean's
+            }
+            if (entry.cdr().startTime() == null) {
+                skippedMalformed++;                          // no start = no window to count it in
                 continue;
             }
-            for (AdLeg tier : tiers) {                       // EVERY tier — the advertiser's row and the resellers' rows above it
-                if (tier == null) { skippedMalformed++; continue; }
-                kept.add(new AdTier(entry.cdr(), tier));
+            AdViewFacts facts = AdMetaData.parse(blobMapper, entry.cdr().additionalMetaData());
+            if (facts == null) {
+                unreadableMeta++;                            // the view still counts, without its facts
+                facts = AdViewFacts.NONE;
             }
+            kept.add(new AdView(entry.cdr(), facts, entry.customerLeg(), tier));
         }
         if (skippedMalformed > 0) {
-            LOG.warnf("bean=%s skipped %d malformed ad blob entr%s (null cdr/StartTime/tier)", name,
-                    skippedMalformed, skippedMalformed == 1 ? "y" : "ies");
+            LOG.warnf("bean=%s tier=%s skipped %d malformed blob entr%s (null cdr / an ad view with no StartTime)", name,
+                    tier, skippedMalformed, skippedMalformed == 1 ? "y" : "ies");
+        }
+        if (unreadableMeta > 0) {
+            LOG.warnf("bean=%s tier=%s %d ad view(s) carry an AdditionalMetaData that is not a JSON object — counted "
+                    + "without campaign, zone, site, app, completed, credited", name, tier, unreadableMeta);
         }
         return GENERATOR.generate(kept, window());
+    }
+
+    /**
+     * The row's {@code tup_tenant} is the tier, so a build without one is refused. That is a wiring fault, not a
+     * data fault — the drain checks the same before it reads a row, so this can never dead-letter a batch.
+     */
+    private void requireTier(String tier) {
+        if (tier == null || tier.isBlank()) {
+            throw new IllegalStateException("bean '" + name + "' needs the tier (the schema it is drained for): "
+                    + "every sum_ad row carries it as tup_tenant");
+        }
     }
 
     @Override
@@ -158,12 +181,12 @@ public abstract class AdSummaryBean implements SummaryBean<AdSummary> {
         return s;
     }
 
-    private List<AdCdrEntry> decode(byte[] json) {
+    private List<AdCallEntry> decode(byte[] json) {
         try {
             return blobMapper.readValue(json,
-                    blobMapper.getTypeFactory().constructCollectionType(List.class, AdCdrEntry.class));
+                    blobMapper.getTypeFactory().constructCollectionType(List.class, AdCallEntry.class));
         } catch (IOException e) {
-            throw new IllegalArgumentException("malformed ad_cdr outbox blob for " + name, e);
+            throw new IllegalArgumentException("malformed cdr outbox blob for " + name, e);
         }
     }
 

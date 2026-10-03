@@ -15,6 +15,12 @@ import com.telcobright.summary.outbox.spi.OutboxStore;
  */
 public interface UnitOfWork extends AutoCloseable {
 
+    /**
+     * The tenant schema this unit of work runs in, by its own name (a PostgreSQL schema, a MySQL database) —
+     * what an ad summary row carries as {@code tup_tenant}. Never null: the drain hands it to the bean as the tier.
+     */
+    String schema();
+
     SummaryStore store();
 
     OutboxStore outbox();

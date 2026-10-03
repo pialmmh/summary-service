@@ -168,6 +168,15 @@ public final class CdrTestSupport {
         }
     }
 
+    /** ONE entry as JSON text — to mix voice entries with another category's in a hand-written batch. */
+    public static String entryJson(CdrBlobEntry entry) {
+        try {
+            return MAPPER.writeValueAsString(entry);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /** The encoded outbox `data` value (base64(gzip(json))) — what billing writes. */
     public static String encodedBatch(List<CdrBlobEntry> entries) {
         return OutboxCodec.encode(batchJson(entries));

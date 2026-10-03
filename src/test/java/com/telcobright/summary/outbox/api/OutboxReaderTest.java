@@ -6,6 +6,8 @@ import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.engine.api.SummaryEngine;
+import com.telcobright.summary.outbox.internal.OutboxCodec;
+import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.FakeOutboxStore;
 import com.telcobright.summary.testkit.FakeSummaryStore;
@@ -214,6 +216,41 @@ class OutboxReaderTest {
 
         assertEquals(0, outbox.readOffset(ENTITY, BEAN), "offset pinned — nothing consumed");
         assertTrue(outbox.deadLetters().isEmpty(), "a config fault is not poison — no data is dead-lettered");
+    }
+
+    @Test
+    void the_drain_hands_the_schema_it_serves_to_the_bean_as_the_tier() {
+        // an ad row's tup_tenant is the tier; the blob does not name it — the drain does, from its unit of work
+        FakeOutboxStore outbox = new FakeOutboxStore();
+        outbox.seed(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(AdTestSupport.at(2026, 9, 29, 10, 0)))));
+        FakeSummaryStore store = new FakeSummaryStore();
+        FakeUnitOfWorkFactory factory = new FakeUnitOfWorkFactory(store, outbox);
+        factory.schema = "res_44_7";
+
+        assertEquals(1, reader(factory).drain(AdTestSupport.dailyBean()));
+
+        String insert = store.firstSqlMatching("insert into sum_ad_day_30");
+        assertTrue(insert != null && insert.contains("values ('res_44_7',61,"), "tup_tenant is the drained schema's own name: " + insert);
+    }
+
+    @Test
+    void a_unit_of_work_that_names_no_schema_fails_the_drain_and_never_dead_letters() {
+        // a wiring fault must not look like a poison row: it fails before a row is read, every time, loudly
+        FakeOutboxStore outbox = new FakeOutboxStore();
+        outbox.seed(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(AdTestSupport.at(2026, 9, 29, 10, 0)))));
+        FakeSummaryStore store = new FakeSummaryStore();
+        FakeUnitOfWorkFactory factory = new FakeUnitOfWorkFactory(store, outbox);
+        factory.schema = null;
+        OutboxReader reader = reader(factory);
+
+        for (int attempt = 0; attempt < QUARANTINE_AFTER + 2; attempt++) {
+            assertThrows(IllegalStateException.class, () -> reader.drainOnce(AdTestSupport.dailyBean()));
+            assertTrue(factory.last.rolledBack);
+        }
+
+        assertTrue(outbox.deadLetters().isEmpty(), "no data is dead-lettered over a wiring fault");
+        assertEquals(0, outbox.readOffset(ENTITY, "dailyAdSummary"), "offset pinned");
+        assertEquals(null, store.firstSqlMatching("insert"), "nothing written");
     }
 
     @Test

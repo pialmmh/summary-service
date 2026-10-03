@@ -1,63 +1,68 @@
 package com.telcobright.summary.summarybeans.ad.internal;
 
 import com.telcobright.summary.bean.spi.WindowSize;
-import com.telcobright.summary.summarybeans.ad.model.AdCdr;
-import com.telcobright.summary.summarybeans.ad.model.AdLeg;
+import com.telcobright.summary.summarybeans.ad.model.AdCallCdr;
 import com.telcobright.summary.summarybeans.ad.model.AdSummary;
+import com.telcobright.summary.summarybeans.ad.model.AdView;
+import com.telcobright.summary.summarybeans.ad.model.AdViewFacts;
+import com.telcobright.summary.summarybeans.call.model.Chargeable;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 /**
- * Builds one {@link AdSummary} row from ONE tier of ONE ad call (design §2.9): the tier's tenant and partner
- * are the row's, the call's campaign / rule / zone / site / app / media / outcome the rest of the key; the
- * bucket is the call's {@code StartTime} truncated to the bean's window. A call nothing admitted (no leg) is one
- * row on the ENTRY tenant with the advertiser when one was known, else partner 0. Key strings are clipped to
- * their column widths so a fresh build keys identically to its reloaded row.
+ * Builds one {@link AdSummary} row from ONE ad view as ONE tier recorded it (ad-is-a-call §4.1, §5; brief S1).
  *
- * <p>The measures: {@code views} 1 always; {@code shown} when the ad reached the screen; {@code completed}
- * when the call cleared normally after being shown; {@code failed} when it did not clear normally;
- * {@code watchedsec} = the billsec; {@code chargedamount} = the tier's debit; {@code credited} when the free session
- * followed the view (the blob's {@code Credited}, ARCH-0001 ruling 5.5).
+ * <p>The key: the tier (the schema's own name — one pair of tables per tier schema, so {@code tup_tenant} is
+ * always it), the payer ({@code InPartnerId}), the campaign, the rule's code ({@code OriginatingCalledNumber}),
+ * the zone, the site, the app, the media kind ({@code Codec}), the outcome ({@code done} when {@code HangupCause}
+ * is {@code NORMAL_CLEARING}, else {@code failed}), and the bucket: the record's {@code StartTime} — the tenant's
+ * wall clock — cut to the bean's window. Key strings are cut to their column widths so a fresh build keys
+ * identically to its reloaded row.
+ *
+ * <p>The measures: {@code views} 1 always; {@code shown} when the record has an answer time; {@code completed}
+ * and {@code credited} as the view's facts say; {@code failed} when the cause is not a normal clearing;
+ * {@code watchedsec} = {@code DurationSec}, to the whole second (half up — the column is a whole number);
+ * {@code chargedamount} = the customer chargeable's billed amount, 0 without one.
  */
 final class AdSummaryBuilder {
 
-    static final String OUTCOME_UNKNOWN = "";
+    static final String OUTCOME_DONE = "done";
+    static final String OUTCOME_FAILED = "failed";
 
     private AdSummaryBuilder() {
     }
 
-    static AdSummary build(AdCdr cdr, AdLeg leg, WindowSize window) {
+    static AdSummary build(AdView view, WindowSize window) {
+        AdCallCdr cdr = view.cdr();
+        AdViewFacts facts = view.facts();
+        Chargeable charge = view.customerLeg();
+        boolean done = cdr.done();
+
         AdSummary s = new AdSummary();
-        boolean tier = leg != null;
-        s.tup_tenant = clip(orEmpty(tier && leg.tenant() != null ? leg.tenant() : cdr.tenant()), 100);
-        s.tup_partnerid = tier && leg.partnerId() != null ? leg.partnerId() : nz(cdr.inPartnerId());
-        s.tup_campaignid = nz(cdr.campaignId());
-        s.tup_rulecode = clip(orEmpty(cdr.ruleCode()), 20);
-        s.tup_zone = clip(orEmpty(cdr.zone()), 64);
-        s.tup_site = clip(orEmpty(cdr.site()), 64);
-        s.tup_app = clip(orEmpty(cdr.app()), 32);
-        s.tup_mediakind = clip(orEmpty(cdr.mediaKind()), 16);
-        s.tup_outcome = clip(orEmpty(cdr.outcome()), 32);
+        s.tup_tenant = clip(orEmpty(view.tier()), 100);
+        s.tup_partnerid = cdr.inPartnerId() == null ? 0 : cdr.inPartnerId();
+        s.tup_campaignid = facts.campaignId();
+        s.tup_rulecode = clip(orEmpty(cdr.originatingCalledNumber()), 20);
+        s.tup_zone = clip(orEmpty(facts.zone()), 64);
+        s.tup_site = clip(orEmpty(facts.site()), 64);
+        s.tup_app = clip(orEmpty(facts.app()), 32);
+        s.tup_mediakind = clip(orEmpty(cdr.codec()), 16);
+        s.tup_outcome = done ? OUTCOME_DONE : OUTCOME_FAILED;
         s.tup_starttime = window.bucketStart(cdr.startTime());
 
-        boolean shown = cdr.wasShown();
-        boolean done = cdr.done();
         s.views = 1;
-        s.shown = shown ? 1 : 0;
-        s.completed = done && shown ? 1 : 0;
-        s.credited = cdr.wasCredited() ? 1 : 0;
+        s.shown = cdr.wasShown() ? 1 : 0;
+        s.completed = facts.completed() ? 1 : 0;
+        s.credited = facts.credited() ? 1 : 0;
         s.failed = done ? 0 : 1;
-        s.watchedsec = nz(cdr.durationSec());
-        s.chargedamount = tier ? nzd(leg.billedAmount()) : BigDecimal.ZERO;
+        s.watchedsec = wholeSeconds(cdr.durationSec());
+        s.chargedamount = charge == null || charge.billedAmount() == null ? BigDecimal.ZERO : charge.billedAmount();
         return s;
     }
 
-    private static int nz(Integer v) {
-        return v == null ? 0 : v;
-    }
-
-    private static BigDecimal nzd(BigDecimal v) {
-        return v == null ? BigDecimal.ZERO : v;
+    private static long wholeSeconds(BigDecimal durationSec) {
+        return durationSec == null ? 0 : durationSec.setScale(0, RoundingMode.HALF_UP).longValue();
     }
 
     private static String orEmpty(String v) {

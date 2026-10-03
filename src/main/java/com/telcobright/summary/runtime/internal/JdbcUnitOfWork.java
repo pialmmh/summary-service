@@ -16,13 +16,20 @@ import java.sql.SQLException;
 final class JdbcUnitOfWork implements UnitOfWork {
 
     private final Connection connection;
+    private final String schema;
     private final SummaryStore store;
     private final OutboxStore outbox;
 
-    JdbcUnitOfWork(Connection connection) {
+    JdbcUnitOfWork(Connection connection, String schema) {
         this.connection = connection;
+        this.schema = schema;
         this.store = new JdbcSummaryStore(connection);
         this.outbox = new JdbcOutboxStore(connection);
+    }
+
+    @Override
+    public String schema() {
+        return schema;
     }
 
     @Override

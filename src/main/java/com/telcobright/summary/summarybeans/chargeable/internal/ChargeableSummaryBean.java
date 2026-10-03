@@ -98,7 +98,7 @@ public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSum
     }
 
     @Override
-    public List<ChargeableSummary> buildBatch(byte[] decompressedRowJson) {
+    public List<ChargeableSummary> buildBatch(byte[] decompressedRowJson, String tier) {
         List<CdrBlobEntry> entries = decode(decompressedRowJson);
         List<Chargeable> kept = new ArrayList<>();
         int skippedMalformed = 0;

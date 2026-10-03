@@ -8,6 +8,9 @@ import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.outbox.api.OutboxReader;
+import com.telcobright.summary.outbox.internal.OutboxCodec;
+import com.telcobright.summary.summarybeans.ad.internal.AdSummaryBean;
+import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
 import com.telcobright.summary.runtime.spi.UnitOfWork;
 import com.telcobright.summary.testkit.CdrTestSupport;
@@ -242,6 +245,41 @@ class OutboxConsumerIT {
         }
     }
 
+    @Test
+    void the_ad_beans_read_the_cdr_stream_and_carry_the_schema_they_are_drained_for() {
+        System.setProperty("summary.ddl.partition-start", "2026-09-01");
+        System.setProperty("summary.ddl.partition-days", "60");
+        try {
+            AdSummaryBean adDaily = AdTestSupport.dailyBean();
+            reader.ensureProvisioned(adDaily);
+            // ONE outbox row, as billing writes a batch: an ad view (group 30), its refused twin, and a voice call (group 10)
+            String voice = CdrTestSupport.entryJson(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 9, 29, 10, 0)));
+            seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchJson(List.of(
+                    AdTestSupport.leafView(AdTestSupport.at(2026, 9, 29, 10, 0)).json(),
+                    AdTestSupport.refusedView(AdTestSupport.at(2026, 9, 29, 11, 0)).json(), voice))));
+
+            assertEquals(1, reader.drain(adDaily), "the ad bean drains the call's own stream, entity cdr");
+
+            assertEquals(2, count("sum_ad_day_30"), "the done view and the refused one key apart; the voice call is not an ad view");
+            assertEquals(2, queryLong("select coalesce(sum(views),0) from sum_ad_day_30"));
+            assertEquals(2, queryLong("select count(*) from sum_ad_day_30 where tup_tenant='" + DB + "'"),
+                    "tup_tenant is the schema's own name: the database this unit of work runs in");
+            assertEquals(0, new java.math.BigDecimal("0.50").compareTo(
+                    queryDecimal("select chargedamount from sum_ad_day_30 where tup_outcome='done'")));
+            assertEquals(1, queryLong("select failed from sum_ad_day_30 where tup_outcome='failed'"));
+            assertEquals(1, offset("dailyAdSummary"), "its own bookmark on the shared stream");
+
+            assertEquals(1, reader.drain(bean), "the voice bean reads the SAME row from its own bookmark");
+            assertEquals(1, sumTotalCalls(), "and counts only its group-10 call");
+
+            assertEquals(0, reader.drain(adDaily), "re-drain is a no-op (exactly once per bean)");
+            assertEquals(2, queryLong("select coalesce(sum(views),0) from sum_ad_day_30"));
+        } finally {
+            System.clearProperty("summary.ddl.partition-start");
+            System.clearProperty("summary.ddl.partition-days");
+        }
+    }
+
     // ---- schema + helpers ----
 
     /** Mirrors OutboxReaper.reapOnce over a real UnitOfWork: min(last_offset) across the active set, then delete. */
@@ -276,6 +314,8 @@ class OutboxConsumerIT {
         exec(conn, "create table summary_affected (id bigint not null auto_increment, entity_type varchar(32) not null,"
                 + " op enum('add','subtract') not null default 'add',"
                 + " data longtext not null, primary key(id), key ix_entity(entity_type,id)) engine=innodb default charset=utf8mb4");
+        exec(conn, "drop table if exists sum_ad_day_30");
+        exec(conn, "drop table if exists sum_ad_hr_30");
         exec(conn, "drop table if exists sum_chargeable_day");
         exec(conn, "drop table if exists sum_chargeable_hr");
         exec(conn, "create table summary_offset (entity_type varchar(32) not null, bean_name varchar(64) not null,"

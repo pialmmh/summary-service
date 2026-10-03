@@ -131,7 +131,7 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
     }
 
     @Override
-    public List<CallSummary> buildBatch(byte[] decompressedRowJson) {
+    public List<CallSummary> buildBatch(byte[] decompressedRowJson, String tier) {
         List<CdrBlobEntry> entries = decode(decompressedRowJson);
         List<RatedCall> kept = new ArrayList<>(entries.size());
         int skippedMalformed = 0;
