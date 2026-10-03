@@ -27,9 +27,14 @@ import java.util.Map;
  *   <li>B1 — the wire onto the {@code cdr}: {@code serviceGroup → ServiceGroup}, {@code hangupCause → HangupCause},
  *       {@code channelReadCodecName → Codec}, {@code additionalMetaData → AdditionalMetaData}, the routes, the times
  *       ({@code answerTime} may be absent: never shown);</li>
- *   <li>B3 — pre-rated: ONE customer {@code acc_chargeable} from the record — the settled money
- *       ({@code inPartnerCost}) or, when the record carries none, the units ({@code packageAmount}), the unit, the
- *       rate, the prefix; a failed view gives a chargeable of zero;</li>
+ *   <li>B3 — pre-rated: ONE customer {@code acc_chargeable} from the record ({@code servicegroup} 30,
+ *       {@code assignedDirection} 1): {@code BilledAmount} = the units ({@code packageAmount}) when the tier paid in
+ *       units, else the settled money ({@code inPartnerCost}); {@code idBilledUom} = the wire's unit;
+ *       {@code Quantity} = the seconds watched; the rate, the prefix; {@code transactionTime} = the cdr's
+ *       {@code StartTime}. A refused view gives a chargeable of zero that carries BDT (ruled on SS-0001);</li>
+ *   <li>its BC-0002: {@code ChargingStatus} 1 = shown ({@code AnswerTime} present), {@code Duration1} and
+ *       {@code RoundedDuration} = {@code DurationSec}, the cause in {@code HangupCause} AND in
+ *       {@code AreaCodeOrLata};</li>
  *   <li>B9 — the entry is {@code {Cdr, Chargeables}} with billing-core's own field names (its {@code cdr.java} and
  *       {@code acc_chargeable.java} public fields), a date as the array its mapper writes, nulls left out.</li>
  * </ul>
@@ -43,6 +48,7 @@ public final class BillingStandIn {
             .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
             .setNodeFactory(JsonNodeFactory.withExactBigDecimals(true));
     private static final DateTimeFormatter WIRE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final String MONEY = "BDT";
 
     private BillingStandIn() {
     }
@@ -93,8 +99,9 @@ public final class BillingStandIn {
         copyTime(wire, "endTime", cdr, "EndTime");
         copyTime(wire, "answerTime", cdr, "ConnectTime");
         copyTime(wire, "answerTime", cdr, "AnswerTime");
-        cdr.put("ChargingStatus", wire.path("durationSec").decimalValue().signum() > 0 ? 1 : 0);
+        cdr.put("ChargingStatus", wire.hasNonNull("answerTime") ? 1 : 0);
         copyNumber(wire, "pdd", cdr, "PDD");
+        copyText(wire, "hangupCause", cdr, "AreaCodeOrLata");
         copyText(wire, "outgoingRoute", cdr, "OutgoingRoute");
         copyText(wire, "receiverIp", cdr, "TerminatingIP");
         copyTime(wire, "startTime", cdr, "StartTime");
@@ -105,6 +112,8 @@ public final class BillingStandIn {
         copyNumber(wire, "inPartnerCost", cdr, "InPartnerCost");
         copyNumber(wire, "supplierCost", cdr, "OutPartnerCost");
         copyText(wire, "channelReadCodecName", cdr, "Codec");
+        copyNumber(wire, "durationSec", cdr, "RoundedDuration");
+        copyNumber(wire, "durationSec", cdr, "Duration1");
         copyText(wire, "callId", cdr, "UniqueBillId");
         copyText(wire, "additionalMetaData", cdr, "AdditionalMetaData");
         copyTime(wire, "startTime", cdr, "SignalingStartTime");
@@ -118,19 +127,20 @@ public final class BillingStandIn {
     }
 
     private static ObjectNode customerChargeableOf(JsonNode wire) {
-        BigDecimal money = decimal(wire, "inPartnerCost");
-        BigDecimal units = decimal(wire, "packageAmount");
+        String unit = wire.hasNonNull("inPartnerUom") ? wire.get("inPartnerUom").asText() : MONEY;   // a refused view names none: BDT
+        boolean paidInUnits = !MONEY.equalsIgnoreCase(unit.trim());
         ObjectNode leg = JSON.createObjectNode();
         leg.put("id", 0);
         copyText(wire, "callId", leg, "uniqueBillId");
         copyTime(wire, "startTime", leg, "transactionTime");
         leg.put("assignedDirection", 1);
+        leg.put("glAccountId", 0);
         leg.put("servicegroup", wire.path("serviceGroup").asInt());
         leg.put("servicefamily", wire.path("serviceGroup").asInt());
         leg.put("ProductId", 0);
-        copyText(wire, "inPartnerUom", leg, "idBilledUom");
-        leg.put("BilledAmount", money.signum() != 0 ? money : units);
-        leg.put("Quantity", BigDecimal.ONE);
+        leg.put("idBilledUom", unit);
+        leg.put("BilledAmount", decimal(wire, paidInUnits ? "packageAmount" : "inPartnerCost"));
+        leg.put("Quantity", decimal(wire, "durationSec"));
         copyNumber(wire, "callRatePerMinBDT", leg, "unitPriceOrCharge");
         copyText(wire, "matchPrefixCustomer", leg, "Prefix");
         return leg;

@@ -10,14 +10,15 @@
 -- at first use; a test keeps this file and the rendered DDL equal, column for column.
 --
 --   * the columns are AdSummary.INSERT_COLUMNS — the same names and order as on MySQL;
+--   * what a tier was charged is TWO measures, never added: chargedamount is MONEY (the charges
+--     whose unit is BDT), chargedunits is what was paid in a package's units (ruled on SS-0001);
 --   * tup_tenant is ALWAYS the schema's own name (one pair per tier now);
 --   * tup_app is 64 wide (it was 32; ad-sphere's app name is 64);
 --   * tup_starttime is TIMESTAMP WITHOUT TIME ZONE: the TENANT's wall clock (Asia/Dhaka),
 --     the window's start — the day at 00:00:00, the hour at HH:00:00. Never the JVM's zone;
 --   * unquoted identifiers, so PostgreSQL stores them in lower case;
---   * a PLAIN table (not partitioned): see docs/ad-as-call/SS-0001-update.md §2 F1. The
---     partitioned form (the full daily set made in the same transaction) is rendered when
---     the profile says summary.ddl.postgres-partitions: true.
+--   * a PLAIN table, not partitioned (ruled on SS-0001: a summary table holds one row per key
+--     per day or hour; there is no partitioned form on PostgreSQL). MySQL keeps its partitions.
 --
 -- Rights (prime-context's provisioning, R5): summary_service has USAGE + CREATE on the tier
 -- schema and owns these tables; ad_sphere reads them through
@@ -42,7 +43,8 @@ CREATE TABLE IF NOT EXISTS sum_ad_day_30 (
     credited       BIGINT        NOT NULL DEFAULT 0,    -- AdditionalMetaData.credited
     failed         BIGINT        NOT NULL DEFAULT 0,
     watchedsec     BIGINT        NOT NULL DEFAULT 0,    -- cdr.DurationSec
-    chargedamount  NUMERIC(18,6) NOT NULL DEFAULT 0,    -- the customer chargeable's BilledAmount
+    chargedamount  NUMERIC(18,6) NOT NULL DEFAULT 0,    -- MONEY: the customer chargeable's BilledAmount when its unit is BDT
+    chargedunits   NUMERIC(18,6) NOT NULL DEFAULT 0,    -- UNITS: the same amount when the tier paid from a package
     PRIMARY KEY (id, tup_starttime)
 );
 CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_starttime ON sum_ad_day_30 (tup_starttime);
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS sum_ad_hr_30 (
     failed         BIGINT        NOT NULL DEFAULT 0,
     watchedsec     BIGINT        NOT NULL DEFAULT 0,
     chargedamount  NUMERIC(18,6) NOT NULL DEFAULT 0,
+    chargedunits   NUMERIC(18,6) NOT NULL DEFAULT 0,
     PRIMARY KEY (id, tup_starttime)
 );
 CREATE INDEX IF NOT EXISTS sum_ad_hr_30_ix_starttime ON sum_ad_hr_30 (tup_starttime);

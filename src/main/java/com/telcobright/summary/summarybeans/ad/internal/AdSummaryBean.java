@@ -178,6 +178,7 @@ public abstract class AdSummaryBean implements SummaryBean<AdSummary> {
         s.failed = rs.getLong("failed");
         s.watchedsec = rs.getLong("watchedsec");
         s.chargedamount = dec(rs, "chargedamount");
+        s.chargedunits = dec(rs, "chargedunits");
         return s;
     }
 

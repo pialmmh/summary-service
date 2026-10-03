@@ -34,6 +34,7 @@ final class SumAdDdl {
                 + "failed BIGINT NOT NULL DEFAULT 0,"
                 + "watchedsec BIGINT NOT NULL DEFAULT 0,"
                 + "chargedamount DECIMAL(18,6) NOT NULL DEFAULT 0,"
+                + "chargedunits DECIMAL(18,6) NOT NULL DEFAULT 0,"
                 + "PRIMARY KEY (id, tup_starttime),"           // partition column must be in every unique key
                 + "KEY ix_starttime (tup_starttime),"
                 + "KEY ix_tenant_partner (tup_tenant, tup_partnerid, tup_starttime)"

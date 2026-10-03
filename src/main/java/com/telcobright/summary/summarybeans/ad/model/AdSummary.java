@@ -13,14 +13,19 @@ import java.time.LocalDateTime;
  * database: a reseller's summary is the rows where {@code tup_tenant} = its database) and partner, the campaign,
  * the rule code, the zone, the site, the app, the media kind and the outcome, plus the window bucket
  * ({@code tup_starttime} = the call's start truncated to the window). Measures all {@code +=}; {@code multiply}
- * scales ALL of them (net-new stays clean). {@code chargedamount} is the tier's debit in BDT (DECIMAL(18,6)).
+ * scales ALL of them (net-new stays clean).
+ *
+ * <p>What a tier was charged is TWO measures, never added to each other (the architect's ruling on SS-0001, decide
+ * 3): {@code chargedamount} is MONEY — the tier's charge in BDT; {@code chargedunits} is what a tier paid in the
+ * units of a package (seconds, views). Both DECIMAL(18,6). A row can carry both: views of one key paid in money by
+ * one account and in units by another.
  */
 public final class AdSummary implements SummaryEntity<AdSummary> {
 
     /** INSERT column list (CSV, in {@link #insertValues()} order, WITHOUT id). */
     public static final String INSERT_COLUMNS =
             "tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
-                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount";
+                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits";
 
     public static final String BUCKET_COLUMN = "tup_starttime";
 
@@ -45,7 +50,10 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
     public long credited;
     public long failed;
     public long watchedsec;
+    /** Money: the charges whose unit is BDT. */
     public BigDecimal chargedamount = BigDecimal.ZERO;
+    /** Units: the charges paid from a package, in the package's own unit. Never added to the money. */
+    public BigDecimal chargedunits = BigDecimal.ZERO;
 
     @Override
     public Long id() {
@@ -82,6 +90,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         failed += o.failed;
         watchedsec += o.watchedsec;
         chargedamount = chargedamount.add(o.chargedamount);
+        chargedunits = chargedunits.add(o.chargedunits);
     }
 
     /** Scales EVERY measure, {@code views} included (the SUBTRACT path negates a copy). */
@@ -94,6 +103,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         failed *= factor;
         watchedsec *= factor;
         chargedamount = chargedamount.multiply(BigDecimal.valueOf(factor));
+        chargedunits = chargedunits.multiply(BigDecimal.valueOf(factor));
     }
 
     @Override
@@ -116,6 +126,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         c.failed = failed;
         c.watchedsec = watchedsec;
         c.chargedamount = chargedamount;
+        c.chargedunits = chargedunits;
         return c;
     }
 
@@ -138,6 +149,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
                 + "," + SqlLiterals.num(failed)
                 + "," + SqlLiterals.num(watchedsec)
                 + "," + SqlLiterals.num(chargedamount)
+                + "," + SqlLiterals.num(chargedunits)
                 + ")";
     }
 
@@ -149,7 +161,8 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
                 + ",credited=" + SqlLiterals.num(credited)
                 + ",failed=" + SqlLiterals.num(failed)
                 + ",watchedsec=" + SqlLiterals.num(watchedsec)
-                + ",chargedamount=" + SqlLiterals.num(chargedamount);
+                + ",chargedamount=" + SqlLiterals.num(chargedamount)
+                + ",chargedunits=" + SqlLiterals.num(chargedunits);
     }
 
     /** The date-partition key for this row: {@code tup_starttime}. */

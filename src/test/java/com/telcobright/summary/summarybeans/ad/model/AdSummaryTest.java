@@ -31,6 +31,7 @@ class AdSummaryTest {
         s.failed = 0;
         s.watchedsec = 15;
         s.chargedamount = new BigDecimal("0.50");
+        s.chargedunits = new BigDecimal("3");
         return s;
     }
 
@@ -45,6 +46,7 @@ class AdSummaryTest {
         assertEquals(0, a.failed);
         assertEquals(30, a.watchedsec);
         assertEquals(new BigDecimal("1.00"), a.chargedamount);
+        assertEquals(new BigDecimal("6"), a.chargedunits, "units add to units, never to the money");
         assertEquals("res_44", a.tup_tenant, "dimensions never merge");
         assertEquals(61, a.tup_partnerid);
     }
@@ -58,6 +60,7 @@ class AdSummaryTest {
         assertEquals(-1, a.shown);
         assertEquals(-15, a.watchedsec);
         assertEquals(new BigDecimal("-0.50"), a.chargedamount);
+        assertEquals(new BigDecimal("-3"), a.chargedunits);
     }
 
     @Test
@@ -82,6 +85,7 @@ class AdSummaryTest {
         assertEquals(a.tupleKey(), c.tupleKey());
         assertEquals(a.views, c.views);
         assertEquals(a.chargedamount, c.chargedamount);
+        assertEquals(a.chargedunits, c.chargedunits);
     }
 
     @Test
@@ -90,9 +94,9 @@ class AdSummaryTest {
         String values = a.insertValues();
 
         assertEquals(AdSummary.INSERT_COLUMNS.split(",").length, values.split(",").length, "one value per INSERT column");
-        assertTrue(values.startsWith("('res_44',61,5,'1001','dhaka-01','','wifi','video','done','2026-09-29 00:00:00',1,1,1,0,0,15,0.50)"),
+        assertTrue(values.startsWith("('res_44',61,5,'1001','dhaka-01','','wifi','video','done','2026-09-29 00:00:00',1,1,1,0,0,15,0.50,3)"),
                 "dimension order matches the column list: " + values);
-        assertEquals("views=1,shown=1,completed=1,credited=0,failed=0,watchedsec=15,chargedamount=0.50", a.updateAssignments(),
+        assertEquals("views=1,shown=1,completed=1,credited=0,failed=0,watchedsec=15,chargedamount=0.50,chargedunits=3", a.updateAssignments(),
                 "UPDATE assigns measures only");
         assertEquals("'2026-09-29 00:00:00'", a.bucketLiteral(), "partition-pruning literal");
     }

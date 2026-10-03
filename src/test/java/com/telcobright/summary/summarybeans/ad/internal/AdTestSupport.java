@@ -60,8 +60,9 @@ public final class AdTestSupport {
 
     /**
      * A view refused before anyone was admitted (no rule matched): ONE record, on the entry tenant, no answer
-     * time, 0 seconds, its cause, a chargeable of zero, the tenant's own operator partner as the payer (B4: a
-     * record always names one) — and the ZONE as the called number, as the switch writes it when no rule has a code.
+     * time, 0 seconds, its cause, a chargeable of zero IN BDT (ruled: a refused view is money 0), the tenant's own
+     * operator partner as the payer (B4: a record always names one) — and the ZONE as the called number, as the
+     * switch writes it when no rule has a code.
      */
     public static View refusedView(LocalDateTime start) {
         return new View(start).partner(1).cause("NO_RULE").neverShown().watched("0").charge("0").media(null)
@@ -101,6 +102,7 @@ public final class AdTestSupport {
         public View neverShown() { this.shown = false; return this; }
         public View watched(String seconds) { this.watched = seconds; return this; }
         public View charge(String amount) { this.charge = amount; return this; }
+        /** The unit the tier paid in: {@code BDT} is money; a package's unit ({@code TF_s}, {@code OTH_ea}) is units; null = none named. */
         public View uom(String unit) { this.uom = unit; return this; }
         public View rule(String code) { this.rule = code; return this; }
         public View media(String kind) { this.media = kind; return this; }
@@ -131,7 +133,7 @@ public final class AdTestSupport {
             cdr.append(",\"DurationSec\":").append(watched);
             cdr.append(",\"EndTime\":").append(date(start.plusSeconds(20)));
             if (shown) cdr.append(",\"ConnectTime\":").append(date(start.plusSeconds(1))).append(",\"AnswerTime\":").append(date(start.plusSeconds(1)));
-            cdr.append(",\"ChargingStatus\":").append(new BigDecimal(watched).signum() > 0 ? 1 : 0);
+            cdr.append(",\"ChargingStatus\":").append(shown ? 1 : 0);          // group 30: 1 = shown (billing-core BC-0002)
             cdr.append(",\"OutgoingRoute\":").append(quoted(zone == null ? "" : zone)).append(",\"TerminatingIP\":\"10.10.188.40\"");
             cdr.append(",\"StartTime\":").append(date(start));
             if (partner != null) cdr.append(",\"InPartnerId\":").append(partner);
@@ -143,11 +145,13 @@ public final class AdTestSupport {
             cdr.append(",\"SignalingStartTime\":").append(date(start));
             cdr.append(",\"ResellerHierarchy\":\"btcl > res_44\",\"ChannelCallUuid\":\"2f6c1c1e\"");
             if (cause != null) cdr.append(",\"HangupCause\":").append(quoted(cause));
-            cdr.append(",\"InPartnerUom\":").append(quoted(uom)).append(",\"IdPackageAccount\":3061,\"PackageAmount\":0}");
+            if (uom != null) cdr.append(",\"InPartnerUom\":").append(quoted(uom));
+            cdr.append(",\"IdPackageAccount\":3061,\"PackageAmount\":0}");
 
             String chargeable = "{\"id\":0,\"idEvent\":0,\"transactionTime\":" + date(start) + ",\"assignedDirection\":1,\"glAccountId\":0,"
-                    + "\"servicegroup\":30,\"servicefamily\":30,\"ProductId\":0,\"idBilledUom\":" + quoted(uom) + ",\"BilledAmount\":" + charge
-                    + ",\"Quantity\":1,\"unitPriceOrCharge\":" + charge + ",\"Prefix\":\"10\",\"RateId\":0,\"idBillingrule\":0}";
+                    + "\"servicegroup\":30,\"servicefamily\":30,\"ProductId\":0," + (uom == null ? "" : "\"idBilledUom\":" + quoted(uom) + ",")
+                    + "\"BilledAmount\":" + charge + ",\"Quantity\":" + watched + ",\"unitPriceOrCharge\":" + charge
+                    + ",\"Prefix\":\"10\",\"RateId\":0,\"idBillingrule\":0}";
             return "{\"Cdr\":" + cdr + ",\"Chargeables\":[" + (noChargeable ? "" : chargeable) + "]}";
         }
 
@@ -209,5 +213,9 @@ public final class AdTestSupport {
 
     public static BigDecimal totalCharged(Collection<AdSummary> rows) {
         return rows.stream().map(r -> r.chargedamount).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    public static BigDecimal totalUnits(Collection<AdSummary> rows) {
+        return rows.stream().map(r -> r.chargedunits).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 }

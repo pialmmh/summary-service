@@ -99,7 +99,8 @@ class AdSummaryBeanTest {
         assertEquals(0, s.shown);
         assertEquals(0, s.completed);
         assertEquals(1, s.failed);
-        assertEquals(0, s.chargedamount.compareTo(BigDecimal.ZERO), "a chargeable of zero");
+        assertEquals(0, s.chargedamount.compareTo(BigDecimal.ZERO), "a chargeable of zero, in BDT: money 0");
+        assertEquals(0, s.chargedunits.compareTo(BigDecimal.ZERO), "and no units");
     }
 
     @Test
@@ -207,13 +208,50 @@ class AdSummaryBeanTest {
     }
 
     @Test
-    void the_charged_amount_is_the_customer_chargeables_billed_amount() {
+    void the_charged_amount_is_the_customer_chargeables_billed_amount_when_its_unit_is_money() {
         AdSummary charged = dailyBean().buildBatch(batchOf(leafView(MORNING).charge("0.75")), LEAF).get(0);
         AdSummary noLeg = dailyBean().buildBatch(batchOf(leafView(MORNING).noChargeable()), LEAF).get(0);
 
-        assertEquals(0, charged.chargedamount.compareTo(new BigDecimal("0.75")));
+        assertEquals(0, charged.chargedamount.compareTo(new BigDecimal("0.75")), "a leg in BDT is money");
+        assertEquals(0, charged.chargedunits.compareTo(BigDecimal.ZERO), "and is not counted as units too");
         assertEquals(0, noLeg.chargedamount.compareTo(BigDecimal.ZERO), "an entry without a chargeable still counts the view, charge 0");
+        assertEquals(0, noLeg.chargedunits.compareTo(BigDecimal.ZERO));
         assertEquals(1, noLeg.views);
+    }
+
+    @Test
+    void a_tier_that_pays_from_a_package_is_counted_in_units_never_in_money() {
+        // the settle step charged 10 seconds of a package (TF_s), or one view of one (OTH_ea): BilledAmount holds the units
+        AdSummary seconds = dailyBean().buildBatch(batchOf(leafView(MORNING).uom("TF_s").charge("10")), LEAF).get(0);
+        AdSummary each = dailyBean().buildBatch(batchOf(leafView(MORNING).uom("OTH_ea").charge("1")), LEAF).get(0);
+
+        assertEquals(0, seconds.chargedamount.compareTo(BigDecimal.ZERO), "units are never money");
+        assertEquals(0, seconds.chargedunits.compareTo(new BigDecimal("10")));
+        assertEquals(0, each.chargedamount.compareTo(BigDecimal.ZERO));
+        assertEquals(0, each.chargedunits.compareTo(BigDecimal.ONE));
+    }
+
+    @Test
+    void money_and_units_of_the_same_key_stay_two_measures_in_one_row() {
+        // two views of one key in one tier: one account pays 0.50 BDT, another pays 10 units of its package
+        Collection<AdSummary> rows = rollup(dailyBean(), LEAF, List.of(leafView(MORNING), leafView(MORNING.plusMinutes(5)).uom("TF_s").charge("10")));
+
+        assertEquals(1, rows.size(), "the unit is not in the key: one row");
+        AdSummary row = rows.iterator().next();
+        assertEquals(2, row.views);
+        assertEquals(0, row.chargedamount.compareTo(new BigDecimal("0.50")), "the money alone — not 10.50");
+        assertEquals(0, row.chargedunits.compareTo(new BigDecimal("10")), "the units alone");
+    }
+
+    @Test
+    void money_is_the_unit_bdt_however_it_is_written_and_a_leg_that_names_no_unit_is_not_money() {
+        AdSummary lower = dailyBean().buildBatch(batchOf(leafView(MORNING).uom(" bdt ")), LEAF).get(0);
+        AdSummary unnamed = dailyBean().buildBatch(batchOf(leafView(MORNING).uom(null)), LEAF).get(0);
+
+        assertEquals(0, lower.chargedamount.compareTo(new BigDecimal("0.50")));
+        assertEquals(0, lower.chargedunits.compareTo(BigDecimal.ZERO));
+        assertEquals(0, unnamed.chargedamount.compareTo(BigDecimal.ZERO), "no unit on the leg: never taken for money");
+        assertEquals(0, unnamed.chargedunits.compareTo(new BigDecimal("0.50")));
     }
 
     @Test
@@ -358,6 +396,7 @@ class AdSummaryBeanTest {
         AdSummary delta = dailyBean().buildBatch(batchOf(leafView(MORNING)), LEAF).get(0);
         AdSummary existing = delta.cloneWithFakeId();
         existing.merge(delta);                      // the reseller's tier at 2 views, 1.00
+        existing.chargedunits = new BigDecimal("7"); // and 7 units from views paid out of a package
         existing.setId(100L);
         cache.populateExisting(existing);
 
@@ -366,6 +405,7 @@ class AdSummaryBeanTest {
         AdSummary row = cache.rows().iterator().next();
         assertEquals(1, row.views, "one view taken back");
         assertEquals(0, row.chargedamount.compareTo(new BigDecimal("0.50")), "its charge too");
+        assertEquals(0, row.chargedunits.compareTo(new BigDecimal("7")), "the view was paid in money: the units stay");
         assertEquals(1, delta.views, "the caller's delta is NOT negated in place");
         AdSummary neverLoaded = dailyBean().buildBatch(batchOf(leafView(MORNING).zone("other-zone")), LEAF).get(0);
         assertThrows(IllegalStateException.class, () -> cache.merge(neverLoaded, MergeMode.SUBTRACT), "a window not loaded cannot be decremented");

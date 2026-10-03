@@ -266,6 +266,8 @@ class OutboxConsumerIT {
                     "tup_tenant is the schema's own name: the database this unit of work runs in");
             assertEquals(0, new java.math.BigDecimal("0.50").compareTo(
                     queryDecimal("select chargedamount from sum_ad_day_30 where tup_outcome='done'")));
+            assertEquals(0, java.math.BigDecimal.ZERO.compareTo(queryDecimal("select sum(chargedunits) from sum_ad_day_30")),
+                    "both views were paid in money: no units");
             assertEquals(1, queryLong("select failed from sum_ad_day_30 where tup_outcome='failed'"));
             assertEquals(1, offset("dailyAdSummary"), "its own bookmark on the shared stream");
 

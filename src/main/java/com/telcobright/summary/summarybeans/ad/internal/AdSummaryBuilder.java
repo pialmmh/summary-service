@@ -22,13 +22,19 @@ import java.math.RoundingMode;
  *
  * <p>The measures: {@code views} 1 always; {@code shown} when the record has an answer time; {@code completed}
  * and {@code credited} as the view's facts say; {@code failed} when the cause is not a normal clearing;
- * {@code watchedsec} = {@code DurationSec}, to the whole second (half up — the column is a whole number);
- * {@code chargedamount} = the customer chargeable's billed amount, 0 without one.
+ * {@code watchedsec} = {@code DurationSec}, to the whole second (half up — the column is a whole number).
+ *
+ * <p>The charge is the customer chargeable's billed amount, and it is MONEY or UNITS by the leg's own unit
+ * ({@code idBilledUom}): a leg in {@code BDT} counts into {@code chargedamount}; a leg in any other unit — the
+ * unit of a package the tier paid from — counts into {@code chargedunits}. The two are never added. A leg that
+ * names no unit is not taken for money. An entry without a chargeable counts the view with no charge.
  */
 final class AdSummaryBuilder {
 
     static final String OUTCOME_DONE = "done";
     static final String OUTCOME_FAILED = "failed";
+    /** The unit of money on a chargeable; every other unit is a package's. */
+    static final String MONEY_UOM = "BDT";
 
     private AdSummaryBuilder() {
     }
@@ -57,8 +63,15 @@ final class AdSummaryBuilder {
         s.credited = facts.credited() ? 1 : 0;
         s.failed = done ? 0 : 1;
         s.watchedsec = wholeSeconds(cdr.durationSec());
-        s.chargedamount = charge == null || charge.billedAmount() == null ? BigDecimal.ZERO : charge.billedAmount();
+        BigDecimal billed = charge == null || charge.billedAmount() == null ? BigDecimal.ZERO : charge.billedAmount();
+        boolean inMoney = charge != null && isMoney(charge.idBilledUom());
+        s.chargedamount = inMoney ? billed : BigDecimal.ZERO;
+        s.chargedunits = inMoney ? BigDecimal.ZERO : billed;
         return s;
+    }
+
+    private static boolean isMoney(String uom) {
+        return uom != null && MONEY_UOM.equalsIgnoreCase(uom.trim());
     }
 
     private static long wholeSeconds(BigDecimal durationSec) {
