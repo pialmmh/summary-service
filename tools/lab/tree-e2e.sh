@@ -133,7 +133,7 @@ echo "res_45 is served $(( $(date +%s%3N) - t1 )) ms after the doorbell: its tab
 
 say "what is in the schemas (read as ad_sphere)"
 for tier in btcl res_44 res_45; do
-  ask ad_sphere "select '$tier.sum_ad_day_30     ' || concat_ws(' | ', tup_starttime, tup_tenant, 'partner ' || tup_partnerid, 'campaign ' || tup_campaignid, tup_zone, tup_app, tup_outcome, 'views ' || views, 'shown ' || shown, 'money ' || chargedamount, 'units ' || chargedunits) from $tier.sum_ad_day_30"
+  ask ad_sphere "select '$tier.sum_ad_day_30     ' || concat_ws(' | ', tup_starttime, tup_tenant, 'partner ' || tup_partnerid, 'campaign ' || tup_campaignid, 'content ' || quote_literal(tup_contentid), 'rule ' || tup_rulecode, tup_zone, tup_app, tup_outcome, 'views ' || views, 'shown ' || shown, 'money ' || chargedamount, 'units ' || chargedunits) from $tier.sum_ad_day_30"
   ask ad_sphere "select '$tier.sum_ad_hr_30      ' || concat_ws(' | ', tup_starttime, 'views ' || views) from $tier.sum_ad_hr_30"
   ask ad_sphere "select '$tier.sum_voice_day_30  ' || concat_ws(' | ', tup_starttime, 'in-partner ' || tup_inpartnerid, tup_incomingroute || ' -> ' || tup_outgoingroute, 'calls ' || totalcalls, 'connected ' || connectedcalls, 'cost ' || customercost || ' ' || tup_customercurrency) from $tier.sum_voice_day_30"
   ask ad_sphere "select '$tier.sum_chargeable_day ' || concat_ws(' | ', 'group ' || tup_servicegroup, tup_billeduom, 'count ' || totalcount, 'billed ' || billedamount) from $tier.sum_chargeable_day"
