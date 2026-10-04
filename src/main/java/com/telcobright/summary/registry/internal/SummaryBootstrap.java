@@ -77,7 +77,7 @@ public class SummaryBootstrap {
         if (!showEndpointsAndDecide(config, enabled)) {
             return;                                      // print-only: nothing is started, nothing is dialled
         }
-        LOG.info(store.secretAtStart());                 // a password named by its variable must BE in the environment: else the start is refused
+        LOG.info(store.checkAtStart(autostart));         // a fault of the store's configuration refuses the start here, before anything is dialled
         registerBeans(enabled);
         if (!autostart) {
             LOG.infof("autostart off — %d bean(s) registered; no schema served, workers/ping/reaper NOT started, nothing dialled", enabled.size());
@@ -139,7 +139,7 @@ public class SummaryBootstrap {
     /** Print-only: where the store's password comes from (never its value), or why the start would be refused. */
     private boolean sayTheSecretsSource() {
         try {
-            System.out.println("SECRET " + store.secretAtStart());
+            System.out.println("SECRET " + store.checkAtStart(autostart));
             return true;
         } catch (IllegalStateException refusal) {
             System.out.println("SECRET " + refusal.getMessage());

@@ -46,17 +46,26 @@ public class StoreDataSource {
     }
 
     /**
-     * AT A START, before anything is dialled: where the store's password comes from, said in one line WITHOUT its
-     * value. A profile that names an environment variable ({@code password-ref: env:NAME}) which is not set — or one
-     * that breaks the secret's rules ({@link StoreSecret}) — refuses the start here, in words. A profile with no
-     * store at all is no fault (the app still boots with nothing configured).
+     * AT A START, before anything is dialled: is the store's CONFIGURATION one the service can start with? A fault
+     * of the profile refuses the start here, in words — an engine that contradicts the URL, a password named by an
+     * environment variable that is not set, a rule of the secret broken ({@link StoreSecret}), or workers that are
+     * to start with no store at all. (A store that does not ANSWER is another matter: that is tried again.)
+     * Returns one line that says where the password comes from, WITHOUT its value.
+     *
+     * @param workersWillStart {@code summary.autostart}: with it off and no store configured the app still boots
      */
-    public String secretAtStart() {
+    public String checkAtStart(boolean workersWillStart) {
         Config active = configuration.get();
-        StoreSecret.refuseAPasswordInTheUrl(active.getOptionalValue(StoreConfig.PREFIX + "url", String.class).orElse(null));
-        StoreSecret.Source source = StoreSecret.sourceOf(active);
-        StoreSecret.passwordOf(active, environment);            // a named variable that is not set refuses the start
-        return source.said();
+        boolean storeNamed = active.getOptionalValue(StoreConfig.PREFIX + "url", String.class).filter(url -> !url.isBlank()).isPresent();
+        if (!storeNamed) {
+            if (workersWillStart) {
+                throw new IllegalStateException("REFUSING TO START: summary.autostart is on and the active profile names no store "
+                        + "(summary.store.url is not set) — did the start name its tenant? SUMMARY_ACTIVE_TENANT=<tenant>/<profile>");
+            }
+            return "the store: none is configured (nothing is to be served: summary.autostart is off)";
+        }
+        StoreConfig.from(active, environment);                  // the engine against the URL; the secret's rules; the named variable
+        return StoreSecret.sourceOf(active).said();
     }
 
     /** The engine the active profile names. Reads the profile; opens nothing. */

@@ -139,11 +139,33 @@ class StoreConfigTest {
     void the_start_says_where_the_password_comes_from_and_refuses_when_its_variable_is_missing() {
         StoreDataSource inPlace = TestPools.store(Map.of("summary.store.url", PG, "summary.store.password-ref", "env:" + VARIABLE), Map.of(VARIABLE, "the-value"));
         StoreDataSource missing = TestPools.store(Map.of("summary.store.url", PG, "summary.store.password-ref", "env:" + VARIABLE), Map.of());
+
+        assertEquals("the store's password: from the environment variable " + VARIABLE + " (summary.store.password-ref)", inPlace.checkAtStart(true));
+        assertTrue(assertThrows(IllegalStateException.class, () -> missing.checkAtStart(true)).getMessage().contains(VARIABLE + " is not set"));
+        assertTrue(assertThrows(IllegalStateException.class, () -> missing.checkAtStart(false)).getMessage().contains(VARIABLE + " is not set"),
+                "a named secret that is missing refuses a start whether the workers start or not");
+    }
+
+    @Test
+    void a_fault_of_the_stores_configuration_refuses_the_start_it_is_not_left_to_be_tried_again() {
+        // only a store that does not ANSWER is tried again; a profile that cannot be right is refused at once
+        StoreDataSource wrongEngine = TestPools.store(Map.of("summary.store.kind", "postgresql", "summary.store.url", "jdbc:mysql://127.0.0.1:3306/telcobright"), Map.of());
+        StoreDataSource unknownKind = TestPools.store(Map.of("summary.store.kind", "oracle", "summary.store.url", PG), Map.of());
+        StoreDataSource passwordInUrl = TestPools.store(Map.of("summary.store.url", PG + "?password=s3cret-in-a-url"), Map.of());
+
+        assertTrue(assertThrows(IllegalStateException.class, () -> wrongEngine.checkAtStart(true)).getMessage().contains("kind is postgresql but summary.store.url is a mysql URL"));
+        assertThrows(IllegalArgumentException.class, () -> unknownKind.checkAtStart(true));
+        assertTrue(assertThrows(IllegalStateException.class, () -> passwordInUrl.checkAtStart(false)).getMessage().contains("a secret is never in a URL"));
+    }
+
+    @Test
+    void workers_that_are_to_start_with_no_store_refuse_the_start_and_ask_whether_the_tenant_was_named() {
         StoreDataSource noStore = TestPools.store(Map.of(), Map.of());
 
-        assertEquals("the store's password: from the environment variable " + VARIABLE + " (summary.store.password-ref)", inPlace.secretAtStart());
-        assertTrue(assertThrows(IllegalStateException.class, missing::secretAtStart).getMessage().contains(VARIABLE + " is not set"));
-        assertEquals("the store's password: none is configured", noStore.secretAtStart(), "a profile with no store at all still boots");
+        IllegalStateException refused = assertThrows(IllegalStateException.class, () -> noStore.checkAtStart(true));
+        assertTrue(refused.getMessage().contains("names no store") && refused.getMessage().contains("SUMMARY_ACTIVE_TENANT=<tenant>/<profile>"), refused.getMessage());
+        assertEquals("the store: none is configured (nothing is to be served: summary.autostart is off)", noStore.checkAtStart(false),
+                "with the workers off, a profile with no store still boots");
     }
 
     @Test
