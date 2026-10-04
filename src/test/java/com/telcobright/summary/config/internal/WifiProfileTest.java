@@ -274,6 +274,12 @@ class WifiProfileTest {
     }
 
     @Test
+    void the_ping_topic_of_a_deployment_carries_its_root() {
+        // brief S12: on one broker with two operators a shared ping would wake every summary-service. A profile value, the same on billing-core's side
+        assertEquals("cdr_summary_ping_" + PROFILE.get("summary.tenants.root"), PROFILE.get("summary.outbox.ping-topic"));
+    }
+
+    @Test
     void a_profile_may_switch_the_workers_on_over_the_jars_default() {
         // application.properties in the jar says summary.autostart=false (ordinal 250); a deployment's profile says true
         TenantProfileConfigSource profile = new TenantProfileConfigSource(Map.of("summary.autostart", "true"));

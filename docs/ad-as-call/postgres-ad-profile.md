@@ -29,7 +29,8 @@ summary:
       bootstrap-servers: <kafka host>:9092 # config_event_loader_btcl is heard here
 
   outbox:
-    ping-topic: cdr_summary_ping           # billing-core's ping; the same name as in its profile
+    ping-topic: cdr_summary_ping_btcl      # the ping's topic carries the ROOT. The SAME name on billing-core's side
+                                           # (its billing.summary.ping-topic). The topic must exist
     ping-bootstrap-servers: <kafka host>:9092
 
   enabledSummary:
@@ -117,7 +118,7 @@ up, says it (ERROR), and tries again: after `retry-seconds`, each try a little l
 | it never makes | `summary_affected`, `cdr`, `cdrerror`, `acc_chargeable`. Only billing-core makes them. A tier that has no `summary_affected` yet WAITS: one WARN names the schema and the table, and it is picked up when the table appears — no restart |
 | who reads its tables | `ad_sphere`, through prime-context's default privileges. The DDL of the ad pair: `src/main/resources/db/postgres/sum_ad.sql` |
 | on its own connections | the tier's schema and `standard_conforming_strings = off` are set with `SET LOCAL`, inside each transaction. Nothing stays on a connection; no other session is touched |
-| Kafka | it only listens: `cdr_summary_ping` (billing-core) and `config_event_loader_<root>` (prime-context). It publishes nothing. A broker that is away costs latency only: the poll and the refresh go on |
+| Kafka | it only listens: `cdr_summary_ping_<root>` (billing-core) and `config_event_loader_<root>` (prime-context). It publishes nothing and makes no topic. **Both topics must exist** before billing-core starts: without the ping's topic billing-core's ingest waits 60 s per tier per batch, and this service runs on the poll alone, with about one WARN a second that names the topic; made later, it is heard with no restart. A broker that is away costs latency only: the poll and the refresh go on |
 | one process per root | a second process on the same tree would wait on the first one's bookmark locks; it is not a way to scale |
 
 ## 5 · How it behaves
@@ -165,7 +166,7 @@ The keys of a profile:
 | `summary.tenants.refresh-seconds` | `300` | the tree is read again, doorbell or not. `0` = never on a timer |
 | `summary.tenants.retry-seconds` | `15` | the first wait before something that could not be served is tried again |
 | `summary.tenants.reload-debounce-ms` | `1000` | several rings in a burst are one read |
-| `summary.outbox.ping-topic` | `cdr_summary_ping` | |
+| `summary.outbox.ping-topic` | `cdr_summary_ping` | on a deployment: `cdr_summary_ping_<root>`, the same on billing-core's side |
 | `summary.outbox.ping-bootstrap-servers` | `127.0.0.1:9092` | |
 | `summary.outbox.poll-interval-seconds` | `5` | the fallback drain |
 | `summary.outbox.max-rows-per-tx` | `1` | outbox rows per transaction (one row = one billing batch) |
@@ -191,6 +192,7 @@ Everything on 127.0.0.1, in containers named `ss-*`; no password exists.
 | `tools/lab/tree-e2e.sh` | the tree's story with the packaged jar: billing-core's tables from its own DDL file, rows written as it writes them, a reseller made at run time |
 | `tools/lab/reconcile-with-billing-core.sh` | the summaries beside billing-core's OWN rows (its lab command first; the file's head says how) |
 | `tools/lab/secret-e2e.sh` | the password by its variable's name, against a role that needs one |
+| `tools/lab/ping-topic-e2e.sh` | a ping topic that does not exist (a broker of its own, auto-create off): what it costs, and that it is heard, with no restart, once made |
 | `tools/lab/this-box-e2e.sh` | the lab's key: an address of this box's own interface is this box (a real prime-context never listens on loopback); another box's refuses the start |
 
 `mvn verify` runs the integration tests against the three containers; a test whose lab is away is skipped,

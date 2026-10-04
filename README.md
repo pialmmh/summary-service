@@ -70,7 +70,7 @@ mvn verify -Dsummary.it.mysql.url='jdbc:mysql://127.0.0.1:7633/?useSSL=false&all
 test whose lab does not answer is SKIPPED, never passed. PostgreSQL's and Kafka's lab are the defaults
 (`-Dsummary.it.pg.url`, `-Dsummary.it.kafka`); MySQL's default is `127.0.0.1:3306` with a password given at run
 time (`-Dsummary.it.mysql.password`), so name the lab's as above. The lab's stories with the packaged jar:
-`tools/lab/tree-e2e.sh`, `reconcile-with-billing-core.sh`, `secret-e2e.sh` — a service is started there only
+`tools/lab/tree-e2e.sh`, `reconcile-with-billing-core.sh`, `secret-e2e.sh`, `this-box-e2e.sh`, `ping-topic-e2e.sh` — a service is started there only
 through `tools/lab/run-lab.sh`, which shows the profile and the endpoints first and starts only when every host is
 THIS BOX: localhost, a loopback address, or an address one of this box's own interfaces holds (a real
 prime-context never listens on loopback; `tools/lab/this-box-e2e.sh` shows both sides). A host name is never
@@ -125,6 +125,15 @@ instance under its own name/offset/table, e.g. the SG11 pair (legacy summarised 
   settings, and the **`enabledSummary`** list + each bean's `table-suffix`/`service-group`/`context` (the window
   is the class — or the `window:` key for config-instantiated instances). A profile answers `summary.*` keys by
   name and lists nothing (`TenantProfileConfigSource`): no tenant's value is baked into the jar at build time.
+- **The ping's topic carries the ROOT on a deployment**: `summary.outbox.ping-topic: cdr_summary_ping_<root>`, and
+  the SAME name on billing-core's side (its `billing.summary.ping-topic`) — as the lane's other topics do
+  (`cdr_<root>`, `cdr_dlq_<root>`, `config_event_loader_<root>`). On one broker with two operators a shared
+  `cdr_summary_ping` would wake every summary-service. **The topic must EXIST** (a deployment's broker makes none
+  by itself): without it billing-core's ingest waits 60 s per tier per batch for the ping's metadata (seen in the
+  rehearsal), and this service runs on the poll alone, with about one WARN line a second from the Kafka client
+  that names the topic; made later, the topic is heard with no restart (`tools/lab/ping-topic-e2e.sh`). The same
+  holds for the doorbell's topic, `config_event_loader_<root>` (prime-context's). The key's default,
+  `cdr_summary_ping`, is the voice deployment's name and is not changed.
 - **DB credentials**: `password-ref: env:NAME` on the wifi bed (the value in the unit's environment only); the
   **inline** form stays for the other deployments (see `docs/decisions.md` §8, §16j).
 

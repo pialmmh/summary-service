@@ -7,8 +7,9 @@
 #
 # Everything is on this machine: my own containers (tools/lab/pg-lab.sh: PostgreSQL 16 on 127.0.0.1:7643, Kafka on
 # 127.0.0.1:7692), a stand-in for prime-context's ONE read road on 127.0.0.1:7691, the service on 127.0.0.1:7671. The
-# service is started by tools/lab/run-lab.sh, which SHOWS the endpoints it resolved and starts only when every host
-# is this machine. No password exists (PostgreSQL trusts loopback).
+# service is started by tools/lab/run-lab.sh, which SHOWS the profile and the endpoints it resolved and starts only
+# when every host is this box. No password exists (PostgreSQL trusts loopback). The ping's topic carries the root
+# (cdr_summary_ping_btcl), as on a deployment; both topics are made first — a deployment's broker makes none by itself.
 #
 # The schemas are made as the real ones are: prime-context's provisioning statements (SchemaSharing, main 1b974a1),
 # then billing-core's tables from ITS OWN DDL file with its partitions and its grants (tools/lab/billing-ddl.py).
@@ -28,6 +29,7 @@ PG=ss-pg16-lab; KA=ss-kafka-lab
 PG_URL=jdbc:postgresql://127.0.0.1:7643/routesphere
 KAFKA=127.0.0.1:7692
 PC_PORT=7691
+PING_TOPIC=cdr_summary_ping_btcl          # the profile's summary.outbox.ping-topic: the ping's topic carries the ROOT
 BILLING_DDL=${BILLING_DDL:-$HOME/telcobright-projects/telcobright-billing-core/java/src/main/resources/sql/postgres/billing-tables.sql}
 WORK=target/lab-e2e
 MODE=${1:-run}
@@ -71,7 +73,7 @@ tree() {   # the tree prime-context answers: the root and its resellers
 }
 CP="target/classes:target/test-classes:$(cat "$WORK/cp.txt" 2>/dev/null || true)"
 billing_writes() {   # one view, the way billing-core writes it; $1 = the session id, the rest: wireTenant=schema
-  java -cp "$CP" com.telcobright.summary.testkit.BillingLabWriter "$PG_URL" "$KAFKA" cdr_summary_ping "$@" 2>/dev/null
+  java -cp "$CP" com.telcobright.summary.testkit.BillingLabWriter "$PG_URL" "$KAFKA" "$PING_TOPIC" "$@" 2>/dev/null
 }
 wait_for() {   # $1 = role, $2 = query, $3 = the answer wanted, $4 = seconds
   local until=$(( $(date +%s) + $4 ))
@@ -85,7 +87,7 @@ wait_for() {   # $1 = role, $2 = query, $3 = the answer wanted, $4 = seconds
 say "the lab"
 tools/lab/pg-lab.sh up
 tools/lab/pg-lab.sh kafka
-for topic in cdr_summary_ping config_event_loader_btcl; do
+for topic in "$PING_TOPIC" config_event_loader_btcl; do
   docker exec "$KA" /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA" --create --if-not-exists --topic "$topic" --partitions 1 --replication-factor 1 >/dev/null 2>&1
 done
 [ -s "$WORK/cp.txt" ] || mvn -o -q dependency:build-classpath -Dmdep.outputFile="$WORK/cp.txt" -Dmdep.includeScope=test >/dev/null

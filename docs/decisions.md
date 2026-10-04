@@ -461,6 +461,15 @@ payload that cannot be read, or names no tenant, wakes every worker as before; a
 every ping. The poll stays as the fallback, so a broker that is away costs latency only. The listeners fix their
 position and look once the moment they can hear (what landed before is not missed).
 
+**On a deployment the topic carries the root (brief S12; the rehearsal's finding 2): `cdr_summary_ping_<root>`**
+— a profile value (`summary.outbox.ping-topic`), the SAME name on billing-core's side
+(`billing.summary.ping-topic`), as the lane's other topics (`cdr_<root>`, `cdr_dlq_<root>`,
+`config_event_loader_<root>`): on one broker with two operators a shared ping would wake every summary-service.
+The topic must EXIST (a deployment's broker makes none by itself). Seen: without it billing-core's ingest waits
+60 s per tier per batch; this service stays up on the poll alone, with about one WARN a second from the Kafka
+client that names the topic, and hears it with no restart once it is made (`tools/lab/ping-topic-e2e.sh`). No
+code changed: the key's default stays `cdr_summary_ping` (the voice deployment's).
+
 ### 16j. The password by the NAME of its environment variable (brief S9) — ADDS to §8
 `summary.store.password-ref: env:NAME`: the value is in the unit's environment only (secreteer's
 `/etc/secreteer/<tenant>/<app>.env` → `EnvironmentFile=`). A named variable that is not set, or is empty,
