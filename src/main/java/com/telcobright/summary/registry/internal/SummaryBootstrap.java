@@ -6,6 +6,7 @@ import com.telcobright.summary.outbox.internal.OutboxReaper;
 import com.telcobright.summary.ping.internal.PingListener;
 import com.telcobright.summary.registry.api.SummaryBeanRegistry;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
+import com.telcobright.summary.tenancy.api.TenantWatcher;
 
 import io.quarkus.runtime.Quarkus;
 import io.quarkus.runtime.StartupEvent;
@@ -23,11 +24,13 @@ import org.jboss.logging.Logger;
 import java.util.List;
 
 /**
- * At startup: read {@code summary.enabledSummary}, find each named bean among the CDI-discovered
- * {@link SummaryBean}s (the per-window summary classes — {@code summarybeans/<category>/…}), ensure its context
- * is loaded, and register it. Only when {@code summary.autostart=true} does it start the per-bean workers, the
- * ping listener, and the reaper — so the app boots cleanly with NO MySQL/Kafka/config-manager needed; the
- * architect flips autostart on at cutover.
+ * At startup: say what this start resolved ({@link StartEndpoints}), then read {@code summary.enabledSummary},
+ * find each named bean among the CDI-discovered {@link SummaryBean}s (the per-window summary classes —
+ * {@code summarybeans/<category>/…}) and register it. Only when {@code summary.autostart=true} does it load the
+ * beans' contexts, serve the tenant schemas ({@link TenantWatcher}: the connection's own, or every schema of the
+ * root's tree — a worker per (schema, bean)), and start the ping listener and the reaper — so the app boots
+ * cleanly with NO database, Kafka, config-manager or prime-context needed, and dials none of them; the architect
+ * flips autostart on at cutover.
  *
  * <p>A new summary bean = a new {@code @Singleton SummaryBean} class in its category package; no factory, no
  * registration code — list its {@link SummaryBean#name()} in {@code enabledSummary} to activate it. An enabled
@@ -44,6 +47,7 @@ public class SummaryBootstrap {
     private final ContextRegistry contexts;
     private final OutboxReaper reaper;
     private final PingListener pingListener;
+    private final TenantWatcher tenants;
     private final boolean autostart;
 
     @Inject
@@ -52,12 +56,14 @@ public class SummaryBootstrap {
                             ContextRegistry contexts,
                             OutboxReaper reaper,
                             PingListener pingListener,
+                            TenantWatcher tenants,
                             @ConfigProperty(name = "summary.autostart", defaultValue = "false") boolean autostart) {
         this.registry = registry;
         this.discoveredBeans = discoveredBeans;
         this.contexts = contexts;
         this.reaper = reaper;
         this.pingListener = pingListener;
+        this.tenants = tenants;
         this.autostart = autostart;
     }
 
@@ -68,13 +74,14 @@ public class SummaryBootstrap {
             return;                                      // print-only: nothing is started, nothing is dialled
         }
         for (String name : enabled) {
-            activateBean(name);
+            registerBean(name);
         }
         if (autostart) {
+            tenants.start();        // serve the schemas: tables at first use, bookmarks, a worker per (schema, bean)
             pingListener.start();
             reaper.start();
         } else {
-            LOG.infof("autostart off — %d bean(s) registered; workers/ping/reaper NOT started", enabled.size());
+            LOG.infof("autostart off — %d bean(s) registered; no schema served, workers/ping/reaper NOT started, nothing dialled", enabled.size());
         }
     }
 
@@ -107,11 +114,12 @@ public class SummaryBootstrap {
 
     @PreDestroy
     void onShutdown() {
+        tenants.stop();        // the doorbell's consumer and the tree's timer
         pingListener.stop();   // close the Kafka consumer instead of dropping the socket
         reaper.stop();         // (workers are stopped by the registry's own @PreDestroy)
     }
 
-    private void activateBean(String name) {
+    private void registerBean(String name) {
         try {
             SummaryBean<?> bean = findByName(name);
             if (bean == null) {
@@ -124,15 +132,10 @@ public class SummaryBootstrap {
             }
             bean.table();   // fail-fast probe: throws if table-suffix is missing/invalid (caught + logged below)
             registry.register(bean);
-            if (bean.contextName() != null) {
-                contexts.ensureLoaded(bean.contextName());   // best-effort; not load-bearing for the call build
+            if (autostart && bean.contextName() != null) {
+                contexts.ensureLoaded(bean.contextName());   // best-effort; not load-bearing for the call build. Dialled only when the workers start
             }
-            if (autostart) {
-                registry.start(name);
-            } else {
-                LOG.infof("bean registered (not started): name=%s entity=%s window=%s table=%s",
-                        name, bean.entityType(), bean.window(), bean.table());
-            }
+            LOG.infof("bean registered: name=%s entity=%s window=%s table=%s", name, bean.entityType(), bean.window(), bean.table());
         } catch (RuntimeException e) {
             LOG.errorf(e, "could not activate summary bean '%s'", name);
         }

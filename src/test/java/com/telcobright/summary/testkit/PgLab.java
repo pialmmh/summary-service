@@ -100,6 +100,31 @@ public final class PgLab {
                 "INSERT INTO cdr (IdCall, ServiceGroup, StartTime, ChannelCallUuid) VALUES (1, 30, '2026-10-02 21:14:03', 'a view')");
     }
 
+    /**
+     * As billing-core writes a tenant batch: its {@code cdr} row and the ONE outbox row, in one transaction, as the
+     * role {@code billing_core} — the id the identity gives. Returns that id.
+     */
+    public static long billingWrites(String schema, String outboxData) {
+        try (Connection c = connect(BILLING_CORE, schema)) {
+            c.setAutoCommit(false);
+            try (Statement st = c.createStatement()) {
+                st.execute("INSERT INTO cdr (IdCall, ServiceGroup, StartTime, ChannelCallUuid) SELECT coalesce(max(IdCall), 0) + 1, 30, '2026-10-02 21:14:03', 'a view' FROM cdr");
+            }
+            long id;
+            try (java.sql.PreparedStatement ps = c.prepareStatement("INSERT INTO summary_affected (entity_type, op, data) VALUES ('cdr', 'add', ?) RETURNING id")) {
+                ps.setString(1, outboxData);
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    id = rs.getLong(1);
+                }
+            }
+            c.commit();
+            return id;
+        } catch (SQLException e) {
+            throw new IllegalStateException("billing-core's write in " + schema + ": " + e.getMessage(), e);
+        }
+    }
+
     /** Run statements as {@code role}, each committed; a failure is the test's failure. */
     public static void run(String role, String schema, String... statements) {
         try (Connection c = connect(role, schema); Statement st = c.createStatement()) {

@@ -1,4 +1,10 @@
 -- =====================================================================================
+-- MySQL ONLY. This file is a reference copy for a MySQL lab or dev box; the service runs none of it.
+-- On PostgreSQL the outbox (summary_affected) is NEVER made by the summary side, by a script or by code: the role
+-- that makes a table there owns it, and only billing-core may make the CDR road's tables in a tenant schema
+-- (cdr, cdrerror, acc_chargeable, summary_affected). What summary-service makes on PostgreSQL is its own:
+-- summary_offset, summary_affected_dlq and the sum_* tables (db/postgres/).
+--
 -- summary outbox + per-bean bookmark — PINNED contract (mirror of billing-core
 -- src/Billing.Data/Sql/summary_outbox.sql). Billing CREATES + WRITES summary_affected inside
 -- the cdr-batch transaction; the summary-service READS it, advances its per-bean offset, and

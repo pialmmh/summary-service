@@ -61,7 +61,8 @@ public class StoreDataSource {
         }
     }
 
-    private static AgroalDataSource open(StoreConfig store) {
+    /** The pool of a store (also what a test asks for directly). */
+    static AgroalDataSource open(StoreConfig store) {
         AgroalDataSourceConfigurationSupplier configuration = new AgroalDataSourceConfigurationSupplier()
                 .metricsEnabled(false)
                 .connectionPoolConfiguration(pool -> pool

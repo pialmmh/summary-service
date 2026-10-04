@@ -146,6 +146,30 @@ class TableDdlTest {
     }
 
     @Test
+    void nothing_the_service_runs_or_ships_for_postgresql_creates_billing_cores_tables() throws java.io.IOException {
+        // In a tenant schema ONLY billing-core makes the CDR road's tables (the role that makes a table owns it there):
+        // not the infra DDL, not a bean's DDL, not a script under db/postgres.
+        List<String> everything = new java.util.ArrayList<>(OutboxInfraDdl.createStatements(SqlDialect.POSTGRESQL));
+        for (SummaryBean<?> bean : List.of(AdTestSupport.dailyBean(), AdTestSupport.hourlyBean(), CallSummaries.forWindow("x", "daily", "30", 30, null),
+                CallSummaries.forWindow("y", "hourly", "30", 30, null), DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build(),
+                com.telcobright.summary.beans.HourlyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build())) {
+            everything.addAll(bean.tableDdl(SqlDialect.POSTGRESQL));
+        }
+        try (java.util.stream.Stream<java.nio.file.Path> scripts = java.nio.file.Files.walk(java.nio.file.Path.of("src", "main", "resources", "db", "postgres"))) {
+            for (java.nio.file.Path script : scripts.filter(p -> p.toString().endsWith(".sql")).toList()) {
+                everything.add(java.nio.file.Files.readString(script).replaceAll("--[^\n]*", ""));
+            }
+        }
+
+        java.util.regex.Pattern makesOneOfBillings = java.util.regex.Pattern.compile(
+                "(?i)create\\s+table\\s+(if\\s+not\\s+exists\\s+)?(\\w+\\.)?(summary_affected|cdr|cdrerror|acc_chargeable)\\b(?!_)");
+        for (String sql : everything) {
+            assertFalse(makesOneOfBillings.matcher(sql).find(), "billing-core's table is made here: " + sql);
+        }
+        assertTrue(everything.stream().anyMatch(sql -> sql.contains("summary_affected_dlq")), "the dead-letter table IS the service's own (the pattern does not take it for the outbox)");
+    }
+
+    @Test
     void a_table_without_columns_or_a_key_is_refused() {
         assertThrows(IllegalStateException.class, () -> SummaryTableSpec.table("t").build());
         assertThrows(IllegalStateException.class, () -> SummaryTableSpec.table("t").identity("id").build());

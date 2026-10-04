@@ -11,7 +11,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.StringJoiner;
 
 /**
@@ -61,6 +63,51 @@ final class JdbcOutboxStore implements OutboxStore {
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new SummaryStoreException("initOffsetAtHead failed for " + beanName, e);
+        }
+    }
+
+    @Override
+    public boolean outboxExists() {
+        // asked of the catalog, in the schema this connection runs in; an ordinary read, no lock
+        String sql = dialect == SqlDialect.POSTGRESQL
+                ? "select to_regclass('summary_affected') is not null"
+                : "select count(*) > 0 from information_schema.tables where table_schema = database() and table_name = 'summary_affected'";
+        try (PreparedStatement ps = connection.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
+            return rs.next() && rs.getBoolean(1);
+        } catch (SQLException e) {
+            throw new SummaryStoreException("could not ask whether the outbox exists", e);
+        }
+    }
+
+    @Override
+    public Set<String> bookmarkedBeans(String entityType) {
+        String sql = "select bean_name from summary_offset where entity_type=?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, entityType);
+            try (ResultSet rs = ps.executeQuery()) {
+                Set<String> beans = new LinkedHashSet<>();
+                while (rs.next()) {
+                    beans.add(rs.getString(1));
+                }
+                return beans;
+            }
+        } catch (SQLException e) {
+            throw new SummaryStoreException("bookmarkedBeans failed for " + entityType, e);
+        }
+    }
+
+    @Override
+    public void seedOffsetIfAbsent(String entityType, String beanName, long offset) {
+        String sql = dialect == SqlDialect.POSTGRESQL
+                ? "insert into summary_offset(entity_type,bean_name,last_offset) values(?,?,?) on conflict (entity_type, bean_name) do nothing"
+                : "insert ignore into summary_offset(entity_type,bean_name,last_offset) values(?,?,?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, entityType);
+            ps.setString(2, beanName);
+            ps.setLong(3, offset);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new SummaryStoreException("seedOffsetIfAbsent failed for " + beanName, e);
         }
     }
 

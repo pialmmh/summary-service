@@ -26,8 +26,9 @@ public final class FakeSummaryStore implements SummaryStore {
     private final Map<String, Collection<LocalDateTime>> lastBuckets = new HashMap<>();
     private final List<String> executedSql = new ArrayList<>();
     private boolean failWrites = false;
+    private volatile String failingPrefix;
 
-    public void seed(String table, LocalDateTime bucket, Object entity) {
+    public synchronized void seed(String table, LocalDateTime bucket, Object entity) {
         seeded.computeIfAbsent(table, t -> new ArrayList<>()).add(new Seed(bucket, entity));
     }
 
@@ -35,9 +36,14 @@ public final class FakeSummaryStore implements SummaryStore {
         this.failWrites = true;
     }
 
+    /** Fail every statement that starts with {@code prefix} (a table that cannot be made); {@code null} = none. */
+    public void failSqlStartingWith(String prefix) {
+        this.failingPrefix = prefix;
+    }
+
     @Override
     @SuppressWarnings("unchecked")
-    public <T> List<T> load(String table, String insertColumnsCsv, String bucketColumn,
+    public synchronized <T> List<T> load(String table, String insertColumnsCsv, String bucketColumn,
                             Collection<LocalDateTime> buckets, RowMapper<T> mapper) {
         loadCalls.merge(table, 1, Integer::sum);
         lastBuckets.put(table, buckets);
@@ -51,31 +57,37 @@ public final class FakeSummaryStore implements SummaryStore {
     }
 
     @Override
-    public int executeNonQuery(String sql) {
-        if (failWrites) {
+    public synchronized int executeNonQuery(String sql) {
+        String failing = failingPrefix;
+        if (failWrites || (failing != null && sql.startsWith(failing))) {
             throw new SummaryStoreException("write failed (test)", null);
         }
         executedSql.add(sql);
         return 1;
     }
 
-    public int loadCount(String table) {
+    public synchronized int loadCount(String table) {
         return loadCalls.getOrDefault(table, 0);
     }
 
-    public Collection<LocalDateTime> bucketsLoaded(String table) {
+    public synchronized Collection<LocalDateTime> bucketsLoaded(String table) {
         return lastBuckets.getOrDefault(table, List.of());
     }
 
-    public List<String> executedSql() {
-        return executedSql;
+    public synchronized List<String> executedSql() {
+        return List.copyOf(executedSql);
     }
 
-    public boolean ranSqlMatching(String startsWith) {
+    public synchronized boolean ranSqlMatching(String startsWith) {
         return executedSql.stream().anyMatch(s -> s.startsWith(startsWith));
     }
 
-    public String firstSqlMatching(String startsWith) {
+    public synchronized String firstSqlMatching(String startsWith) {
         return executedSql.stream().filter(s -> s.startsWith(startsWith)).findFirst().orElse(null);
+    }
+
+    /** How many statements starting with {@code startsWith} ran. */
+    public synchronized long countSqlMatching(String startsWith) {
+        return executedSql.stream().filter(s -> s.startsWith(startsWith)).count();
     }
 }

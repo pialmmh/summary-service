@@ -18,6 +18,22 @@ summary:
     min-size: 0
     max-size: 16
 
+  # ---- the tenants (brief S6): ONE process serves every tier schema of the root's tree ----
+  # A view writes one outbox row in EACH tier's schema, and a reseller is made at run time. The tree comes from
+  # prime-context (POST /get-specific-tenant-root — the road config-manager serves; a read). It is read at the
+  # start, at every doorbell (prime-context rings config_event_loader_<root> AFTER it rebuilt the tree) and every
+  # refresh-seconds. A schema the tree gained is served with no restart: its tables are made then.
+  tenants:
+    mode: tree                                           # single (one schema: the URL's own) | tree
+    root: btcl                                           # the root tenant = the root schema; names the doorbell's topic
+    prime-context:
+      base-url: http://127.0.0.1:7691                    # the lab's stand-in (tools/lab/prime-context-standin.py)
+    doorbell:
+      topic-base: config_event_loader                    # -> config_event_loader_btcl
+      bootstrap-servers: 127.0.0.1:7692                  # the lab's own broker
+    reload-debounce-ms: 1000                             # several rings in a burst are ONE read of the tree
+    refresh-seconds: 300                                 # the tree is read even when no ring came
+
   # ---- the beans of service group 30 (brief S1, S4) ----
   #   the AD category      : sum_ad_day_30 / sum_ad_hr_30 — by tenant, payer, campaign, rule, zone, site, app,
   #                          media kind, outcome. Its window classes: summarybeans/ad.

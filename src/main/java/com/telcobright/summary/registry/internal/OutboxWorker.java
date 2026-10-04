@@ -10,8 +10,8 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 /**
- * One bean's worker thread: drain the outbox, then wait until woken by a ping or the fallback poll timer, then
- * drain again. Each {@link OutboxReader#drain} step is its own exactly-once transaction; a drain failure is
+ * The worker thread of ONE bean in ONE tenant schema: drain that schema's outbox, then wait until woken by a
+ * ping or the fallback poll timer, then drain again. Each {@link OutboxReader#drain} step is its own exactly-once transaction; a drain failure is
  * logged and retried (the offset never advanced, so no data is lost or double-counted). Repeated failures — a
  * poison outbox row, a broken summary table — back off up to {@link #MAX_BACKOFF_SECONDS} with an escalating
  * count in the log, so a wedged bean is LOUD without hammering the database every tick.
@@ -23,6 +23,7 @@ public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable 
     private static final Logger LOG = Logger.getLogger(OutboxWorker.class);
     private static final int MAX_BACKOFF_SECONDS = 60;
 
+    private final String schema;
     private final SummaryBean<T> bean;
     private final OutboxReader reader;
     private final int pollIntervalSeconds;
@@ -30,7 +31,14 @@ public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable 
     private volatile boolean running = true;
     private int consecutiveFailures = 0;   // touched only by this worker's own thread
 
+    /** A worker on the connection's own schema. */
     public OutboxWorker(SummaryBean<T> bean, OutboxReader reader, int pollIntervalSeconds) {
+        this(null, bean, reader, pollIntervalSeconds);
+    }
+
+    /** A worker on the tenant schema {@code schema} ({@code null} = the connection's own). */
+    public OutboxWorker(String schema, SummaryBean<T> bean, OutboxReader reader, int pollIntervalSeconds) {
+        this.schema = schema;
         this.bean = bean;
         this.reader = reader;
         this.pollIntervalSeconds = pollIntervalSeconds;
@@ -38,27 +46,27 @@ public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable 
 
     @Override
     public void run() {
-        LOG.infof("worker started: bean=%s entity=%s table=%s window=%s", bean.name(), bean.entityType(),
+        LOG.infof("worker started: schema=%s bean=%s entity=%s table=%s window=%s", said(), bean.name(), bean.entityType(),
                 bean.table(), bean.window());
         while (running) {
             drainSafely();
             awaitWakeOrTimeout();
         }
-        LOG.infof("worker stopped: bean=%s", bean.name());
+        LOG.infof("worker stopped: schema=%s bean=%s", said(), bean.name());
     }
 
     private void drainSafely() {
         try {
             // the until-caught-up loop lives HERE, not in the reader, so stop() takes effect between the
             // bounded per-tx steps even mid-backlog — a second worker must never start while one still drains
-            while (running && reader.drainOnce(bean) > 0) {
+            while (running && reader.drainOnce(schema, bean) > 0) {
                 // each step is its own exactly-once transaction
             }
             consecutiveFailures = 0;
         } catch (RuntimeException e) {
             consecutiveFailures++;
-            LOG.errorf(e, "bean=%s drain failed (%d consecutive) — offset STUCK, summaries lag until fixed; "
-                    + "retrying in %ds", bean.name(), consecutiveFailures, waitSeconds());
+            LOG.errorf(e, "schema=%s bean=%s drain failed (%d consecutive) — offset STUCK, summaries lag until fixed; "
+                    + "retrying in %ds", said(), bean.name(), consecutiveFailures, waitSeconds());
         }
     }
 
@@ -78,6 +86,10 @@ public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable 
             return pollIntervalSeconds;
         }
         return (int) Math.min((long) pollIntervalSeconds * consecutiveFailures, MAX_BACKOFF_SECONDS);
+    }
+
+    private String said() {
+        return schema == null ? "(own)" : schema;
     }
 
     /** A ping arrived (or a manual nudge) — drain now instead of waiting for the timer. */
