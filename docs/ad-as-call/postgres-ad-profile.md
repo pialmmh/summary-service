@@ -60,7 +60,7 @@ A deployment keeps its configuration OUTSIDE the jar, in one directory — the o
 |---|---|
 | the directory | named by ONE key: `-Dsummary.config.dir=<directory>`, or `SUMMARY_CONFIG_DIR` in the unit's environment. Not named: the unit's working directory (where Quarkus also reads `config/application.properties`). The files stay source-controlled; the directory is where the deploy tool puts them |
 | the file | found there, it **wins** — whole: it is not merged with the jar's. Not found there: the jar's own profile of that name is read. So the jar is not rebuilt for a tenant or for a value, a root the jar does not name has its profile, and no box's address is committed in this repository |
-| the tenant | the start names it: `SUMMARY_ACTIVE_TENANT=btcl/<profile>` (or `-Dsummary.active-tenant=btcl/<profile>`). Or a file says it: the directory's own `config/tenants.yml` with one entry `enabled: true`. With neither, the first enabled entry of the jar's `config/tenants.yml` is taken — today `tcbl/dev`. **A deployment always says it** |
+| the tenant | the start names it: `SUMMARY_ACTIVE_TENANT=btcl/<profile>` (or `-Dsummary.active-tenant=btcl/<profile>`). Or a file says it: the directory's own `config/tenants.yml` with one entry `enabled: true`. With neither, **the start is refused**: the jar's own registry enables no tenant (it only lists the profiles the jar carries), so a jar started with no configuration of its own is nobody's deployment |
 | the start's first line | says which tenant, what named it, and which FILE was read: `PROFILE tenant btcl, profile bed (named by SUMMARY_ACTIVE_TENANT): the file /etc/summary-service/config/tenants/btcl/bed/profile-bed.yml`. A start that fell back to the jar says `THE JAR'S OWN config/tenants/…`. Read this line at every start |
 | Quarkus's own keys | the listener (`quarkus.http.host`, `quarkus.http.port`) go into `config/application.properties` beside the working directory, or into the unit's environment. A profile is not asked for them. The house rule: bind the host's 10.10.x.x address. The service serves `/q/health` only |
 | the password | by the NAME of its variable (`password-ref: env:NAME`). The value comes from secreteer's `/etc/secreteer/<tenant>/<app>.env` through the unit's `EnvironmentFile=`. It is never in the profile, a URL or a command line. Wherever a configured value is printed, a password in it is hidden |
@@ -90,6 +90,7 @@ the store's password: from the environment variable TENANT_BTCL_SWITCH_SUMMARY_S
 
 | a start is refused, in words, when | |
 |---|---|
+| it names no tenant: no `SUMMARY_ACTIVE_TENANT`, no `-Dsummary.active-tenant`, no registry file of the deployment that enables one | the jar enables none. The words say how a deployment names its tenant |
 | `summary.config.dir` / `SUMMARY_CONFIG_DIR` names something that is not a directory | the jar's profile is not read behind a wrong directory |
 | the tenant the start serves has no profile file, in the directory or in the jar | a slip in the name does not come up green with nothing to serve. It says where it looked |
 | the profile file cannot be parsed, or the tenant is not written `<tenant>/<profile>` | the jar's profile is not read in its place |
@@ -147,7 +148,7 @@ What a START is given (an option of the JVM or a variable of the unit — these 
 | option / variable | what |
 |---|---|
 | `-Dsummary.config.dir` / `SUMMARY_CONFIG_DIR` | the directory that holds `config/tenants/…`. Not set: the working directory |
-| `-Dsummary.active-tenant` / `SUMMARY_ACTIVE_TENANT` | `<tenant>/<profile>`: the tenant this start serves. Not set: the first enabled entry of the directory's `config/tenants.yml`, else of the jar's |
+| `-Dsummary.active-tenant` / `SUMMARY_ACTIVE_TENANT` | `<tenant>/<profile>`: the tenant this start serves. Not set: the first enabled entry of the directory's own `config/tenants.yml`. Neither: the start is refused (the jar enables no tenant) |
 
 The keys of a profile:
 

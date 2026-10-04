@@ -1,0 +1,16 @@
+# tcbl (the voice deployment) — the TENANT REGISTRY of this deployment.
+#
+# The jar enables no tenant: a start that names none is refused
+#   ("REFUSING TO START: this start names no tenant ...").
+# These lines are what the jar itself carried until now. Put this file on the box as
+#     <the service's configuration directory>/config/tenants.yml
+# — the directory SUMMARY_CONFIG_DIR names in the unit, else the unit's WorkingDirectory —
+# BEFORE the first build that enables no tenant is deployed. If it is forgotten the service does
+# not start, and says so in its first lines.
+#
+# Instead of this file the unit may name the tenant itself:   Environment=SUMMARY_ACTIVE_TENANT=tcbl/dev
+# A box that already has one of the two needs nothing.
+tenants:
+  - name: tcbl
+    enabled: true
+    profile: dev

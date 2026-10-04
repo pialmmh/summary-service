@@ -129,7 +129,8 @@ class SummaryBootstrapTest {
             bootstrap(false).onStart(null);
 
             List<String> lines = said.lines();
-            assertTrue(lines.get(0).startsWith("PROFILE tenant tcbl, profile dev (the first enabled entry of the jar's config/tenants.yml): "
+            // the unit tests' JVM names its tenant (the pom: -Dsummary.active-tenant=tcbl/dev) — the jar enables none
+            assertTrue(lines.get(0).startsWith("PROFILE tenant tcbl, profile dev (named by -Dsummary.active-tenant): "
                     + "THE JAR'S OWN config/tenants/tcbl/dev/profile-dev.yml (no such file under the working directory "), "the FIRST line: " + lines.get(0));
             assertTrue(lines.get(1).startsWith("ENDPOINT store "), "then every endpoint, before anything is dialled: " + lines.get(1));
             assertTrue(lines.indexOf("the store: none is configured (nothing is to be served: summary.autostart is off)") > lines.indexOf(lines.stream()
@@ -151,6 +152,26 @@ class SummaryBootstrapTest {
             System.clearProperty("summary.profile.fault");
         }
         assertTrue(registry.beanNames().isEmpty(), "refused before a bean was registered — with the workers off too");
+        assertEquals(List.of(), contextsFetched, "and nothing was dialled");
+    }
+
+    @Test
+    void a_start_that_names_no_tenant_is_refused_by_the_bootstrap_whether_the_workers_start_or_not() {
+        // what the profile source says for a start that names none (S15): the jar enables no tenant
+        System.setProperty("summary.profile.fault", com.telcobright.summary.config.internal.ProfileYamlLoader.NO_TENANT_IS_NAMED);
+        try {
+            for (boolean autostart : new boolean[] {false, true}) {
+                IllegalStateException refused = assertThrows(IllegalStateException.class, () -> bootstrap(autostart).onStart(null), "autostart " + autostart);
+
+                assertTrue(refused.getMessage().startsWith("REFUSING TO START: this start names no tenant, and no registry enables one (the jar's own enables none)."),
+                        refused.getMessage());
+                assertTrue(refused.getMessage().contains("SUMMARY_ACTIVE_TENANT=<tenant>/<profile>") && refused.getMessage().contains("SUMMARY_CONFIG_DIR"),
+                        "it says how a deployment names one: " + refused.getMessage());
+            }
+        } finally {
+            System.clearProperty("summary.profile.fault");
+        }
+        assertTrue(registry.beanNames().isEmpty(), "nothing was registered");
         assertEquals(List.of(), contextsFetched, "and nothing was dialled");
     }
 

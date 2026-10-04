@@ -1,15 +1,22 @@
 # =====================================================================================
-# Active tenant + profile registry (routesphere-like).
+# The tenant registry OF THE JAR. It enables NO tenant.
 #
-# TenantProfileConfigSource reads this file, picks the FIRST tenant with enabled=true,
-# and loads config/tenants/<name>/<profile>/profile-<profile>.yml, flattening it into
-# Quarkus config (quarkus.datasource.*, summary.beans.*, ...).
+# A jar that is started with no configuration of its own must be nobody's deployment: a registry
+# here that enabled one made every such start that tenant's — with that tenant's addresses.
+# So a start that names no tenant is REFUSED, in words that say how a deployment names one:
 #
-# Credentials are INLINE in each profile (no OpenBao), matching billing-core.
+#   * the unit names it:      SUMMARY_ACTIVE_TENANT=<tenant>/<profile>   (or -Dsummary.active-tenant=...)
+#   * or a FILE names it:     config/tenants.yml with ONE entry `enabled: true`, in the deployment's
+#                             configuration directory — the one SUMMARY_CONFIG_DIR (or -Dsummary.config.dir)
+#                             names, else the unit's working directory. It is the directory that holds
+#                             config/tenants/<tenant>/<profile>/profile-<profile>.yml.
+#
+# The entries below only LIST the profiles this jar carries (config/tenants/...): a deployment may name
+# one of them, or bring its own profile file. The voice deployment's registry file: deploy/tcbl-tenants.yml.example
 # =====================================================================================
 tenants:
   - name: tcbl
-    enabled: true
+    enabled: false
     profile: dev
   - name: tcbl
     enabled: false

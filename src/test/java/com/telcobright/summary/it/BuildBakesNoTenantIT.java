@@ -32,6 +32,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class BuildBakesNoTenantIT {
 
     private static final Path GENERATED = Path.of("target", "quarkus-app", "quarkus", "generated-bytecode.jar");
+    private static final Path APPLICATION = Path.of("target", "quarkus-app", "app");
     private static final Path PROFILES = Path.of("src", "main", "resources", "config", "tenants");
     private static final Pattern ADDRESS = Pattern.compile("(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})(:\\d+)?");
 
@@ -55,6 +56,26 @@ class BuildBakesNoTenantIT {
         }
 
         assertTrue(baked.isEmpty(), "a tenant's address is baked into the jar as every start's default: " + baked);
+    }
+
+    @Test
+    void the_packaged_jars_own_registry_enables_no_tenant() throws IOException {
+        // S15: what SHIPS. A jar started with no configuration of its own is nobody's deployment
+        assumeTrue(Files.isDirectory(APPLICATION), "the application is not packaged (target/quarkus-app) — nothing to read");
+        int registries = 0;
+        try (Stream<Path> jars = Files.list(APPLICATION)) {
+            for (Path applicationJar : jars.filter(p -> p.toString().endsWith(".jar")).toList()) {
+                try (ZipFile jar = new ZipFile(applicationJar.toFile())) {
+                    ZipEntry registry = jar.getEntry("config/tenants.yml");
+                    if (registry == null) continue;
+                    registries++;
+                    String text = new String(jar.getInputStream(registry).readAllBytes(), StandardCharsets.UTF_8).replaceAll("(?m)#.*$", "");
+                    assertFalse(Pattern.compile("enabled:\\s*true").matcher(text).find(), applicationJar + " enables a tenant: " + text);
+                    assertTrue(text.contains("enabled: false"), "it lists the profiles the jar carries, not enabled");
+                }
+            }
+        }
+        assertTrue(registries == 1, "the packaged application holds ONE registry file: " + registries);
     }
 
     /** Every IP address a profile file names, without the loopback ones (a lab's own). */

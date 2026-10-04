@@ -525,12 +525,23 @@ directory that holds `config/tenants/<tenant>/<profile>/profile-<profile>.yml`: 
 `SUMMARY_CONFIG_DIR` (not named: the working directory) — as billing-core's `billing.config.dir` and seed's
 `seed.config.dir`. A file found there wins, whole; else the jar's own is read. The directory's own
 `config/tenants.yml` may say which tenant the deployment serves (the house rule: a file says it; `-D` and the
-environment are a start's override); a deployment's registry that enables nothing serves nothing — the jar's is
+environment are a start's override); a deployment's registry that enables nothing names no tenant — the jar's is
 not asked behind its back. The start's FIRST line says which tenant, what named it, and which file was read
 (`PROFILE …`; a fallback to the jar reads `THE JAR'S OWN …`). What a person wrote wrong refuses the start in
 words, and nothing falls back to the jar behind it: a named directory that is none, a tenant with no profile
 file anywhere, a file that cannot be parsed. The loader never throws into the configuration system (the logging
 is not up there): the profile source carries the fault (`summary.profile.fault`) and the bootstrap refuses.
+
+**The jar enables no tenant (brief S15, branch `no-bundled-tenant` — PREPARED, the owner decides).** The jar's
+`config/tenants.yml` enabled `tcbl/dev`, whose profile names boxes that run today: a jar started with no
+configuration of its own was the voice deployment. Now the jar's registry enables nobody — it only lists the
+profiles the jar carries — and a start that names no tenant (no `SUMMARY_ACTIVE_TENANT`, no
+`-Dsummary.active-tenant`, no registry file of the deployment that enables one) is REFUSED before anything is
+dialled, whether the workers are to start or not, in words that say how a deployment names one
+(`ProfileYamlLoader.NO_TENANT_IS_NAMED`). The profiles stay in the jar: a deployment that names `tcbl/dev`
+runs as before. The voice deployment's registry is a file for ITS deploy: `deploy/tcbl-tenants.yml.example`
+(where it goes on the box, and when: before the first such build). The unit tests name their tenant in the pom.
+As billing-core did for its own jar (its branch `no-bundled-tenant`).
 
 ### 16l. A start says what it will dial, before it dials — the lab's rule
 `StartEndpoints`: after the profile's line (§16k), the database URL, the brokers, each configuration source's
@@ -563,6 +574,3 @@ same on both engines, and no other session, role or database setting is touched.
   clock ("this year"), in the tenant's zone (`summary.zone`, default Asia/Dhaka).
 - One thread per (schema, bean), asleep until a ping or the poll. A deployment with very many tiers may want a
   shared scheduler; not built (no tier count asks for it today).
-- `tenants.yml` still flags `tcbl/dev` as enabled (the pre-existing default of the voice deployment). A start
-  that names no tenant falls on it; with autostart off it dials nothing. Recommended: no tenant enabled by
-  default (in the done note's findings — the architect's call).

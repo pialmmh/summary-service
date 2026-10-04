@@ -62,8 +62,12 @@ class WifiProfileTest {
         String before = System.getProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY);
         try {
             System.clearProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY);
-            TenantProfileConfigSource byRegistry = new TenantProfileConfigSource();
-            assertEquals("mysql", byRegistry.getValue("summary.store.kind"), "not told: the registry's first enabled entry, tcbl/dev");
+            TenantProfileConfigSource notTold = new TenantProfileConfigSource();
+            assertEquals(null, notTold.getValue("summary.store.kind"), "not told: the jar enables no tenant — no tenant's store, nobody's addresses");
+            assertEquals(ProfileYamlLoader.NO_TENANT_IS_NAMED, notTold.getValue(TenantProfileConfigSource.FAULT_KEY), "and the start is refused with these words");
+
+            System.setProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY, "tcbl/dev");
+            assertEquals("mysql", new TenantProfileConfigSource().getValue("summary.store.kind"), "told tcbl/dev: the voice tenant's store");
 
             System.setProperty(ProfileYamlLoader.ACTIVE_TENANT_PROPERTY, "btcl/lab");
             TenantProfileConfigSource told = new TenantProfileConfigSource();
@@ -232,22 +236,90 @@ class WifiProfileTest {
 
         assertEquals("mysql", ProfileYamlLoader.loadActive(named(directory), "tcbl/dev", null).properties().get("summary.store.kind"), "the start named another");
 
-        // a deployment's registry that enables nothing serves nothing: the jar's registry (tcbl/dev) is not asked behind its back
+        // a deployment's registry that enables nothing names no tenant: refused, like a start that has no registry at all
         write(directory, "config/tenants.yml", "tenants:\n  - name: btcl\n    enabled: false\n    profile: bed\n");
         ProfileYamlLoader.Loaded nothing = ProfileYamlLoader.loadActive(named(directory), null, null);
         assertTrue(nothing.properties().isEmpty());
-        assertEquals(null, nothing.fault(), "no tenant is not a fault: the service boots with nothing to serve (and refuses to start workers)");
-        assertTrue(nothing.readFrom().startsWith("no tenant is named"), nothing.readFrom());
+        assertEquals(ProfileYamlLoader.NO_TENANT_IS_NAMED, nothing.fault());
+    }
+
+    // ---- S15: the jar enables no tenant; a start names its own ----
+
+    @Test
+    void the_jars_own_registry_enables_no_tenant_and_the_profiles_it_lists_are_still_in_the_jar() throws IOException {
+        // a jar started with no configuration of its own must be nobody's deployment
+        assertEquals(java.util.Optional.empty(), ProfileYamlLoader.activeTenant("config/tenants.yml"), "the registry on the class path enables nobody");
+        String registry = new String(WifiProfileTest.class.getClassLoader().getResourceAsStream("config/tenants.yml").readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+                .replaceAll("(?m)#.*$", "");
+        assertFalse(registry.contains("enabled: true"), "not one entry: " + registry);
+        assertEquals(3, registry.split("enabled: false", -1).length - 1, "it LISTS the profiles the jar carries — tcbl/dev, tcbl/prod, btcl/lab — and enables none");
+
+        // the profiles stay: a deployment that names tcbl/dev, or the lab that names btcl/lab, runs as before
+        assertEquals("mysql", ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("tcbl", "dev")).get("summary.store.kind"));
+        assertFalse(PROFILE.isEmpty(), "config/tenants/btcl/lab/profile-lab.yml is on the class path");
     }
 
     @Test
-    void with_no_directory_named_and_no_tenant_named_the_jars_registry_and_the_jars_profile_are_read(@TempDir Path emptyWorkingDirectory) {
-        ProfileYamlLoader.Loaded jars = ProfileYamlLoader.loadActive(new ProfileYamlLoader.ConfigDir(emptyWorkingDirectory, null), null, null);
+    void a_start_that_names_no_tenant_is_refused_in_words_that_say_how_a_deployment_names_one(@TempDir Path emptyWorkingDirectory) {
+        // no SUMMARY_ACTIVE_TENANT, no -Dsummary.active-tenant, no registry file of the deployment: the jar's own registry is asked, and enables none
+        for (ProfileYamlLoader.ConfigDir directory : List.of(new ProfileYamlLoader.ConfigDir(emptyWorkingDirectory, null), named(emptyWorkingDirectory))) {
+            ProfileYamlLoader.Loaded refused = ProfileYamlLoader.loadActive(directory, null, " ");
 
-        assertEquals("mysql", jars.properties().get("summary.store.kind"));
-        assertEquals("tenant tcbl, profile dev (the first enabled entry of the jar's config/tenants.yml): THE JAR'S OWN config/tenants/tcbl/dev/profile-dev.yml"
-                + " (no such file under the working directory " + emptyWorkingDirectory.toAbsolutePath().normalize() + ")", jars.readFrom(),
-                "a start that fell back to a profile the jar carries is seen for what it is");
+            assertTrue(refused.properties().isEmpty(), "no tenant's profile is read — not tcbl/dev's, which the jar carried as its default: " + refused.properties());
+            assertEquals(ProfileYamlLoader.NO_TENANT_IS_NAMED, refused.fault());
+            assertEquals("no tenant is named: no profile was read", refused.readFrom());
+        }
+        String words = ProfileYamlLoader.NO_TENANT_IS_NAMED;
+        assertTrue(words.startsWith("this start names no tenant, and no registry enables one (the jar's own enables none)."), words);
+        for (String how : List.of("SUMMARY_ACTIVE_TENANT=<tenant>/<profile>", "-Dsummary.active-tenant=<tenant>/<profile>", "config/tenants.yml with one entry 'enabled: true'",
+                "SUMMARY_CONFIG_DIR", "-Dsummary.config.dir", "config/tenants/<tenant>/<profile>/profile-<profile>.yml", "deploy/tcbl-tenants.yml.example")) {
+            assertTrue(words.contains(how), "the refusal says how a deployment names its tenant — " + how + ": " + words);
+        }
+        // the profile source carries the refusal to the bootstrap, and answers no key of any tenant
+        TenantProfileConfigSource source = new TenantProfileConfigSource(ProfileYamlLoader.loadActive(named(emptyWorkingDirectory), null, null));
+        assertEquals(words, source.getValue(TenantProfileConfigSource.FAULT_KEY));
+        assertEquals(null, source.getValue("summary.store.url"));
+        assertEquals(null, source.getValue("summary.outbox.ping-bootstrap-servers"));
+    }
+
+    @Test
+    void a_build_names_no_tenant_and_is_no_start_nothing_is_said_then_but_a_real_fault_is_said_at_once(@TempDir Path directory) {
+        // the Quarkus BUILD makes the profile source too, and names no tenant: packaging the jar must not read as a refused start
+        assertEquals("", saidOnStandardError(() -> new TenantProfileConfigSource(ProfileYamlLoader.loadActive(named(directory), null, null))));
+
+        // what a person wrote wrong IS said when the source is made (the logging is not up yet; the bootstrap refuses with the same words)
+        String said = saidOnStandardError(() -> new TenantProfileConfigSource(ProfileYamlLoader.loadActive(named(directory), "btcl/bedd", null)));
+        assertTrue(said.startsWith("summary-service: the profile refuses this start — the start serves btcl/bedd and no profile file is there"), said);
+    }
+
+    private static String saidOnStandardError(Runnable action) {
+        java.io.PrintStream standardError = System.err;
+        java.io.ByteArrayOutputStream heard = new java.io.ByteArrayOutputStream();
+        try {
+            System.setErr(new java.io.PrintStream(heard, true, java.nio.charset.StandardCharsets.UTF_8));
+            action.run();
+        } finally {
+            System.setErr(standardError);
+        }
+        return heard.toString(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void the_voice_deployments_example_file_is_its_registry_put_into_its_directory_it_serves_tcbl_dev(@TempDir Path directory) throws IOException {
+        // deploy/tcbl-tenants.yml.example: what the jar carried until now, as a file for the voice deployment's own directory
+        String example = Files.readString(Path.of("deploy", "tcbl-tenants.yml.example"));
+        Path registry = write(directory, "config/tenants.yml", example);
+
+        ProfileYamlLoader.Loaded voice = ProfileYamlLoader.loadActive(named(directory), null, null);
+
+        assertEquals(null, voice.fault());
+        assertEquals("mysql", voice.properties().get("summary.store.kind"), "tcbl/dev, as before");
+        assertEquals("tenant tcbl, profile dev (the first enabled entry of " + registry.toAbsolutePath().normalize() + "): THE JAR'S OWN config/tenants/tcbl/dev/profile-dev.yml"
+                + " (no such file under -Dsummary.config.dir = " + directory.toAbsolutePath().normalize() + ")", voice.readFrom());
+        for (String sentence : List.of("<the service's configuration directory>/config/tenants.yml", "BEFORE the first build that enables no tenant is deployed",
+                "SUMMARY_ACTIVE_TENANT=tcbl/dev")) {
+            assertTrue(example.contains(sentence), "the example says what a deployer needs — " + sentence);
+        }
     }
 
     @Test
@@ -310,10 +382,7 @@ class WifiProfileTest {
     }
 
     @Test
-    void the_wifi_tenant_is_registered_and_not_the_active_one() {
-        // tenants.yml selects the build's tenant: tcbl/dev stays the first enabled; btcl/lab is chosen at a start
-        assertEquals(new ProfileYamlLoader.ActiveTenant("tcbl", "dev"), ProfileYamlLoader.activeTenant("config/tenants.yml").orElseThrow());
-        assertFalse(PROFILE.isEmpty(), "config/tenants/btcl/lab/profile-lab.yml is on the class path");
+    void the_wifi_tenants_profile_reads_the_cdr_stream() {
         assertEquals("cdr", PROFILE.get("summary.outbox.entity-type"));
     }
 }

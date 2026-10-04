@@ -9,7 +9,8 @@ import java.util.Set;
  * Feeds the active tenant's flattened profile yml into Quarkus config (the routesphere pattern). Ordinal 275
  * so it overrides application.properties for the keys it provides (summary.*). The active tenant is the one the
  * start names ({@code summary.active-tenant} / {@code SUMMARY_ACTIVE_TENANT} = {@code <tenant>/<profile>}), else
- * the first enabled entry of {@code config/tenants.yml}; its profile is the FILE in the deployment's directory
+ * the first enabled entry of the DEPLOYMENT's {@code config/tenants.yml} — the jar's own enables none, and a start
+ * that names no tenant is refused; its profile is the FILE in the deployment's directory
  * ({@code summary.config.dir} / {@code SUMMARY_CONFIG_DIR}, else the working directory) when it is there, else the
  * jar's own ({@link ProfileYamlLoader}). Registered via ServiceLoader (META-INF/services).
  *
@@ -48,9 +49,10 @@ public class TenantProfileConfigSource implements ConfigSource {
         this.properties = Map.copyOf(loaded.properties());
         this.readFrom = loaded.readFrom();
         this.fault = loaded.fault();
-        if (fault != null) {
+        if (fault != null && !ProfileYamlLoader.NO_TENANT_IS_NAMED.equals(fault)) {
             // the logging is not up yet; the bootstrap refuses the start with these words — said here too, in case the
-            // start dies of something else first
+            // start dies of something else first. (Not for "no tenant is named": the BUILD makes this source too, and
+            // names none — that is no start; a start is refused by the bootstrap, in its first lines.)
             System.err.println("summary-service: the profile refuses this start — " + fault);
         }
     }

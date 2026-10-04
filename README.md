@@ -22,6 +22,8 @@ consumes the outbox **exactly-once per bean**, for **every tenant of its root's 
 - **The password by the NAME of its environment variable** (`summary.store.password-ref: env:NAME`).
 - A start **names its tenant** (`SUMMARY_ACTIVE_TENANT=<tenant>/<profile>`), says the endpoints it resolved before
   it dials one, and a deployment's profile is a file beside its working directory.
+- **The jar enables no tenant.** A jar started with no configuration of its own is nobody's deployment: a start
+  that names no tenant is REFUSED, in words that say how a deployment names one (below, "Configuration").
 
 The page for a deployment: [`docs/ad-as-call/postgres-ad-profile.md`](docs/ad-as-call/postgres-ad-profile.md).
 The work's notes: `docs/ad-as-call/SS-0001-update.md`, `SS-0002-done.md`.
@@ -160,8 +162,18 @@ A row is one KEY — every `tup_*` column — in one window; the measures are su
   A profile file found there wins; else the jar's own is read. The start's first line says which tenant, what
   named it and which FILE was read (`PROFILE tenant btcl, profile bed (…): the file /etc/…/profile-bed.yml`).
 - The active tenant/profile: the one the START names (`SUMMARY_ACTIVE_TENANT=<tenant>/<profile>` or
-  `-Dsummary.active-tenant=`), else the first entry flagged `enabled: true` in the directory's own
-  `config/tenants.yml`, else in the jar's.
+  `-Dsummary.active-tenant=`), else the first entry flagged `enabled: true` in the deployment's OWN
+  `config/tenants.yml` (in that directory).
+- **The jar's own registry (`config/tenants.yml` inside the jar) enables NO tenant** — it only lists the profiles
+  the jar carries. A start that names no tenant is refused before anything is dialled:
+  `REFUSING TO START: this start names no tenant, and no registry enables one (the jar's own enables none). A
+  deployment names its tenant in its unit — SUMMARY_ACTIVE_TENANT=<tenant>/<profile> … or in a file:
+  config/tenants.yml with one entry 'enabled: true', in the deployment's configuration directory …`.
+  The voice deployment's registry file is in the repository: **`deploy/tcbl-tenants.yml.example`** — put it on
+  the box as `<the service's configuration directory>/config/tenants.yml` BEFORE the first build that enables no
+  tenant is deployed (or name the tenant in the unit: `SUMMARY_ACTIVE_TENANT=tcbl/dev`). A box that has one of
+  the two needs nothing. The unit tests name theirs too (`pom.xml`: `summary.active-tenant=tcbl/dev`; they dial
+  nothing).
 - `config/tenants/<tenant>/<profile>/profile-<profile>.yml`: the store (`summary.store.*`: kind, url, username, password | password-ref), the tenants
   (`summary.tenants.*`: single | tree), the `summary.contexts` (config-manager) block, the `summary.outbox`
   settings, and the **`enabledSummary`** list + each bean's `table-suffix`/`service-group`/`context` (the window

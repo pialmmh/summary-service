@@ -29,9 +29,14 @@ import java.util.stream.Collectors;
  * the jar does not name has its profile, and no box's address has to be committed here. Which file was read is said
  * in the start's first line ({@link Loaded#readFrom()}).
  *
+ * <p><b>A start names its tenant.</b> The jar's own registry enables NO tenant: a jar started with no configuration
+ * of its own must be nobody's deployment. A start that names none — no {@code SUMMARY_ACTIVE_TENANT}, no
+ * {@code -Dsummary.active-tenant}, no registry file of the deployment that enables one — is REFUSED, in words that
+ * say how a deployment names one ({@link #NO_TENANT_IS_NAMED}).
+ *
  * <p>Nothing here throws into the configuration system (the logging is not up yet, and a start must be refused in
- * WORDS): what a person wrote wrong — a directory that is none, a tenant with no profile anywhere, a file that cannot
- * be parsed — is a {@link Loaded#fault()}, and the bootstrap refuses the start with it.
+ * WORDS): what a person wrote wrong — no tenant named, a directory that is none, a tenant with no profile anywhere, a
+ * file that cannot be parsed — is a {@link Loaded#fault()}, and the bootstrap refuses the start with it.
  */
 public final class ProfileYamlLoader {
 
@@ -80,6 +85,17 @@ public final class ProfileYamlLoader {
 
     static final String TENANTS_FILE = "config/tenants.yml";
 
+    /**
+     * What a start that names no tenant is told. The jar's own registry enables none — a jar started with no
+     * configuration of its own is nobody's deployment — so such a start is refused, and these words say how a
+     * deployment names its tenant.
+     */
+    public static final String NO_TENANT_IS_NAMED = "this start names no tenant, and no registry enables one (the jar's own enables none). "
+            + "A deployment names its tenant in its unit — " + ACTIVE_TENANT_ENV + "=<tenant>/<profile> (or -D" + ACTIVE_TENANT_PROPERTY
+            + "=<tenant>/<profile>) — or in a file: " + TENANTS_FILE + " with one entry 'enabled: true', in the deployment's configuration "
+            + "directory. That directory is the one " + CONFIG_DIR_ENV + " (or -D" + CONFIG_DIR_PROPERTY + ") names, else the working directory: "
+            + "it holds config/tenants/<tenant>/<profile>/profile-<profile>.yml. The voice deployment's file is deploy/tcbl-tenants.yml.example";
+
     /** The profile of this start: the directory by its key, the tenant by its key or the registry, the file or the jar's. */
     public static Loaded loadActive() {
         return loadActive(configDir(), System.getProperty(ACTIVE_TENANT_PROPERTY), System.getenv(ACTIVE_TENANT_ENV));
@@ -97,8 +113,7 @@ public final class ProfileYamlLoader {
             return Loaded.refused("no profile was read", notTenantSlashProfile.getMessage());
         }
         if (selection.isEmpty()) {
-            return new Loaded(Map.of(), "no tenant is named (-D" + ACTIVE_TENANT_PROPERTY + ", " + ACTIVE_TENANT_ENV
-                    + ") and no entry of the registry file is enabled: NO tenant configuration", null);
+            return Loaded.refused("no tenant is named: no profile was read", NO_TENANT_IS_NAMED);
         }
         return load(selection.get(), directory);
     }
@@ -121,9 +136,10 @@ public final class ProfileYamlLoader {
     /**
      * The tenant and profile this start serves: the one the START names — {@code -Dsummary.active-tenant=btcl/lab},
      * or the unit's {@code SUMMARY_ACTIVE_TENANT=btcl/lab} — else the first enabled entry of the registry file: the
-     * deployment's own ({@code <directory>/config/tenants.yml}) when it is there, else the jar's. A deployment's
-     * registry that enables nothing serves nothing — the jar's is not asked behind its back. A value that is not
-     * {@code <tenant>/<profile>} is a mistake that must be seen: it is refused.
+     * deployment's own ({@code <directory>/config/tenants.yml}) when it is there, else the jar's — which enables
+     * none, so a start that names no tenant has no selection and is refused. A deployment's registry that enables
+     * nothing serves nothing — the jar's is not asked behind its back. A value that is not {@code <tenant>/<profile>}
+     * is a mistake that must be seen: it is refused.
      */
     static Optional<Selection> selection(ConfigDir directory, String byProperty, String byEnvironment) {
         if (isSet(byProperty)) {

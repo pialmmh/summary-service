@@ -130,6 +130,9 @@
                     <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                         <maven.home>${maven.home}</maven.home>
+                        <!-- the jar enables no tenant: the unit tests NAME theirs, as every start must. tcbl/dev is the
+                             profile the bootstrap's tests read (they dial nothing: autostart off, or print-only) -->
+                        <summary.active-tenant>tcbl/dev</summary.active-tenant>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
