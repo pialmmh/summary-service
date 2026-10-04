@@ -53,7 +53,7 @@ The lab's copy of it, with the lab's addresses: `src/main/resources/config/tenan
 | the file | `config/tenants/<tenant>/<profile>/profile-<profile>.yml`, **beside the unit's working directory**. The deploy tool renders it on the box. A file there wins over a profile of the same name inside the jar. The jar is not rebuilt for a tenant, and no box's address is committed in this repository |
 | the start | names its tenant: `SUMMARY_ACTIVE_TENANT=btcl/<profile>` in the unit's environment (or `-Dsummary.active-tenant=btcl/<profile>`). A start that names none takes the first enabled entry of the jar's `config/tenants.yml` — today `tcbl/dev`. **Always name it** |
 | Quarkus's own keys | the listener (`quarkus.http.host`, `quarkus.http.port`) go into `config/application.properties` beside the working directory, or into the unit's environment. A profile is not asked for them. The house rule: bind the host's 10.10.x.x address. The service serves `/q/health` only |
-| the password | by the NAME of its variable (`password-ref: env:NAME`). The value comes from secreteer's `/etc/secreteer/<tenant>/<app>.env` through the unit's `EnvironmentFile=`. It is never in the profile, a URL or a command line |
+| the password | by the NAME of its variable (`password-ref: env:NAME`). The value comes from secreteer's `/etc/secreteer/<tenant>/<app>.env` through the unit's `EnvironmentFile=`. It is never in the profile, a URL or a command line. Wherever a configured value is printed, a password in it is hidden |
 
 ```
 [Service]
@@ -79,14 +79,15 @@ the store's password: from the environment variable TENANT_BTCL_SWITCH_SUMMARY_S
 | a start is refused, in words, when | |
 |---|---|
 | the variable `password-ref` names is not set, or is empty | it names the variable. Nothing was dialled |
-| `password` and `password-ref` are both set; `password-ref` is not `env:NAME`; the URL carries a password | what was written there is not shown |
+| `password` and `password-ref` are both set; `password-ref` is not `env:NAME`; the URL carries a password (a parameter, or `user:password@` before a host) | what was written there is not shown |
 | `kind` says one engine and the URL is the other's; `kind` is not `mysql` or `postgresql` | |
 | the workers are to start (`autostart`) and the profile names no store | it asks whether the start named its tenant |
 | `tenants.mode: tree` without `root` or `prime-context.base-url` (when the workers are to start) | |
 | (a lab) `summary.endpoints.loopback-only: true` and an endpoint is not this machine | every such endpoint is named |
 
 `-Dsummary.endpoints.print-only=true` prints these lines and exits: nothing is started and nothing is dialled.
-Exit code 0 = every host is this machine, 3 = not, 4 = the named password variable is not set.
+Exit code 0 = every host is this machine, 3 = not, 4 = the store's configuration refuses the start (the `SECRET`
+line says why: most often the named password variable is not set).
 
 What does **not** refuse a start: a store, a broker or a prime-context that does not answer. The service stays
 up, says it (ERROR), and tries again: after `retry-seconds`, each try a little later, up to `refresh-seconds`.

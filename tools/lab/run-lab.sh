@@ -14,7 +14,8 @@
 # summary.endpoints.loopback-only=true, so the service refuses by itself if anything changed in between.
 #
 # A secret is never given here: a profile that names its password's variable (summary.store.password-ref: env:NAME)
-# takes it from THIS shell's environment. Exit codes: 3 = a host is not this machine, 4 = that variable is not set.
+# takes it from THIS shell's environment. Exit codes: 3 = a host is not this machine, 4 = the store's configuration
+# refuses the start (that variable is not set; or the engine contradicts the URL, a password rides in the URL, ...).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -64,10 +65,11 @@ if [ "$elsewhere" -ne 0 ]; then
 fi
 echo "== every host is this machine =="
 # where the store's password comes from — the NAME of its variable, never a value. A variable the profile names
-# and this environment does not hold: the service would refuse the start; it is not started.
+# and this environment does not hold, or another fault of the store's configuration: the service would refuse the
+# start; it is not started. The SECRET line says which.
 printf '%s\n' "$resolved" | grep '^SECRET ' || true
 if [ "$shown" -eq 4 ]; then
-  echo "== NOT STARTED: the store's password is named by an environment variable that is not set here =="
+  echo "== NOT STARTED: the store's configuration refuses the start (the SECRET line above says why) =="
   exit 4
 fi
 $show_only && exit 0

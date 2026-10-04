@@ -64,8 +64,21 @@ public class StoreDataSource {
             }
             return "the store: none is configured (nothing is to be served: summary.autostart is off)";
         }
-        StoreConfig.from(active, environment);                  // the engine against the URL; the secret's rules; the named variable
+        try {
+            StoreConfig.from(active, environment);              // the engine against the URL; the secret's rules; the named variable
+        } catch (IllegalArgumentException | IllegalStateException fault) {
+            throw refusal(fault);
+        }
         return StoreSecret.sourceOf(active).said();
+    }
+
+    /** Every fault of the store's configuration is said the same way: ONE refusal, in words (print-only reads it too). */
+    private static IllegalStateException refusal(RuntimeException fault) {
+        String words = String.valueOf(fault.getMessage());
+        if (fault instanceof IllegalStateException already && words.startsWith("REFUSING TO START")) {
+            return already;
+        }
+        return new IllegalStateException("REFUSING TO START: " + words, fault);
     }
 
     /** The engine the active profile names. Reads the profile; opens nothing. */

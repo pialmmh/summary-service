@@ -1,5 +1,6 @@
 package com.telcobright.summary.registry.internal;
 
+import com.telcobright.summary.runtime.internal.UrlSecrets;
 import org.eclipse.microprofile.config.Config;
 
 import java.util.ArrayList;
@@ -17,8 +18,9 @@ import java.util.Set;
  * <ul>
  *   <li>{@code summary.endpoints.print-only=true} — print the list and exit; nothing is started, nothing is
  *       dialled. The exit code says whether every host is this machine (0) or not (3); 4 = the hosts are, but the
- *       store's password is named by a variable that is not in the environment (a {@code SECRET} line says so,
- *       never a value);</li>
+ *       store's configuration refuses the start — its password is named by a variable that is not in the
+ *       environment, its engine contradicts its URL, a password rides in the URL (a {@code SECRET} line says
+ *       which, never a value);</li>
  *   <li>{@code summary.endpoints.loopback-only=true} — the LAB's rule: the start is refused, in words, unless every
  *       host is {@code 127.0.0.1} / {@code localhost}. An address of a box is never dialled from a lab, not even
  *       for a read.</li>
@@ -76,11 +78,12 @@ public final class StartEndpoints {
     }
 
     /**
-     * A value as it may be printed: a password parameter in a URL is hidden. (A store URL that carries one is refused
-     * at the start anyway — a secret is never in a URL — but this line is printed before that, and must not leak it.)
+     * A value as it may be printed: a password in a URL is hidden, in every form {@link UrlSecrets} knows. (A store
+     * URL that carries one is refused at the start anyway — a secret is never in a URL — but the endpoints are said
+     * before that, and must not leak it.)
      */
     static String shown(String value) {
-        return value.replaceAll("(?i)([?&;](?:password|pwd)=)[^&;]*", "$1<hidden>");
+        return UrlSecrets.hidden(value);
     }
 
     /** The endpoints that are set and not on this machine. */
@@ -95,7 +98,7 @@ public final class StartEndpoints {
             StringBuilder said = new StringBuilder("REFUSING TO START: summary.endpoints.loopback-only is set (a lab start) and "
                     + elsewhere.size() + " endpoint(s) are not on this machine —");
             for (Endpoint e : elsewhere) {
-                said.append(' ').append(e.what()).append('=').append(e.value()).append(';');
+                said.append(' ').append(e.what()).append('=').append(shown(e.value())).append(';');
             }
             said.append(" a lab never dials a box, not even for a read. Start the tenant's lab profile, or name loopback addresses.");
             throw new IllegalStateException(said.toString());
@@ -114,18 +117,18 @@ public final class StartEndpoints {
     public static List<String> hostsOf(String value) {
         String text = value.trim();
         int scheme = text.indexOf("://");                      // jdbc:postgresql://…, jdbc:mysql://…, http://…
-        if (scheme >= 0) {
-            String authority = text.substring(scheme + 3);
+        boolean url = scheme >= 0;
+        if (url) {
+            text = text.substring(scheme + 3);
             for (char end : new char[] {'/', '?', '#'}) {
-                int at = authority.indexOf(end);
-                if (at >= 0) authority = authority.substring(0, at);
+                int at = text.indexOf(end);
+                if (at >= 0) text = text.substring(0, at);
             }
-            int user = authority.lastIndexOf('@');
-            text = user >= 0 ? authority.substring(user + 1) : authority;
         }
         List<String> hosts = new ArrayList<>();
         for (String part : text.split(",")) {
-            String host = hostOf(part.trim());
+            int user = url ? part.lastIndexOf('@') : -1;       // user[:password]@host — each host of a list may carry its own
+            String host = hostOf(part.substring(user + 1).trim());
             if (host == null) {
                 return List.of();                    // one part that cannot be read: the whole value is unread
             }

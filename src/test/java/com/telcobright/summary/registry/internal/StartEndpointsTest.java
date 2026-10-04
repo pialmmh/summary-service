@@ -114,6 +114,22 @@ class StartEndpointsTest {
 
         assertEquals("ENDPOINT store jdbc:postgresql://127.0.0.1:7643/routesphere?user=x&password=<hidden>&currentSchema=btcl hosts=127.0.0.1 LOOPBACK", store.line());
         assertFalse(StartEndpoints.endpoint("store", "jdbc:mysql://h:3306/db?PWD=s3cret-in-a-url").line().contains("s3cret-in-a-url"));
+        assertEquals("ENDPOINT store jdbc:mysql://<hidden>@127.0.0.1:3306/telcobright hosts=127.0.0.1 LOOPBACK",
+                StartEndpoints.endpoint("store", "jdbc:mysql://summary:s3cret-in-a-url@127.0.0.1:3306/telcobright").line(), "user:password@ before the host");
+        assertFalse(StartEndpoints.endpoint("store", "jdbc:mysql://(host=127.0.0.1,port=3306,password=s3cret-in-a-url)/db").line().contains("s3cret-in-a-url"));
+    }
+
+    @Test
+    void the_refusal_of_a_lab_start_names_the_box_and_never_a_password() {
+        // the refusal is said BEFORE the store's own check: it must not be the place a password in a URL leaks
+        List<Endpoint> endpoints = List.of(StartEndpoints.endpoint("store", "jdbc:postgresql://10.10.9.9:5432/routesphere?user=x&password=s3cret-in-a-url"),
+                StartEndpoints.endpoint("tree-prime-context", "http://reader:s3cret-in-a-url@10.10.9.9:7091"));
+
+        IllegalStateException refused = assertThrows(IllegalStateException.class, () -> StartEndpoints.requireLoopbackOnly(endpoints));
+
+        assertTrue(refused.getMessage().contains("store=jdbc:postgresql://10.10.9.9:5432/routesphere?user=x&password=<hidden>;"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("tree-prime-context=http://<hidden>@10.10.9.9:7091;"), refused.getMessage());
+        assertFalse(refused.getMessage().contains("s3cret-in-a-url"), refused.getMessage());
     }
 
     @Test
@@ -123,6 +139,8 @@ class StartEndpointsTest {
         assertEquals(List.of("db1", "db2"), StartEndpoints.hostsOf("jdbc:mysql://db1:3306,db2:3306/telcobright"));
         assertEquals(List.of("10.10.199.1"), StartEndpoints.hostsOf("http://10.10.199.1:7091"));
         assertEquals(List.of("prime.example"), StartEndpoints.hostsOf("https://user@prime.example/base"));
+        assertEquals(List.of("10.10.9.9", "127.0.0.1"), StartEndpoints.hostsOf("jdbc:mysql://u:p@10.10.9.9:3306,u:p@127.0.0.1:3306/db"),
+                "each host of a list may carry its own user: EVERY host is read, not only the last");
         assertEquals(List.of("127.0.0.1", "10.10.188.2"), StartEndpoints.hostsOf("127.0.0.1:7692, 10.10.188.2:9092"));
         assertEquals(List.of("::1"), StartEndpoints.hostsOf("[::1]:9092"));
         assertEquals(List.of("localhost"), StartEndpoints.hostsOf("localhost"));

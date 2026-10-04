@@ -35,7 +35,6 @@ final class StoreSecret {
 
     /** {@code env:} and the name of an environment variable — nothing else is a reference. */
     private static final Pattern REFERENCE = Pattern.compile("env:([A-Za-z_][A-Za-z0-9_]*)");
-    private static final Pattern PASSWORD_IN_A_URL = Pattern.compile("(?i)[?&;](password|pwd)=");
 
     enum Kind {NONE, INLINE, ENVIRONMENT}
 
@@ -93,11 +92,15 @@ final class StoreSecret {
         };
     }
 
-    /** A password never rides in the URL (it would be printed with the endpoints and logged by drivers). The URL is not shown. */
+    /**
+     * A password never rides in the URL (it would be logged by drivers and shown with an error) — in none of its
+     * forms ({@link UrlSecrets}: a parameter, {@code user:password@} before a host). The URL is not shown.
+     */
     static void refuseAPasswordInTheUrl(String url) {
-        if (url != null && PASSWORD_IN_A_URL.matcher(url).find()) {
-            throw new IllegalStateException("REFUSING TO START: " + StoreConfig.PREFIX + "url carries a password parameter — a secret is never "
-                    + "in a URL. Take it out and name its environment variable in " + REFERENCE_KEY + " (the URL is not shown here)");
+        if (UrlSecrets.in(url)) {
+            throw new IllegalStateException("REFUSING TO START: " + StoreConfig.PREFIX + "url carries a password (a parameter, or "
+                    + "user:password@ before a host) — a secret is never in a URL. Take it out and name its environment variable in "
+                    + REFERENCE_KEY + " (the URL is not shown here)");
         }
     }
 }

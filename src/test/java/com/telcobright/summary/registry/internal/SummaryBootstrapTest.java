@@ -80,6 +80,29 @@ class SummaryBootstrapTest {
     }
 
     @Test
+    void workers_that_are_to_start_with_no_store_in_the_profile_refuse_the_start_before_anything_else() {
+        // the most likely cause: the start did not name its tenant, and the profile it fell on has no store
+        IllegalStateException refused = assertThrows(IllegalStateException.class, () -> bootstrap(true).onStart(null));
+
+        assertTrue(refused.getMessage().startsWith("REFUSING TO START") && refused.getMessage().contains("names no store")
+                && refused.getMessage().contains("SUMMARY_ACTIVE_TENANT"), refused.getMessage());
+        assertTrue(registry.beanNames().isEmpty(), "not a bean was registered");
+        assertTrue(registry.servedSchemas().isEmpty(), "no schema is served, no worker started");
+        assertEquals(List.of(), contextsFetched, "and nothing was dialled");
+        assertTrue(database.store.executedSql().isEmpty());
+    }
+
+    @Test
+    void a_store_whose_engine_contradicts_its_url_refuses_the_start_it_is_not_left_to_the_tenants_thread_to_try_again() {
+        StoreDataSource store = TestPools.store(Map.of("summary.store.kind", "postgresql", "summary.store.url", "jdbc:mysql://127.0.0.1:1/telcobright"), Map.of());
+
+        IllegalStateException refused = assertThrows(IllegalStateException.class, () -> bootstrap(false, store).onStart(null));
+
+        assertTrue(refused.getMessage().contains("kind is postgresql but summary.store.url is a mysql URL"), refused.getMessage());
+        assertTrue(registry.beanNames().isEmpty(), "refused whether the workers were to start or not");
+    }
+
+    @Test
     void with_the_variable_in_the_environment_the_start_goes_on_and_says_the_variables_name_never_its_value() {
         StoreDataSource store = TestPools.store(Map.of("summary.store.url", PG, "summary.store.password-ref", "env:SUMMARY_TEST_PASSWORD"),
                 Map.of("SUMMARY_TEST_PASSWORD", "the-secret-value-itself"));

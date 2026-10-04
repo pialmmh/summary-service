@@ -127,12 +127,17 @@ class StoreConfigTest {
 
     @Test
     void a_password_in_the_url_is_refused_and_the_url_is_not_shown() {
-        for (String url : new String[] {PG + "?user=summary_service&password=s3cret-in-a-url", PG + "?PASSWORD=s3cret-in-a-url", "jdbc:mysql://h:3306/db?useSSL=false&pwd=s3cret-in-a-url"}) {
+        for (String url : new String[] {PG + "?user=summary_service&password=s3cret-in-a-url", PG + "?PASSWORD=s3cret-in-a-url", "jdbc:mysql://h:3306/db?useSSL=false&pwd=s3cret-in-a-url",
+                PG + "?sslpassword=s3cret-in-a-url",                                           // the key file's password is a secret too
+                "jdbc:mysql://summary:s3cret-in-a-url@127.0.0.1:3306/telcobright",            // user:password@ before the host
+                "jdbc:mysql://127.0.0.1:3306,summary:s3cret-in-a-url@127.0.0.2:3306/telcobright",
+                "jdbc:mysql://(host=127.0.0.1,port=3306,user=summary,password=s3cret-in-a-url)/telcobright"}) {
             IllegalStateException refused = assertThrows(IllegalStateException.class, () -> StoreConfig.from(profile("url", url), Map.<String, String>of()::get), url);
             assertTrue(refused.getMessage().contains("a secret is never in a URL"), refused.getMessage());
             assertFalse(refused.getMessage().contains("s3cret-in-a-url"), refused.getMessage());
         }
         assertEquals(SqlDialect.POSTGRESQL, StoreConfig.from(profile("url", PG + "?currentSchema=btcl&sslmode=require")).dialect(), "other parameters are the URL's own");
+        assertEquals(SqlDialect.MYSQL, StoreConfig.from(profile("url", "jdbc:mysql://summary@127.0.0.1:3306/telcobright")).dialect(), "a user alone is no secret");
     }
 
     @Test
@@ -153,9 +158,17 @@ class StoreConfigTest {
         StoreDataSource unknownKind = TestPools.store(Map.of("summary.store.kind", "oracle", "summary.store.url", PG), Map.of());
         StoreDataSource passwordInUrl = TestPools.store(Map.of("summary.store.url", PG + "?password=s3cret-in-a-url"), Map.of());
 
+        StoreDataSource neitherEngine = TestPools.store(Map.of("summary.store.url", "jdbc:oracle:thin:@127.0.0.1:1521/x"), Map.of());
+
         assertTrue(assertThrows(IllegalStateException.class, () -> wrongEngine.checkAtStart(true)).getMessage().contains("kind is postgresql but summary.store.url is a mysql URL"));
-        assertThrows(IllegalArgumentException.class, () -> unknownKind.checkAtStart(true));
         assertTrue(assertThrows(IllegalStateException.class, () -> passwordInUrl.checkAtStart(false)).getMessage().contains("a secret is never in a URL"));
+        // every fault is said the same way — ONE kind of refusal, which print-only reads and the lab script acts on
+        for (StoreDataSource faulty : new StoreDataSource[] {wrongEngine, unknownKind, passwordInUrl, neitherEngine}) {
+            IllegalStateException refused = assertThrows(IllegalStateException.class, () -> faulty.checkAtStart(true));
+            assertTrue(refused.getMessage().startsWith("REFUSING TO START"), refused.getMessage());
+        }
+        assertTrue(assertThrows(IllegalStateException.class, () -> unknownKind.checkAtStart(true)).getMessage().contains("it must be mysql or postgresql"));
+        assertTrue(assertThrows(IllegalStateException.class, () -> neitherEngine.checkAtStart(true)).getMessage().contains("neither a jdbc:mysql: nor a jdbc:postgresql: URL"));
     }
 
     @Test
