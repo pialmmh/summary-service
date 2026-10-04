@@ -16,7 +16,11 @@ import com.telcobright.summary.testkit.LogCapture;
 import jakarta.enterprise.inject.Instance;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -166,6 +170,86 @@ class SummaryBootstrapTest {
             assertTrue(registry.beanNames().isEmpty(), "refused before a bean was registered");
             assertEquals(List.of(), contextsFetched, "and nothing was dialled");
         }
+    }
+
+    // ---- print-only: what a lab script reads BEFORE it starts anything ----
+
+    /** The lines a print-only start writes to standard output, and the code it exits with. */
+    private record Printed(List<String> lines, List<Integer> exitCodes) {
+    }
+
+    /** A print-only start of the unit test's profile (the jar's tcbl/dev), with these keys set over it for its length. */
+    private Printed printOnly(boolean autostart, StoreDataSource store, String... keysAndValues) {
+        List<String> keys = new ArrayList<>(List.of("summary.endpoints.print-only"));
+        System.setProperty("summary.endpoints.print-only", "true");
+        for (int i = 0; i < keysAndValues.length; i += 2) {
+            System.setProperty(keysAndValues[i], keysAndValues[i + 1]);
+            keys.add(keysAndValues[i]);
+        }
+        PrintStream standardOutput = System.out;
+        ByteArrayOutputStream heard = new ByteArrayOutputStream();
+        List<Integer> exitCodes = new ArrayList<>();
+        try {
+            System.setOut(new PrintStream(heard, true, StandardCharsets.UTF_8));
+            SummaryBootstrap printing = bootstrap(autostart, store);
+            printing.exit = exitCodes::add;
+            printing.onStart(null);
+        } finally {
+            System.setOut(standardOutput);
+            keys.forEach(System::clearProperty);
+        }
+        return new Printed(heard.toString(StandardCharsets.UTF_8).lines().toList(), exitCodes);
+    }
+
+    /** Every endpoint of the unit test's profile moved onto this machine (port 1: nothing is dialled by a print-only start). */
+    private static final String[] ON_THIS_BOX = {"summary.store.url", "jdbc:mysql://127.0.0.1:1/telcobright", "summary.outbox.ping-bootstrap-servers", "127.0.0.1:1",
+            "summary.contexts.mediationContext.base-url", "http://127.0.0.1:1", "quarkus.http.host", "127.0.0.1"};
+
+    private static String[] with(String[] keysAndValues, String... more) {
+        List<String> all = new ArrayList<>(List.of(keysAndValues));
+        all.addAll(List.of(more));
+        return all.toArray(String[]::new);
+    }
+
+    @Test
+    void print_only_says_the_profile_and_every_endpoint_starts_nothing_and_exits_with_3_when_a_host_is_another_boxs() {
+        Printed printed = printOnly(true, TestPools.store(Map.of(), Map.of()));
+
+        assertTrue(printed.lines().get(0).startsWith("PROFILE tenant tcbl, profile dev "), "the first line: " + printed.lines());
+        assertTrue(printed.lines().stream().anyMatch(line -> line.startsWith("ENDPOINT store jdbc:mysql://103.95.96.77:3306/") && line.endsWith(" hosts=103.95.96.77 NOT-THIS-BOX")),
+                "each endpoint, with its hosts and whether they are this box: " + printed.lines());
+        assertEquals("ENDPOINTS 4 resolved, 4 not on this box — print-only: nothing was started", printed.lines().get(printed.lines().size() - 1),
+                "CCL's database, broker and config-manager, and a listener on every interface");
+        assertEquals(List.of(3), printed.exitCodes(), "3 = a host is not this box: a lab script does not start it");
+        assertTrue(registry.beanNames().isEmpty() && registry.servedSchemas().isEmpty(), "nothing was started, though autostart is on");
+        assertEquals(List.of(), contextsFetched, "and nothing was dialled");
+    }
+
+    @Test
+    void print_only_exits_with_0_when_every_host_is_this_box_and_the_configuration_starts() {
+        StoreDataSource store = TestPools.store(Map.of("summary.store.url", "jdbc:mysql://127.0.0.1:1/telcobright"), Map.of());
+
+        Printed printed = printOnly(true, store, ON_THIS_BOX);
+
+        assertEquals(List.of(0), printed.exitCodes(), printed.lines().toString());
+        assertTrue(printed.lines().contains("SECRET the store's password: none is configured"), "where the password comes from, never a value: " + printed.lines());
+        assertTrue(printed.lines().stream().filter(line -> line.startsWith("ENDPOINT ")).allMatch(line -> line.endsWith(" LOOPBACK")), printed.lines().toString());
+        assertTrue(registry.beanNames().isEmpty(), "nothing was started");
+    }
+
+    @Test
+    void print_only_exits_with_4_and_says_the_refusal_when_the_configuration_would_refuse_the_start() {
+        // every host is this box — but the start itself would be refused: a lab script must not start it either
+        Printed profileFault = printOnly(false, TestPools.store(Map.of(), Map.of()), with(ON_THIS_BOX, "summary.profile.fault", "SUMMARY_CONFIG_DIR names /nowhere, which is not a directory"));
+        assertEquals(List.of(4), profileFault.exitCodes(), profileFault.lines().toString());
+        assertTrue(profileFault.lines().contains("REFUSING TO START: SUMMARY_CONFIG_DIR names /nowhere, which is not a directory"), "said as the start would say it: " + profileFault.lines());
+
+        StoreDataSource noVariable = TestPools.store(Map.of("summary.store.url", PG, "summary.store.password-ref", "env:SUMMARY_TEST_NOT_SET"), Map.of());
+        Printed secretMissing = printOnly(true, noVariable, ON_THIS_BOX);
+        assertEquals(List.of(4), secretMissing.exitCodes(), secretMissing.lines().toString());
+        assertTrue(secretMissing.lines().stream().anyMatch(line -> line.startsWith("REFUSING TO START: the environment variable SUMMARY_TEST_NOT_SET is not set")),
+                secretMissing.lines().toString());
+        assertTrue(registry.beanNames().isEmpty(), "nothing was started");
     }
 
     @Test

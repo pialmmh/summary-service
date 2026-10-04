@@ -24,6 +24,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.List;
+import java.util.function.IntConsumer;
 
 /**
  * At startup: say what this start resolved — which tenant and which profile FILE (brief S10), then every endpoint
@@ -53,6 +54,8 @@ public class SummaryBootstrap {
     private final TenantWatcher tenants;
     private final StoreDataSource store;
     private final boolean autostart;
+    /** How a print-only start ends: the process exits with the code. (A test hears the code instead.) */
+    IntConsumer exit = Quarkus::asyncExit;
 
     @Inject
     public SummaryBootstrap(SummaryBeanRegistry registry,
@@ -141,7 +144,7 @@ public class SummaryBootstrap {
         int elsewhere = StartEndpoints.notThisBox(endpoints).size();
         boolean configurationStarts = sayWhetherTheConfigurationStarts(config);
         System.out.println(StartEndpoints.LINE_MARK + "S " + endpoints.size() + " resolved, " + elsewhere + " not on this box — print-only: nothing was started");
-        Quarkus.asyncExit(elsewhere != 0 ? 3 : configurationStarts ? 0 : 4);
+        exit.accept(elsewhere != 0 ? 3 : configurationStarts ? 0 : 4);
     }
 
     /** Which tenant this start serves, what named it, and which file its profile was read from — the profile source's own word. */
