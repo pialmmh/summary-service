@@ -2,14 +2,31 @@
 
 A standalone **Java 21 / Quarkus** service that generates **time-windowed counters/summaries** for any event
 stream — CDRs today, any log/entity later (softswitch/BSC/MSC-style performance counters). It **owns**
-summarisation; billing-core hands off each rated-CDR batch via a **MySQL transactional outbox**, and
-summary-service consumes it **incrementally**. Summaries are **eventually consistent** (outbox-fed) — fine for
-derived roll-ups.
+summarisation; billing-core hands off each rated-CDR batch via a **transactional outbox** in the tenant's own
+schema — on **MySQL or PostgreSQL**, chosen per profile — and summary-service consumes it **incrementally**.
+Summaries are **eventually consistent** (outbox-fed) — fine for derived roll-ups.
 
 It ports billing-core's proven **load-merge-write** engine (.NET → Java) over a typed summary **entity**, and
-consumes the outbox **exactly-once per bean**.
+consumes the outbox **exactly-once per bean**, for **every tenant of its root's tree in one process**.
 
-## Status — built, tests green (outbox consumer)
+## Since 2026-10-04 — an ad is a Call (branch `postgres-ad-call`; decisions §16)
+
+- **The ad view is a `cdr` row of service group 30.** The ad beans (`sum_ad_day_30` / `sum_ad_hr_30`) read the call's
+  own outbox stream; the call bean takes group 30 from a profile (`sum_voice_*_30`); the chargeable beans are as
+  they were. Money and a package's units are two measures (`chargedamount`, `chargedunits`), never added.
+- **PostgreSQL as the store**, chosen at run time (`summary.store.kind`): one jar serves either engine. A tenant
+  is a schema there; the summary tables are plain; the service never makes billing-core's tables.
+- **Every tenant of the tree in one process**: a worker and a bookmark per (schema, bean). The tree comes from
+  prime-context; a reseller made at run time is served with no restart. A schema seen for the first time starts
+  at offset 0. The ping wakes the tenant it names.
+- **The password by the NAME of its environment variable** (`summary.store.password-ref: env:NAME`).
+- A start **names its tenant** (`SUMMARY_ACTIVE_TENANT=<tenant>/<profile>`), says the endpoints it resolved before
+  it dials one, and a deployment's profile is a file beside its working directory.
+
+The page for a deployment: [`docs/ad-as-call/postgres-ad-profile.md`](docs/ad-as-call/postgres-ad-profile.md).
+The work's notes: `docs/ad-as-call/SS-0001-update.md`, `SS-0002-done.md`.
+
+## Status before that — built, tests green (outbox consumer; the numbers of 2026-07)
 
 - Input is the MySQL outbox `summary_affected` — blob **v2**: base64(gzip(JSON)) batches of
   `{Cdr, Chargeables:[ALL legs]}` (the v1 `{Cdr, Customer}` shape is tolerated permanently), plus an
@@ -42,13 +59,19 @@ consumes the outbox **exactly-once per bean**.
 ## Build & test
 
 ```bash
-mvn test                 # 77 fast unit tests (no DB/Kafka needed — SPI fakes)
+mvn test                 # the unit tests (no DB/Kafka needed — SPI fakes)
 mvn package              # + Quarkus augmentation (builds the runnable app)
-mvn verify -Dsummary.it.mysql.password=…   # + 8 MySQL integration tests; SELF-SKIP if MySQL is unreachable
+tools/lab/pg-lab.sh all  # the lab: PostgreSQL 16 (7643), MySQL 5.7.44 (7633), Kafka 3.9 (7692) — 127.0.0.1 only, no password exists
+mvn verify -Dsummary.it.mysql.url='jdbc:mysql://127.0.0.1:7633/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true'
 ```
 
-The integration test targets the local dev MySQL (`127.0.0.1:3306`, `root`); the password is supplied at run
-time (no credential in git), override with `-Dsummary.it.mysql.url=… -Dsummary.it.mysql.user=…`.
+`mvn verify` adds the integration tests: the outbox consumer's contract word for word on MySQL and on PostgreSQL
+(`OutboxConsumerContract`), the tree on both, the two Kafka listeners, and a guard that reads the packaged jar. A
+test whose lab does not answer is SKIPPED, never passed. PostgreSQL's and Kafka's lab are the defaults
+(`-Dsummary.it.pg.url`, `-Dsummary.it.kafka`); MySQL's default is `127.0.0.1:3306` with a password given at run
+time (`-Dsummary.it.mysql.password`), so name the lab's as above. The lab's stories with the packaged jar:
+`tools/lab/tree-e2e.sh`, `reconcile-with-billing-core.sh`, `secret-e2e.sh` — a service is started there only
+through `tools/lab/run-lab.sh`, which shows the endpoints first and starts only when every host is this machine.
 
 ## The pipeline (per bean, per drain)
 
@@ -85,27 +108,36 @@ instance under its own name/offset/table, e.g. the SG11 pair (legacy summarised 
 
 ## Configuration (routesphere-like)
 
-- `application.properties` — `summary.autostart` (default off; gates the workers, ping listener, and reaper).
-  The active tenant/profile is selected in `config/tenants.yml` (first entry flagged `enabled: true`).
-- `config/tenants.yml` + `config/tenants/<tenant>/<profile>/profile-<profile>.yml` — datasource, the
-  `summary.contexts` (config-manager) block, the `summary.outbox` settings, and the **`enabledSummary`** list +
-  each bean's `table-suffix`/`service-group`/`context` (the window is the class — or the `window:` key for
-  config-instantiated instances). Flattened by `TenantProfileConfigSource`.
-- **DB credentials** are **inline** in the profile yml (no OpenBao), matching billing-core — fill the CCL creds
-  at cutover (see `docs/decisions.md` §8). The integration-test password is supplied at run time, never committed.
+- `application.properties` — `summary.autostart` (default off; gates the workers, ping listener, and reaper;
+  with it off nothing is dialled).
+- The active tenant/profile: the one the START names (`SUMMARY_ACTIVE_TENANT=<tenant>/<profile>` or
+  `-Dsummary.active-tenant=`), else the first entry flagged `enabled: true` in `config/tenants.yml`.
+- `config/tenants/<tenant>/<profile>/profile-<profile>.yml` — a FILE beside the working directory first, else the
+  one in the jar: the store (`summary.store.*`: kind, url, username, password | password-ref), the tenants
+  (`summary.tenants.*`: single | tree), the `summary.contexts` (config-manager) block, the `summary.outbox`
+  settings, and the **`enabledSummary`** list + each bean's `table-suffix`/`service-group`/`context` (the window
+  is the class — or the `window:` key for config-instantiated instances). A profile answers `summary.*` keys by
+  name and lists nothing (`TenantProfileConfigSource`): no tenant's value is baked into the jar at build time.
+- **DB credentials**: `password-ref: env:NAME` on the wifi bed (the value in the unit's environment only); the
+  **inline** form stays for the other deployments (see `docs/decisions.md` §8, §16j).
 
 ## Layout
 
 ```
 bean/spi      SummaryEntity<T> + SummaryBean<T> contracts · SummaryKey · WindowSize · SqlLiterals · DdlPartitions
+              · SqlDialect (mysql | postgresql) · SummaryTableSpec (a table described once) · TableDdl (rendered per engine)
 beans/        PUBLIC API — fluent builders: SummaryBeanBuilder<T,B> root · CallBeanBuilder (voice layer: SG+suffix)
               · Daily/HourlySummaryBuilder · Daily/HourlyChargeableSummaryBuilder
 engine/       load-merge-write over T: SummaryEngine (api) · SummaryStore (spi) · SummaryCache<T> (internal)
 outbox/       OutboxReader (api, the ONE tx per drain) · OutboxStore + OutboxRow (spi) · codec + reaper (internal)
-runtime/      UnitOfWork (spi, summary + outbox stores) · JDBC impls (internal)
-registry/     SummaryBeanRegistry (api) · OutboxWorker + SummaryBootstrap [CDI-discovers beans] (internal)
+runtime/      UnitOfWork (spi, summary + outbox stores, begun ON a tenant schema) · JDBC impls · StoreDataSource
+              (the pool, from the profile) · StoreConfig · StoreSecret (internal)
+registry/     SummaryBeanRegistry (api: a worker per (schema, bean)) · OutboxWorker + SummaryBootstrap [CDI-discovers
+              beans] + StartEndpoints [what a start will dial, said first] (internal)
+tenancy/      TenantWatcher (api: which schemas are served — one, or the root's tree) · TenantTreeSource (spi)
+              · PrimeContextTreeSource + TenantTreeParser + DoorbellListener (internal)
 context/      ContextRegistry (api) · SummaryContext (spi) · ConfigManagerClient + MediationContext (internal/cdr)
-ping/         PingListener (Kafka cdr_summary_ping → wake workers)
+ping/         PingListener (Kafka cdr_summary_ping → wake the workers of the tenant it names) · PingPayload
 config/       TenantProfileConfigSource (routesphere-like profile loader)
 summarybeans/ one package per category (call + chargeable today; sms/packetflow/session later)
   call/       HourlySummary · DailySummary · CallSummaries (config-instantiated extras, e.g. the SG11 pair)
@@ -114,6 +146,9 @@ summarybeans/ one package per category (call + chargeable today; sms/packetflow/
   chargeable/ HourlyChargeableSummary · DailyChargeableSummary   (EVERY leg, every SG; fixed tables)
     internal/ ChargeableSummaryBean (base) · ChargeableSummaryBuilder · SumChargeableDdl
     model/    ChargeableSummary (7-key + 15 measures, DECIMAL(20,8))
+  ad/         DailyAdSummary · HourlyAdSummary   (service group 30 of the cdr stream; one pair per tier schema)
+    internal/ AdSummaryBean (base) · AdSummaryBuilder · AdMetaData · SumAdDdl
+    model/    AdSummary (10-key + 8 measures) · AdCallCdr / AdCallEntry (the ad's view of the blob) · AdViewFacts · AdView
   sms/        future — same shape
 ```
 

@@ -1,5 +1,12 @@
 # summary-service — project brief (for the agent that builds this)
 
+> **2026-10-04 — read this first.** An ad is a Call (routesphere `docs/architecture/ad-is-a-call.md`). On the
+> branch `postgres-ad-call` the store is MySQL **or PostgreSQL** (per profile), one process serves **every tenant
+> schema of its root's tree**, the ad beans read the **`cdr`** stream (service group 30), and a password may come
+> from the unit's **environment** by the NAME of its variable. Where this brief says "MySQL only", "OpenBao" or
+> "one tenant", `docs/decisions.md` **§16** and `docs/ad-as-call/` win. In a lab: start the service only through
+> `tools/lab/run-lab.sh` (the endpoints are shown first; every host must be this machine; a start names its tenant).
+
 > You were started via `/start-dev summary-service`. Read this file, then **read the AUTHORITATIVE design at
 > `/tmp/shared-instruction/summary-service-outbox-design.md`** (dotnet/billing-core, **user-ratified 2026-06-27**;
 > architect-ratified) **and the architect RULINGS at
