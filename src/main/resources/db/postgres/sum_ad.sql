@@ -22,7 +22,10 @@
 --   * what a tier was charged is TWO measures, never added: chargedamount is MONEY (the charges
 --     whose unit is BDT), chargedunits is what was paid in a package's units (ruled on SS-0001);
 --   * tup_tenant is ALWAYS the schema's own name (one pair per tier now);
---   * tup_app is 64 wide (it was 32; ad-sphere's app name is 64);
+--   * a value is never wider than its column: every text of the key is as wide as its source — the zone,
+--     the site, the app and the content id 64; tup_rulecode 64 too (it was 20: a rule's code is 20, but a tenant
+--     with no rule table has its ZONE as the called number). An existing table: the service widens the column
+--     itself, as it adds a missing one. tup_app is 64 (it was 32; ad-sphere's app name is 64);
 --   * tup_starttime is TIMESTAMP WITHOUT TIME ZONE: the TENANT's wall clock (Asia/Dhaka),
 --     the window's start — the day at 00:00:00, the hour at HH:00:00. Never the JVM's zone;
 --   * unquoted identifiers, so PostgreSQL stores them in lower case;
@@ -39,7 +42,7 @@ CREATE TABLE IF NOT EXISTS sum_ad_day_30 (
     tup_tenant     VARCHAR(100)  NOT NULL DEFAULT '',   -- the tier = the schema's own name
     tup_partnerid  INTEGER       NOT NULL DEFAULT 0,    -- cdr.InPartnerId: this tier's payer
     tup_campaignid INTEGER       NOT NULL DEFAULT 0,    -- AdditionalMetaData.campaignId (0 = none)
-    tup_rulecode   VARCHAR(20)   NOT NULL DEFAULT '',   -- cdr.OriginatingCalledNumber
+    tup_rulecode   VARCHAR(64)   NOT NULL DEFAULT '',   -- cdr.OriginatingCalledNumber: the rule's code, or the ZONE when the tenant has no rule table
     tup_zone       VARCHAR(64)   NOT NULL DEFAULT '',   -- AdditionalMetaData.zone
     tup_site       VARCHAR(64)   NOT NULL DEFAULT '',   -- AdditionalMetaData.site
     tup_app        VARCHAR(64)   NOT NULL DEFAULT '',   -- AdditionalMetaData.app
@@ -60,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sum_ad_day_30 (
 CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_starttime ON sum_ad_day_30 (tup_starttime);
 CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_tenant_partner ON sum_ad_day_30 (tup_tenant, tup_partnerid, tup_starttime);
 -- a table made BEFORE 2026-10-04: what brings it up to the above (the service does it itself, see the head)
+ALTER TABLE sum_ad_day_30 ALTER COLUMN tup_rulecode TYPE VARCHAR(64);
 ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS tup_contentid VARCHAR(64) NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS sum_ad_hr_30 (
@@ -67,7 +71,7 @@ CREATE TABLE IF NOT EXISTS sum_ad_hr_30 (
     tup_tenant     VARCHAR(100)  NOT NULL DEFAULT '',
     tup_partnerid  INTEGER       NOT NULL DEFAULT 0,
     tup_campaignid INTEGER       NOT NULL DEFAULT 0,
-    tup_rulecode   VARCHAR(20)   NOT NULL DEFAULT '',
+    tup_rulecode   VARCHAR(64)   NOT NULL DEFAULT '',
     tup_zone       VARCHAR(64)   NOT NULL DEFAULT '',
     tup_site       VARCHAR(64)   NOT NULL DEFAULT '',
     tup_app        VARCHAR(64)   NOT NULL DEFAULT '',
@@ -87,4 +91,5 @@ CREATE TABLE IF NOT EXISTS sum_ad_hr_30 (
 );
 CREATE INDEX IF NOT EXISTS sum_ad_hr_30_ix_starttime ON sum_ad_hr_30 (tup_starttime);
 CREATE INDEX IF NOT EXISTS sum_ad_hr_30_ix_tenant_partner ON sum_ad_hr_30 (tup_tenant, tup_partnerid, tup_starttime);
+ALTER TABLE sum_ad_hr_30 ALTER COLUMN tup_rulecode TYPE VARCHAR(64);
 ALTER TABLE sum_ad_hr_30 ADD COLUMN IF NOT EXISTS tup_contentid VARCHAR(64) NOT NULL DEFAULT '';

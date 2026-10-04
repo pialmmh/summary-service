@@ -422,6 +422,21 @@ voice deployment's `sum_voice_*` / `sum_chargeable_*` are legacy tables another 
 surprise `ALTER` on them is exactly what must not happen. A missing column that has no default (`id`, the
 bucket) is not added: such a table is not this service's, and the provisioning refuses it in words.
 
+**A value is never wider than its column (brief S14, 2026-10-04).** Every text of the ad key has ONE width —
+`AdSummaryBuilder.*_WIDTH`, used by the builder's cut AND by the table's description — and it is the source's
+full width: zone, site, app, content id 64; **`tup_rulecode` 64, it was 20**: a rule's code is 20, but ad-sphere
+writes the ZONE as the called number for a tenant with no rule table. An existing table is widened by the same
+step that adds a column (`ALTER COLUMN … TYPE VARCHAR(64)` / `MODIFY COLUMN …`); a value that is there stays.
+What happened BEFORE, with the 20-wide column: nothing failed — the builder cut the zone to its first 20
+characters before the key was taken, so the row was stored and merged correctly (`tup_zone`, 64, is in the key
+too: no two zones merged); the rule code column just held 20 characters of the zone. The general rule, which
+all three categories follow: a text of the key is cut to its column by the service, so the database never
+refuses a row over a width. (Were a column narrower than the cut — it cannot be after the step above — the
+INSERT would fail at the SQL layer: that drain step rolls back and is retried — the worker backs off up to 60 s,
+with an ERROR and a rising count each try; the bean of that tier stops at that outbox row; the other beans go on;
+it is NEVER dead-lettered — §13c: an SQL failure may be transient, so it is not poison — and that tier's outbox
+is not trimmed past the row until the bean passes it.)
+
 ### 16c. Money and units are two measures — RULED (architect, decide 3)
 `chargedamount` = the customer chargeables whose unit is `BDT`; `chargedunits` = the ones in any other unit (a
 package's). Never added. A leg that names no unit is not taken for money. On MySQL the column is added by the

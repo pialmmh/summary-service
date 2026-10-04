@@ -322,6 +322,82 @@ class AdSummaryBeanTest {
         assertTrue(dailyBean().tableDdl().contains("tup_app VARCHAR(64) "), "and the column is that wide");
     }
 
+    // ---- S14: a value is never wider than its column ----
+
+    /** A text of exactly {@code length} characters whose LAST character is its own — so a cut one short of it is seen. */
+    private static String ofLength(int length) {
+        return "x".repeat(length - 1) + "#";
+    }
+
+    /** One tier's row built from a view whose every text of the key is {@code length} characters at its source. */
+    private static AdSummary builtFromTextsOf(int length) {
+        String text = ofLength(length);
+        // the tier is the schema's own name; the rule code is the record's called number; the media kind its codec
+        View view = leafView(MORNING).rule(text).zone(text).site(text).app(text).media(text).content(text);
+        return dailyBean().buildBatch(batchOf(view), text).get(0);
+    }
+
+    private static String textOf(AdSummary row, String column) {
+        try {
+            return (String) AdSummary.class.getField(column).get(row);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("the entity has no field " + column, e);
+        }
+    }
+
+    @Test
+    void every_text_of_the_key_is_as_wide_as_its_source_and_a_value_of_that_width_stays_whole() {
+        // the switch's widths: a zone, a site, an app and a content id are 64; a rule's code is 20, but a tenant with
+        // no rule table puts the ZONE into the called number — so the called number is 64 too
+        java.util.Map<String, Integer> sourceWidth = java.util.Map.of("tup_rulecode", 64, "tup_zone", 64, "tup_site", 64, "tup_app", 64, "tup_contentid", 64);
+        AdSummary row = builtFromTextsOf(64);
+
+        for (var column : dailyBean().tableSpec().columns()) {
+            Integer source = sourceWidth.get(column.name());
+            if (source == null) continue;
+            assertTrue(column.width() >= source, column.name() + " is " + column.width() + " wide; its source is " + source);
+            assertEquals(ofLength(64), textOf(row, column.name()), column.name() + ": a value of its source's full width is stored whole");
+        }
+        assertEquals(5, sourceWidth.size());
+    }
+
+    @Test
+    void a_text_wider_than_its_column_is_cut_to_the_column_before_the_key_is_taken_never_handed_to_the_database_wider() {
+        // whatever arrives — 200 characters in every text of the key — no value the row carries is wider than its column
+        AdSummary row = builtFromTextsOf(200);
+        java.util.List<String> textColumns = new java.util.ArrayList<>();
+
+        for (var column : dailyBean().tableSpec().columns()) {
+            if (column.type() != com.telcobright.summary.bean.spi.SummaryTableSpec.Type.VARCHAR) continue;
+            textColumns.add(column.name());
+            String value = textOf(row, column.name());
+            assertTrue(value.length() <= column.width(), column.name() + " carries " + value.length() + " characters into a column of " + column.width());
+            if (!column.name().equals("tup_outcome")) {                       // the outcome is one of two words of the service's own
+                assertEquals(ofLength(200).substring(0, column.width()), value, column.name() + ": cut to the column, its first characters kept");
+            }
+        }
+        assertEquals(java.util.List.of("tup_tenant", "tup_rulecode", "tup_zone", "tup_site", "tup_app", "tup_mediakind", "tup_outcome", "tup_contentid"), textColumns,
+                "every text column of the table is in this test: a new one must be added here with its source's width");
+        assertEquals("done", row.tup_outcome);
+
+        // and the row that was cut keys as the row the database gives back: built again, it is the same key
+        assertEquals(row.tupleKey(), builtFromTextsOf(200).tupleKey());
+    }
+
+    @Test
+    void a_tenant_with_no_rule_table_has_its_zone_as_the_rule_code_and_a_long_zone_keeps_its_own_row() {
+        // ad-sphere writes the ZONE as the called number when the tenant has no rule at all; two zones that share
+        // their first 20 characters were one rule code in a 20-wide column
+        String shared = "dhaka-north-mirpur-10";                              // 21 characters: past the old width already
+        String zoneA = shared + "-block-a-rooftop-cafe-and-co-working", zoneB = shared + "-block-b-food-court";
+        Collection<AdSummary> rows = rollup(dailyBean(), LEAF, List.of(leafView(MORNING).rule(zoneA).zone(zoneA), leafView(MORNING).rule(zoneB).zone(zoneB)));
+
+        assertEquals(2, rows.size());
+        for (AdSummary row : rows) {
+            assertEquals(row.tup_zone, row.tup_rulecode, "the whole zone, not its first 20 characters");
+        }
+    }
+
     // ---- S13: the summary is keyed by CONTENT too ----
 
     @Test

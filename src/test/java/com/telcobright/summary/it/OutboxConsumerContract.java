@@ -398,15 +398,7 @@ abstract class OutboxConsumerContract {
     void an_ad_table_made_before_the_content_gets_the_column_at_its_first_use_and_its_rows_stay_as_they_are() throws SQLException {
         AdSummaryBean adDaily = AdTestSupport.dailyBean();
         String olderTable = adDaily.table();
-        // the table as the first PostgreSQL version of this branch made it (938ab19): no tup_contentid — with a row a deployment summed
-        try (Connection service = dbConnection()) {
-            for (String statement : withSmallHorizon(() -> adDaily.tableDdl(dialect()))) {
-                exec(service, statement.replace(",tup_contentid VARCHAR(64) NOT NULL DEFAULT ''", ""));
-            }
-            exec(service, "insert into " + olderTable + " (tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
-                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits) values ('" + schemaName()
-                    + "',61,5,'1001','dhaka-01','dhaka-site-1','wifi','video','done','2026-09-29 00:00:00',7,7,7,7,0,105,3.50,0)");
-        }
+        theFirstVersionsTableWithARow(adDaily, "1001");
         assertEquals(0, queryLong(columnCount(olderTable, "tup_contentid")), "the older table has no such column");
         long idOfTheOldRow = queryLong("select id from " + olderTable);
 
@@ -441,6 +433,104 @@ abstract class OutboxConsumerContract {
         provisionSmall(adDaily);
         assertEquals(2, count(olderTable));
         assertEquals(8, queryLong("select views from " + olderTable + " where id = " + idOfTheOldRow));
+    }
+
+    /**
+     * The ad table as the FIRST PostgreSQL version of this branch made it (938ab19) — {@code tup_rulecode} 20 wide, no
+     * {@code tup_contentid} — holding one row a deployment summed: 7 views of campaign 5, rule {@code ruleCode}.
+     */
+    private void theFirstVersionsTableWithARow(AdSummaryBean adBean, String ruleCode) throws SQLException {
+        try (Connection service = dbConnection()) {
+            for (String statement : withSmallHorizon(() -> adBean.tableDdl(dialect()))) {
+                String first = statement.replace(",tup_contentid VARCHAR(64) NOT NULL DEFAULT ''", "").replace("tup_rulecode VARCHAR(64)", "tup_rulecode VARCHAR(20)");
+                exec(service, first);
+            }
+            exec(service, "insert into " + adBean.table() + " (tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
+                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits) values ('" + schemaName()
+                    + "',61,5,'" + ruleCode + "','dhaka-01','dhaka-site-1','wifi','video','done','2026-09-29 00:00:00',7,7,7,7,0,105,3.50,0)");
+        }
+        assertEquals(20, queryLong(columnWidth(adBean.table(), "tup_rulecode")), "the first version's rule code column");
+    }
+
+    /** The width, in characters, of a text column of the table in the schema the tests run in. */
+    private String columnWidth(String table, String column) {
+        return "select character_maximum_length from information_schema.columns where table_schema = '" + schemaName() + "' and table_name = '" + table
+                + "' and column_name = '" + column + "'";
+    }
+
+    // ---- S14: a value is never wider than its column ----
+
+    @Test
+    void every_text_of_the_key_at_its_sources_full_width_is_stored_whole_and_reloads_under_the_same_key() {
+        AdSummaryBean adDaily = AdTestSupport.dailyBean();
+        provisionSmall(adDaily);
+        // the switch's widths: a zone, a site, an app and a content id are 64; the called number is a rule's code (20) or,
+        // for a tenant with no rule table, the ZONE (64)
+        String wide = "z".repeat(63) + "#";
+        java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
+        seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t).rule(wide).zone(wide).site(wide).app(wide).content(wide))));
+        seedOutbox(2, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t.plusHours(1)).rule(wide).zone(wide).site(wide).app(wide).content(wide))));
+
+        assertEquals(2, reader.drain(adDaily), "no value overflowed its column: neither row failed");
+
+        assertEquals(1, count("sum_ad_day_30"), "row 2 RELOADED row 1's window and merged into it: what is stored keys as what is built");
+        assertEquals(2, queryLong("select views from sum_ad_day_30"));
+        for (String column : List.of("tup_rulecode", "tup_zone", "tup_site", "tup_app", "tup_contentid")) {
+            assertEquals(wide, queryText("select " + column + " from sum_ad_day_30"), column + " holds all 64 characters");
+            assertEquals(64, queryLong(columnWidth("sum_ad_day_30", column)), column + " is 64 wide in the real table");
+        }
+    }
+
+    @Test
+    void a_text_wider_than_its_column_is_cut_by_the_service_never_refused_by_the_database() {
+        // 200 characters in every text of the key: whatever the switch sends, the drain does not fail on a width
+        AdSummaryBean adDaily = AdTestSupport.dailyBean();
+        provisionSmall(adDaily);
+        String tooWide = "w".repeat(199) + "#";
+        java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
+        seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t).rule(tooWide).zone(tooWide).site(tooWide).app(tooWide).media(tooWide).content(tooWide))));
+        seedOutbox(2, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t.plusHours(1)).rule(tooWide).zone(tooWide).site(tooWide).app(tooWide).media(tooWide).content(tooWide))));
+
+        assertEquals(2, reader.drain(adDaily));
+
+        assertEquals(1, count("sum_ad_day_30"), "the cut value keys as its reloaded row: one row, not one per batch");
+        assertEquals(2, queryLong("select views from sum_ad_day_30"));
+        assertEquals("w".repeat(64), queryText("select tup_zone from sum_ad_day_30"), "the first 64 characters");
+        assertEquals("w".repeat(16), queryText("select tup_mediakind from sum_ad_day_30"), "the media kind's column is 16");
+        assertEquals(0, count("summary_affected_dlq"), "nothing was dead-lettered");
+        assertEquals(2, offset("dailyAdSummary"));
+    }
+
+    @Test
+    void an_ad_table_with_the_20_wide_rule_code_is_widened_at_its_first_use_and_what_it_holds_stays() throws SQLException {
+        AdSummaryBean adDaily = AdTestSupport.dailyBean();
+        String olderTable = adDaily.table();
+        String twentyWide = "dhaka-north-mirpur-1";                               // what the 20-wide column held of a longer zone
+        theFirstVersionsTableWithARow(adDaily, twentyWide);
+        long idOfTheOldRow = queryLong("select id from " + olderTable);
+
+        provisionSmall(adDaily);                                   // the service's first use of the schema after its upgrade
+
+        assertEquals(64, queryLong(columnWidth(olderTable, "tup_rulecode")), "widened");
+        assertEquals(twentyWide, queryText("select tup_rulecode from " + olderTable + " where id = " + idOfTheOldRow), "the value that was there is as it was");
+        assertEquals(7, queryLong("select views from " + olderTable + " where id = " + idOfTheOldRow));
+
+        // a tenant with no rule table: the ZONE is the called number — 44 characters now arrive whole, in a row of their own
+        String zone = "dhaka-north-mirpur-10-block-a-rooftop-cafe-1";
+        java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
+        seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t).rule(zone).zone(zone).content(null))));
+        assertEquals(1, reader.drain(adDaily), "the insert of a 44-character rule code did not fail");
+        assertEquals(zone, queryText("select tup_rulecode from " + olderTable + " where tup_zone = '" + zone + "'"));
+        assertEquals(2, count(olderTable));
+
+        // the second start has nothing to do
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(adDaily.tableSpec(), dialect(), look.store().columnWidths(olderTable)));
+            look.commit();
+        } finally {
+            look.close();
+        }
     }
 
     /** How many columns named {@code column} the table has, in the schema the tests run in. */

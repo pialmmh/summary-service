@@ -120,7 +120,7 @@ A row is one KEY — every `tup_*` column — in one window; the measures are su
 | `tup_tenant` | VARCHAR(100) | the schema's own name | key: the tier |
 | `tup_partnerid` | INT / INTEGER | `InPartnerId` | key: this tier's payer |
 | `tup_campaignid` | INT / INTEGER | meta data `campaignId` | key (0 = none) |
-| `tup_rulecode` | VARCHAR(20) | `OriginatingCalledNumber` | key: the rule's code |
+| `tup_rulecode` | VARCHAR(64) | `OriginatingCalledNumber` | key: the rule's code (20) — or the ZONE (64), which a tenant with no rule table has as its called number |
 | `tup_zone` | VARCHAR(64) | meta data `zone` | key |
 | `tup_site` | VARCHAR(64) | meta data `site` | key |
 | `tup_app` | VARCHAR(64) | meta data `app` | key |
@@ -135,14 +135,19 @@ A row is one KEY — every `tup_*` column — in one window; the measures are su
 - **The key is the summary engine's**, not a database constraint: a drain loads the rows of the windows it touches
   ONCE, merges by the key in memory, then inserts the new keys and updates the loaded rows by `id` — one writer
   per table, the rows and the bookmark in one transaction. No `UNIQUE` index carries the key, on either engine
-  (decisions §5). Every text of the key is cut to its column's width before the key is taken, so a row that is
-  built keys as the row that is reloaded.
+  (decisions §5).
+- **A value is never wider than its column.** Every text of the key has ONE width, used by the builder's cut and
+  by the table (`AdSummaryBuilder.*_WIDTH`), and it is its source's full width: a zone, a site, an app and a
+  content id 64; the rule code 64 (it was 20). So what the switch can send is stored whole. A text that is wider
+  all the same is cut to the column by the service BEFORE the key is taken — the database never refuses a row
+  over a width, and a row that is built keys as the row that is reloaded.
 - **Columns are only ever appended.** `tup_contentid` (2026-10-04) is the table's LAST column: a table that gets a
   column by `ALTER` — which can only append on PostgreSQL — is then the same table as one made with it.
 - **An EXISTING table is brought up to this by the service itself**, at the table's first use after an upgrade
   (`TableDdl.bringUpToDate`): it reads the table's columns from the database's catalog and adds what is missing —
-  `ALTER TABLE … ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''`. The rows that are there read `''` as
-  their content: **history is not rebuilt**. A table that is as described gets no statement and no lock, so the
+  `ALTER TABLE … ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''` — and widens a text column that is
+  narrower — `tup_rulecode` from 20 to 64. The rows that are there read `''` as their content and keep the rule
+  code they have: **history is not rebuilt**. A table that is as described gets no statement and no lock, so the
   step runs at every start and changes nothing the second time. It applies to the ad tables only (net-new, this
   service's alone): the voice and chargeable tables, which a legacy system may also write, are never altered.
 

@@ -13,7 +13,8 @@ import com.telcobright.summary.summarybeans.ad.model.AdSummary;
  *
  * <p>The ad tables are net-new and this service's alone, so the description is KEPT UP TO DATE: a table made by an
  * earlier version gets what it lacks at its first use ({@code TableDdl.bringUpToDate}) — {@code tup_contentid}
- * (added 2026-10-04; the rows that are there read it as {@code ''}).
+ * (added 2026-10-04; the rows that are there read it as {@code ''}), and {@code tup_rulecode} widened from 20 to
+ * 64 (the same day; a value that is there stays as it is).
  */
 final class SumAdDdl {
 
@@ -23,15 +24,16 @@ final class SumAdDdl {
     static SummaryTableSpec table(String name) {
         return SummaryTableSpec.table(name)
                 .identity("id")
-                .varchar("tup_tenant", 100)
+                // every text's width is the builder's cut (AdSummaryBuilder): a value is never wider than its column
+                .varchar("tup_tenant", AdSummaryBuilder.TENANT_WIDTH)
                 .integer("tup_partnerid")
                 .integer("tup_campaignid")
-                .varchar("tup_rulecode", 20)
-                .varchar("tup_zone", 64)
-                .varchar("tup_site", 64)
+                .varchar("tup_rulecode", AdSummaryBuilder.RULECODE_WIDTH)   // the called number: a rule's code, or a zone (64)
+                .varchar("tup_zone", AdSummaryBuilder.ZONE_WIDTH)
+                .varchar("tup_site", AdSummaryBuilder.SITE_WIDTH)
                 .varchar("tup_app", AdSummaryBuilder.APP_WIDTH)   // the app's name is 64 at its source (ad_caller.app)
-                .varchar("tup_mediakind", 16)
-                .varchar("tup_outcome", 32)
+                .varchar("tup_mediakind", AdSummaryBuilder.MEDIAKIND_WIDTH)
+                .varchar("tup_outcome", AdSummaryBuilder.OUTCOME_WIDTH)
                 .datetime("tup_starttime")
                 .bigint("views")
                 .bigint("shown")
