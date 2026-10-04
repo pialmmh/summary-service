@@ -73,16 +73,34 @@ public class SummaryBootstrap {
         if (!showEndpointsAndDecide(config, enabled)) {
             return;                                      // print-only: nothing is started, nothing is dialled
         }
+        registerBeans(enabled);
+        if (!autostart) {
+            LOG.infof("autostart off — %d bean(s) registered; no schema served, workers/ping/reaper NOT started, nothing dialled", enabled.size());
+            return;
+        }
+        loadContextsOfRegisteredBeans();
+        startServing();
+    }
+
+    private void registerBeans(List<String> enabled) {
         for (String name : enabled) {
             registerBean(name);
         }
-        if (autostart) {
-            tenants.start();        // serve the schemas: tables at first use, bookmarks, a worker per (schema, bean)
-            pingListener.start();
-            reaper.start();
-        } else {
-            LOG.infof("autostart off — %d bean(s) registered; no schema served, workers/ping/reaper NOT started, nothing dialled", enabled.size());
+    }
+
+    /** The beans' shared contexts (config-manager): best-effort, not load-bearing — and dialled only when the workers start. */
+    private void loadContextsOfRegisteredBeans() {
+        for (SummaryBean<?> bean : registry.beans()) {
+            if (bean.contextName() != null) {
+                contexts.ensureLoaded(bean.contextName());
+            }
         }
+    }
+
+    private void startServing() {
+        tenants.start();        // serve the schemas: tables at first use, bookmarks, a worker per (schema, bean)
+        pingListener.start();
+        reaper.start();
     }
 
     /**
@@ -132,9 +150,6 @@ public class SummaryBootstrap {
             }
             bean.table();   // fail-fast probe: throws if table-suffix is missing/invalid (caught + logged below)
             registry.register(bean);
-            if (autostart && bean.contextName() != null) {
-                contexts.ensureLoaded(bean.contextName());   // best-effort; not load-bearing for the call build. Dialled only when the workers start
-            }
             LOG.infof("bean registered: name=%s entity=%s window=%s table=%s", name, bean.entityType(), bean.window(), bean.table());
         } catch (RuntimeException e) {
             LOG.errorf(e, "could not activate summary bean '%s'", name);

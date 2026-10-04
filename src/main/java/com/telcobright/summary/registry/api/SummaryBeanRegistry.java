@@ -64,6 +64,11 @@ public class SummaryBeanRegistry {
         return Set.copyOf(beans.keySet());
     }
 
+    /** The configured beans. */
+    public List<SummaryBean<?>> beans() {
+        return List.copyOf(beans.values());
+    }
+
     /** Is this bean's worker running in at least one served schema? */
     public boolean isRunning(String beanName) {
         return workers.keySet().stream().anyMatch(key -> key.bean().equals(beanName));

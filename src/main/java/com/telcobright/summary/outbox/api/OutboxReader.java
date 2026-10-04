@@ -229,7 +229,8 @@ public class OutboxReader {
 
     /**
      * Trim the outbox of {@code schema}: delete the rows every one of {@code beanNames} has passed — its own
-     * transaction. Nothing is deleted while a bean has no bookmark, and nothing in a schema with no outbox yet.
+     * transaction. Nothing is deleted while a bean has no bookmark; in a schema with no outbox yet every bookmark
+     * is 0, so nothing is asked of a table that is not there.
      */
     public int reap(String schema, String entityType, Collection<String> beanNames) {
         if (beanNames.isEmpty()) {
@@ -237,12 +238,8 @@ public class OutboxReader {
         }
         UnitOfWork unitOfWork = unitOfWorkFactory.begin(schema);
         try {
-            int deleted = 0;
-            long min = 0;
-            if (hasOutbox(schema, unitOfWork)) {
-                min = unitOfWork.outbox().minOffset(entityType, beanNames);
-                deleted = min > 0 ? unitOfWork.outbox().deleteUpTo(entityType, min) : 0;
-            }
+            long min = unitOfWork.outbox().minOffset(entityType, beanNames);
+            int deleted = min > 0 ? unitOfWork.outbox().deleteUpTo(entityType, min) : 0;
             unitOfWork.commit();
             if (deleted > 0) {
                 LOG.infof("schema=%s reaper deleted %d outbox rows (entity=%s id<=%d)", unitOfWork.schema(), deleted, entityType, min);
