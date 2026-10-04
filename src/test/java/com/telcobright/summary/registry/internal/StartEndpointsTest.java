@@ -108,6 +108,15 @@ class StartEndpointsTest {
     }
 
     @Test
+    void a_password_in_a_url_is_never_printed_with_the_endpoints() {
+        // such a URL is refused at the start (a secret is never in a URL) — but the endpoints are shown first
+        Endpoint store = StartEndpoints.endpoint("store", "jdbc:postgresql://127.0.0.1:7643/routesphere?user=x&password=s3cret-in-a-url&currentSchema=btcl");
+
+        assertEquals("ENDPOINT store jdbc:postgresql://127.0.0.1:7643/routesphere?user=x&password=<hidden>&currentSchema=btcl hosts=127.0.0.1 LOOPBACK", store.line());
+        assertFalse(StartEndpoints.endpoint("store", "jdbc:mysql://h:3306/db?PWD=s3cret-in-a-url").line().contains("s3cret-in-a-url"));
+    }
+
+    @Test
     void the_hosts_of_every_kind_of_value_are_read() {
         assertEquals(List.of("127.0.0.1"), StartEndpoints.hostsOf("jdbc:postgresql://127.0.0.1:7643/routesphere?currentSchema=btcl"));
         assertEquals(List.of("103.95.96.77"), StartEndpoints.hostsOf("jdbc:mysql://103.95.96.77:3306/telcobright?useSSL=false&a=b"));

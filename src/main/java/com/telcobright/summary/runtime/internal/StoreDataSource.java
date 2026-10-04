@@ -8,12 +8,15 @@ import io.agroal.api.security.NamePrincipal;
 import io.agroal.api.security.SimplePassword;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
+import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * The store's connection pool, built by the service itself from the active profile ({@link StoreConfig}) at the
@@ -26,8 +29,35 @@ public class StoreDataSource {
 
     private static final Logger LOG = Logger.getLogger(StoreDataSource.class);
 
+    private final Supplier<Config> configuration;
+    private final Function<String, String> environment;
     private volatile StoreConfig config;
     private volatile AgroalDataSource pool;
+
+    /** The service's wiring: the active configuration, the process's environment. */
+    public StoreDataSource() {
+        this(ConfigProvider::getConfig, System::getenv);
+    }
+
+    /** Over a given configuration and environment (a test's). */
+    StoreDataSource(Supplier<Config> configuration, Function<String, String> environment) {
+        this.configuration = configuration;
+        this.environment = environment;
+    }
+
+    /**
+     * AT A START, before anything is dialled: where the store's password comes from, said in one line WITHOUT its
+     * value. A profile that names an environment variable ({@code password-ref: env:NAME}) which is not set — or one
+     * that breaks the secret's rules ({@link StoreSecret}) — refuses the start here, in words. A profile with no
+     * store at all is no fault (the app still boots with nothing configured).
+     */
+    public String secretAtStart() {
+        Config active = configuration.get();
+        StoreSecret.refuseAPasswordInTheUrl(active.getOptionalValue(StoreConfig.PREFIX + "url", String.class).orElse(null));
+        StoreSecret.Source source = StoreSecret.sourceOf(active);
+        StoreSecret.passwordOf(active, environment);            // a named variable that is not set refuses the start
+        return source.said();
+    }
 
     /** The engine the active profile names. Reads the profile; opens nothing. */
     public SqlDialect dialect() {
@@ -55,7 +85,7 @@ public class StoreDataSource {
         }
         synchronized (this) {
             if (config == null) {
-                config = StoreConfig.from(ConfigProvider.getConfig());
+                config = StoreConfig.from(configuration.get(), environment);
             }
             return config;
         }

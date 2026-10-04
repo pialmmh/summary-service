@@ -3,6 +3,11 @@ package com.telcobright.summary.config.internal;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import java.util.Arrays;
 import java.util.List;
@@ -101,6 +106,37 @@ class WifiProfileTest {
             assertEquals(null, PROFILE.get(key), key + " is tcbl's; the wifi tenant's profile does not set it");
         }
         assertTrue(PROFILE.values().stream().noneMatch(value -> value.contains("103.95.96.")), "no address of another tenant in the wifi profile");
+    }
+
+    @Test
+    void a_deployments_profile_is_a_file_beside_its_working_directory_and_wins_over_the_one_in_the_jar(@TempDir Path workingDirectory) throws IOException {
+        // the bed's profile is rendered by the deploy tool on the box: its addresses are never committed here, the jar is not rebuilt
+        Path bed = workingDirectory.resolve("config/tenants/btcl/bed/profile-bed.yml");
+        Files.createDirectories(bed.getParent());
+        Files.writeString(bed, "summary:\n  store:\n    kind: postgresql\n    url: jdbc:postgresql://127.0.0.1:5432/routesphere\n"
+                + "    username: summary_service\n    password-ref: env:TENANT_BTCL_SWITCH_SUMMARY_SERVICE_PASSWORD\n  enabledSummary:\n    - dailyAdSummary\n");
+
+        Map<String, String> fromTheFile = ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("btcl", "bed"), workingDirectory);
+
+        assertEquals("env:TENANT_BTCL_SWITCH_SUMMARY_SERVICE_PASSWORD", fromTheFile.get("summary.store.password-ref"), "a profile no jar holds");
+        assertEquals("dailyAdSummary", fromTheFile.get("summary.enabledSummary"));
+
+        // no file for btcl/lab there: the jar's is read
+        assertEquals(PROFILE, ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("btcl", "lab"), workingDirectory));
+        // a file for btcl/lab there: it wins over the jar's
+        Path lab = workingDirectory.resolve("config/tenants/btcl/lab/profile-lab.yml");
+        Files.createDirectories(lab.getParent());
+        Files.writeString(lab, "summary:\n  zone: Asia/Kathmandu\n");
+        assertEquals(Map.of("summary.zone", "Asia/Kathmandu"), ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("btcl", "lab"), workingDirectory));
+    }
+
+    @Test
+    void a_profile_file_that_cannot_be_parsed_is_no_configuration_never_a_crash(@TempDir Path workingDirectory) throws IOException {
+        Path broken = workingDirectory.resolve("config/tenants/btcl/bed/profile-bed.yml");
+        Files.createDirectories(broken.getParent());
+        Files.writeString(broken, "summary:\n\tstore: [unclosed");
+
+        assertTrue(ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("btcl", "bed"), workingDirectory).isEmpty());
     }
 
     @Test

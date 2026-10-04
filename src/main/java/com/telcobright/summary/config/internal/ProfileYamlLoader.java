@@ -4,6 +4,8 @@ import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,8 +69,27 @@ public final class ProfileYamlLoader {
 
     /** The active tenant's profile yml, flattened to dot-notation config properties. */
     public static Map<String, String> loadProfile(ActiveTenant tenant) {
+        return loadProfile(tenant, Path.of(""));
+    }
+
+    /**
+     * The same, with the directory a deployment keeps its profile in. A profile is looked for as a FILE first —
+     * {@code <directory>/config/tenants/<tenant>/<profile>/profile-<profile>.yml}, the directory being the unit's
+     * working directory (where Quarkus also reads {@code config/application.properties}) — and only then inside the
+     * jar. So a deployment's profile is a file its deploy tool renders and keeps, with that box's addresses: the jar
+     * is not rebuilt for it, and no box's address has to be committed here. A file wins over a profile of the same
+     * name in the jar; which one was read is said (on stderr: the logging is not up yet).
+     */
+    public static Map<String, String> loadProfile(ActiveTenant tenant, Path directory) {
         String path = "config/tenants/" + tenant.name() + "/" + tenant.profile() + "/profile-" + tenant.profile() + ".yml";
-        Map<String, Object> root = loadYaml(path);
+        Path file = directory.resolve(path);
+        Map<String, Object> root;
+        if (Files.isRegularFile(file)) {
+            root = loadYamlFile(file);
+            System.err.println("summary-service: the profile " + tenant.name() + "/" + tenant.profile() + " is read from the file " + file.toAbsolutePath());
+        } else {
+            root = loadYaml(path);
+        }
         if (root == null) {
             // the logging is not up yet when the ConfigSource is made: stderr is the only channel
             System.err.println("summary-service: the active tenant " + tenant.name() + "/" + tenant.profile() + " has no profile file "
@@ -78,6 +99,21 @@ public final class ProfileYamlLoader {
         Map<String, String> flat = new LinkedHashMap<>();
         flatten("", root, flat);
         return flat;
+    }
+
+    /** A profile file of a deployment; one that cannot be parsed is said and is NO configuration (never a boot crash here). */
+    private static Map<String, Object> loadYamlFile(Path file) {
+        try (InputStream in = Files.newInputStream(file)) {
+            return asMap(new Yaml().load(in));
+        } catch (IOException | RuntimeException e) {
+            System.err.println("summary-service: could not parse " + file.toAbsolutePath() + " — ignoring it: " + e);
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object loaded) {
+        return loaded instanceof Map<?, ?> map ? (Map<String, Object>) map : null;   // a scalar or a list at the root: no configuration
     }
 
     private static Map<String, Object> loadYaml(String resource) {

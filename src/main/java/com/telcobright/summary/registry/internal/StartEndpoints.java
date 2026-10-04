@@ -16,7 +16,9 @@ import java.util.Set;
  * <p>Two switches use the list (both off in a deployment):
  * <ul>
  *   <li>{@code summary.endpoints.print-only=true} — print the list and exit; nothing is started, nothing is
- *       dialled. The exit code says whether every host is this machine (0) or not (3);</li>
+ *       dialled. The exit code says whether every host is this machine (0) or not (3); 4 = the hosts are, but the
+ *       store's password is named by a variable that is not in the environment (a {@code SECRET} line says so,
+ *       never a value);</li>
  *   <li>{@code summary.endpoints.loopback-only=true} — the LAB's rule: the start is refused, in words, unless every
  *       host is {@code 127.0.0.1} / {@code localhost}. An address of a box is never dialled from a lab, not even
  *       for a read.</li>
@@ -42,7 +44,7 @@ public final class StartEndpoints {
 
         public String line() {
             String verdict = !set() ? "NOT-SET" : loopbackOnly() ? "LOOPBACK" : "NOT-LOOPBACK";
-            return LINE_MARK + " " + what + " " + (set() ? value : "-") + " hosts=" + (hosts.isEmpty() ? "-" : String.join(",", hosts)) + " " + verdict;
+            return LINE_MARK + " " + what + " " + (set() ? shown(value) : "-") + " hosts=" + (hosts.isEmpty() ? "-" : String.join(",", hosts)) + " " + verdict;
         }
     }
 
@@ -71,6 +73,14 @@ public final class StartEndpoints {
         }
         endpoints.add(endpoint("listens-on", text(config, "quarkus.http.host", "0.0.0.0") + ":" + text(config, "quarkus.http.port", "8080")));
         return endpoints;
+    }
+
+    /**
+     * A value as it may be printed: a password parameter in a URL is hidden. (A store URL that carries one is refused
+     * at the start anyway — a secret is never in a URL — but this line is printed before that, and must not leak it.)
+     */
+    static String shown(String value) {
+        return value.replaceAll("(?i)([?&;](?:password|pwd)=)[^&;]*", "$1<hidden>");
     }
 
     /** The endpoints that are set and not on this machine. */

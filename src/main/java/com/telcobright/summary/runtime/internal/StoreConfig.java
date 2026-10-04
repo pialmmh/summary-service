@@ -4,6 +4,7 @@ import com.telcobright.summary.bean.spi.SqlDialect;
 import org.eclipse.microprofile.config.Config;
 
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * The store of the active profile — where the summaries, the bookmarks and the outbox live:
@@ -14,7 +15,8 @@ import java.util.Optional;
  *     kind: postgresql                    # mysql | postgresql — may be left out: the URL names the engine
  *     url: jdbc:postgresql://127.0.0.1:7643/routesphere
  *     username: summary_service
- *     password: ""                        # the inline form
+ *     password: ""                        # the inline form — or, on the wifi bed, the variable's NAME:
+ *     # password-ref: env:TENANT_BTCL_SWITCH_SUMMARY_SERVICE_PASSWORD      ({@link StoreSecret})
  *     min-size: 0                         # connections kept open
  *     max-size: 16
  *     acquisition-timeout-seconds: 30     # how long a worker waits for a connection before its drain fails
@@ -29,12 +31,18 @@ record StoreConfig(SqlDialect dialect, String url, String username, String passw
     static final String PREFIX = "summary.store.";
 
     static StoreConfig from(Config config) {
+        return from(config, System::getenv);
+    }
+
+    /** The store of {@code config}; a password the profile names by its variable is taken from {@code environment}. */
+    static StoreConfig from(Config config, Function<String, String> environment) {
         String url = text(config, "url").orElseThrow(() -> new IllegalStateException(
                 "summary.store.url is not set — the active profile names no store (summary.store.kind, .url, .username)"));
+        StoreSecret.refuseAPasswordInTheUrl(url);
         SqlDialect dialect = dialectOf(text(config, "kind").orElse(null), url);
         return new StoreConfig(dialect, url,
                 text(config, "username").orElse(""),
-                text(config, "password").orElse(""),
+                StoreSecret.passwordOf(config, environment),
                 config.getOptionalValue(PREFIX + "min-size", Integer.class).orElse(0),
                 config.getOptionalValue(PREFIX + "max-size", Integer.class).orElse(16),
                 config.getOptionalValue(PREFIX + "acquisition-timeout-seconds", Integer.class).orElse(30));

@@ -13,7 +13,6 @@ import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
 
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -36,8 +35,11 @@ import java.util.regex.Pattern;
  * </ul>
  *
  * A tree that cannot be read changes nothing: the schemas already served go on, the failure is said, and the read
- * is tried again at the next doorbell or refresh. A schema that cannot be served (it does not exist yet, a table
- * cannot be made) is said and tried again at the next read; the other schemas are not held up by it.
+ * is tried again at the next doorbell or refresh. A schema that cannot be served (the store does not answer, the
+ * schema does not exist yet, a table cannot be made) is said and tried again SOON ({@code retry-seconds}, each try
+ * a little later, up to the refresh); the other schemas are not held up by it. That holds for the one schema of a
+ * one-tenant deployment too: a store that is down when the service starts does not fail the start and does not
+ * leave it idle — it is served when the store answers.
  */
 @ApplicationScoped
 public class TenantWatcher {
@@ -45,8 +47,8 @@ public class TenantWatcher {
     private static final Logger LOG = Logger.getLogger(TenantWatcher.class);
     /** A schema's name as it goes into SQL unquoted. A name the tree gives that is not one is never served. */
     private static final Pattern SCHEMA_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,62}");
-    /** How soon a tree that could not be read is asked again, when the refresh is slower than that. */
-    private static final int RETRY_SECONDS = 15;
+    /** The longest wait between two tries when no refresh is configured. */
+    private static final long LONGEST_RETRY_MILLIS = 300_000;
 
     private final SummaryBeanRegistry registry;
     private final boolean tree;
@@ -54,10 +56,12 @@ public class TenantWatcher {
     private final TenantTreeSource source;
     private final long debounceMillis;
     private final int refreshSeconds;
+    private final long retryMillis;
     private final DoorbellListener doorbell;
     private final AtomicBoolean reloadPending = new AtomicBoolean(false);
+    private final AtomicBoolean retryPending = new AtomicBoolean(false);
     private ScheduledExecutorService scheduler;
-    private volatile boolean everLoaded;
+    private int triesInARow;
 
     @Inject
     public TenantWatcher(SummaryBeanRegistry registry) {
@@ -70,6 +74,7 @@ public class TenantWatcher {
         this.root = text(config, "summary.tenants.root", null);
         this.debounceMillis = config.getOptionalValue("summary.tenants.reload-debounce-ms", Long.class).orElse(1000L);
         this.refreshSeconds = config.getOptionalValue("summary.tenants.refresh-seconds", Integer.class).orElse(300);
+        this.retryMillis = config.getOptionalValue("summary.tenants.retry-seconds", Integer.class).orElse(15) * 1000L;
         if (tree) {
             String baseUrl = text(config, "summary.tenants.prime-context.base-url", null);
             if (root == null || baseUrl == null) {
@@ -87,23 +92,31 @@ public class TenantWatcher {
         }
     }
 
-    /** A watcher over a given tree source, with no doorbell and no timer of its own (tests drive {@link #reloadNow()}). */
+    /** A watcher over a given tree source, with no doorbell and no refresh (a test drives {@link #reloadNow()}). */
     public TenantWatcher(SummaryBeanRegistry registry, String root, TenantTreeSource source) {
+        this(registry, root, source, 15_000);
+    }
+
+    /**
+     * The same, trying again {@code retryMillis} after a read that left something unserved (once {@link #start}ed).
+     * {@code source == null} = a one-tenant deployment: the one schema is the connection's own.
+     */
+    public TenantWatcher(SummaryBeanRegistry registry, String root, TenantTreeSource source, long retryMillis) {
         this.registry = registry;
-        this.tree = true;
+        this.tree = source != null;
         this.root = root;
         this.source = source;
         this.debounceMillis = 0;
         this.refreshSeconds = 0;
+        this.retryMillis = retryMillis;
         this.doorbell = null;
     }
 
-    /** Serve what is to be served now, and keep watching (tree mode). Called once, when the workers may start. */
+    /**
+     * Serve what is to be served, and keep it served. Called once, when the workers may start. Nothing is served on
+     * the caller's thread: a store or a prime-context that does not answer never fails the start — it is tried again.
+     */
     public synchronized void start() {
-        if (!tree) {
-            registry.serve(SummaryBeanRegistry.OWN_SCHEMA);
-            return;
-        }
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "summary-tenants");
             t.setDaemon(true);
@@ -113,12 +126,15 @@ public class TenantWatcher {
             doorbell.start();                                  // listening BEFORE the first read: a ring during it is not lost
         }
         scheduler.execute(() -> reloadQuietly("the start"));
-        int every = refreshSeconds > 0 ? refreshSeconds : 0;
-        if (every > 0) {
-            scheduler.scheduleWithFixedDelay(() -> reloadQuietly("the refresh"), every, every, TimeUnit.SECONDS);
+        if (refreshSeconds > 0) {
+            scheduler.scheduleWithFixedDelay(() -> reloadQuietly("the refresh"), refreshSeconds, refreshSeconds, TimeUnit.SECONDS);
         }
-        LOG.infof("tenants: the tree of root %s — read at the start, at every doorbell, and every %s", root,
-                every > 0 ? every + "s" : "doorbell only (no refresh)");
+        String again = refreshSeconds > 0 ? "every " + refreshSeconds + "s" : "at no fixed time (no refresh)";
+        if (tree) {
+            LOG.infof("tenants: the tree of root %s — read at the start, at every doorbell, and %s", root, again);
+        } else {
+            LOG.infof("tenants: ONE schema, the connection's own — served at the start, looked at again %s", again);
+        }
     }
 
     /** A doorbell rang (or a caller asks): read the tree soon. Several asks in a burst are ONE read. */
@@ -137,23 +153,35 @@ public class TenantWatcher {
         try {
             reloadNow();
         } catch (Exception failure) {
-            LOG.errorf(failure, "tenants: the tree of %s could not be read (%s) — the %d schema(s) served go on; asked again at the next "
-                    + "doorbell or refresh", root, why, registry.servedSchemas().size());
-            ScheduledExecutorService runner = scheduler;
-            if (runner != null && !everLoaded && (refreshSeconds == 0 || refreshSeconds > RETRY_SECONDS)) {
-                runner.schedule(() -> reloadQuietly("the retry of a first read"), RETRY_SECONDS, TimeUnit.SECONDS);
-            }
+            LOG.errorf(failure, "tenants: the tree of %s could not be read (%s) — the %d schema(s) served go on; asked again soon, "
+                    + "and at the next doorbell or refresh", root, why, registry.servedSchemas().size());
+            tryAgainSoon();
         }
     }
 
     /**
-     * Read the tree and make the served schemas equal to it. Returns the schemas served after the call. Throws
-     * when the tree cannot be read — and then nothing was changed.
+     * Read what is to be served and make the served schemas equal to it. Returns the schemas served after the call.
+     * Throws when the tree cannot be read — and then nothing was changed.
      */
     public synchronized Set<String> reloadNow() throws Exception {
-        List<String> named = source.schemas();
+        Set<String> wanted = wantedSchemas();
+        boolean everyOneServed = serveEach(wanted);
+        stopWhatIsNoLongerWanted(wanted);
+        if (everyOneServed) {
+            triesInARow = 0;
+        } else {
+            tryAgainSoon();
+        }
+        return registry.servedSchemas();
+    }
+
+    /** One schema — the connection's own — without a tree; else every schema the tree names that IS a schema's name. */
+    private Set<String> wantedSchemas() throws Exception {
+        if (!tree) {
+            return Set.of(SummaryBeanRegistry.OWN_SCHEMA);
+        }
         Set<String> wanted = new LinkedHashSet<>();
-        for (String schema : named) {
+        for (String schema : source.schemas()) {
             if (SCHEMA_NAME.matcher(schema).matches()) {
                 wanted.add(schema);
             } else {
@@ -163,21 +191,49 @@ public class TenantWatcher {
         if (wanted.isEmpty()) {
             throw new IllegalStateException("the tree of " + root + " names no schema that can be served");
         }
-        everLoaded = true;
+        return wanted;
+    }
+
+    /** Serve each wanted schema (one already served only gets the workers it lacks). False when one could not be. */
+    private boolean serveEach(Set<String> wanted) {
+        boolean every = true;
         for (String schema : wanted) {
             try {
-                registry.serve(schema);                        // already served: only the workers it still lacks
+                registry.serve(schema);
             } catch (RuntimeException failure) {
-                LOG.errorf(failure, "tenants: schema %s could NOT be served (is it provisioned? may summary_service create in it?) — "
-                        + "the other schemas go on; it is tried again at the next read of the tree", schema);
+                every = false;
+                LOG.errorf(failure, "tenants: schema %s could NOT be served (does the store answer? is the schema provisioned? may the "
+                        + "service create in it?) — the other schemas go on; it is tried again soon", said(schema));
             }
         }
+        return every;
+    }
+
+    private void stopWhatIsNoLongerWanted(Set<String> wanted) {
         for (String schema : registry.servedSchemas()) {
             if (!wanted.contains(schema)) {
                 registry.unserve(schema);                      // the tree lost it
             }
         }
-        return registry.servedSchemas();
+    }
+
+    /** One more read after a wait that grows with each try in a row, up to the refresh. Several asks are ONE try. */
+    private void tryAgainSoon() {
+        ScheduledExecutorService runner = scheduler;
+        if (runner == null || !retryPending.compareAndSet(false, true)) {
+            return;                                            // not started (a test drives the reads), or a try is already waiting
+        }
+        triesInARow++;
+        long longest = refreshSeconds > 0 ? refreshSeconds * 1000L : LONGEST_RETRY_MILLIS;
+        long wait = Math.min(retryMillis * triesInARow, Math.max(retryMillis, longest));
+        runner.schedule(() -> {
+            retryPending.set(false);
+            reloadQuietly("a retry");
+        }, wait, TimeUnit.MILLISECONDS);
+    }
+
+    private static String said(String schema) {
+        return schema.equals(SummaryBeanRegistry.OWN_SCHEMA) ? "(the connection's own)" : schema;
     }
 
     @PreDestroy

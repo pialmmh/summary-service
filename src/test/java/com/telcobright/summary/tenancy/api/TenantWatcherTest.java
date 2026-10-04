@@ -138,8 +138,53 @@ class TenantWatcherTest {
 
         single.start();
 
-        assertEquals(Set.of(SummaryBeanRegistry.OWN_SCHEMA), registry.servedSchemas());
+        assertTrue(Await.until(() -> registry.servedSchemas().equals(Set.of(SummaryBeanRegistry.OWN_SCHEMA)) && registry.isRunning(SummaryBeanRegistry.OWN_SCHEMA, DAILY), 10_000));
         assertTrue(database.schemasEntered().isEmpty(), "no schema is entered by name");
         single.stop();
+    }
+
+    @Test
+    void a_store_that_does_not_answer_at_the_start_does_not_fail_the_start_and_is_served_when_it_answers() {
+        // a one-tenant deployment whose database is down when the service starts
+        database.store.failSqlStartingWith("CREATE TABLE IF NOT EXISTS");
+        TenantWatcher single = new TenantWatcher(registry, null, null, 100);
+
+        single.start();                                          // does not throw: nothing is served on the caller's thread
+
+        assertTrue(Await.never(() -> !registry.servedSchemas().isEmpty(), 700), "not served while the store refuses — and tried again meanwhile");
+        database.store.failSqlStartingWith(null);                // the store answers
+        assertTrue(Await.until(() -> registry.isRunning(SummaryBeanRegistry.OWN_SCHEMA, DAILY), 10_000), "served by a retry: no restart, no doorbell");
+        single.stop();
+    }
+
+    @Test
+    void a_schema_that_could_not_be_served_is_tried_again_soon_with_no_doorbell_and_no_refresh() {
+        database.tier("res_47").store().failSqlStartingWith("CREATE TABLE IF NOT EXISTS");
+        tree.add("res_47");
+        TenantWatcher watching = new TenantWatcher(registry, "btcl", () -> new ArrayList<>(tree), 100);
+
+        watching.start();
+
+        assertTrue(Await.until(() -> registry.servedSchemas().equals(Set.of("btcl", "res_44")), 10_000), "the others are served");
+        assertTrue(Await.never(() -> registry.servedSchemas().contains("res_47"), 500));
+        database.tier("res_47").store().failSqlStartingWith(null);  // its schema is ready now
+        assertTrue(Await.until(() -> registry.isRunning("res_47", DAILY), 10_000), "served by a retry: nobody rang, nothing was restarted");
+        watching.stop();
+    }
+
+    @Test
+    void a_tree_that_could_not_be_read_at_the_start_is_asked_again_soon() {
+        primeContextDown = new IOException("prime-context does not answer");
+        TenantWatcher watching = new TenantWatcher(registry, "btcl", () -> {
+            if (primeContextDown != null) throw primeContextDown;
+            return new ArrayList<>(tree);
+        }, 100);
+
+        watching.start();
+
+        assertTrue(Await.never(() -> !registry.servedSchemas().isEmpty(), 500), "nothing is served from a tree nobody could read");
+        primeContextDown = null;
+        assertTrue(Await.until(() -> registry.servedSchemas().equals(Set.of("btcl", "res_44")), 10_000), "the tree is read by a retry");
+        watching.stop();
     }
 }

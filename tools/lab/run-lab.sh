@@ -12,6 +12,9 @@
 # start will (summary.endpoints.print-only=true: it prints them and exits; it starts no worker, no listener, and dials
 # nothing). THIS script reads the hosts and decides. The real start then also carries
 # summary.endpoints.loopback-only=true, so the service refuses by itself if anything changed in between.
+#
+# A secret is never given here: a profile that names its password's variable (summary.store.password-ref: env:NAME)
+# takes it from THIS shell's environment. Exit codes: 3 = a host is not this machine, 4 = that variable is not set.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -32,6 +35,7 @@ common=(-Dsummary.active-tenant="$tenant" -Dquarkus.http.host=127.0.0.1 -Dquarku
 echo "== the endpoints this start resolved ($tenant) =="
 set +e
 resolved=$(java "${common[@]}" -Dsummary.endpoints.print-only=true -Dquarkus.log.level=WARN -jar "$JAR" 2>&1)
+shown=$?
 set -e
 lines=$(printf '%s\n' "$resolved" | grep '^ENDPOINT ' || true)
 if [ -z "$lines" ]; then
@@ -59,6 +63,13 @@ if [ "$elsewhere" -ne 0 ]; then
   exit 3
 fi
 echo "== every host is this machine =="
+# where the store's password comes from — the NAME of its variable, never a value. A variable the profile names
+# and this environment does not hold: the service would refuse the start; it is not started.
+printf '%s\n' "$resolved" | grep '^SECRET ' || true
+if [ "$shown" -eq 4 ]; then
+  echo "== NOT STARTED: the store's password is named by an environment variable that is not set here =="
+  exit 4
+fi
 $show_only && exit 0
 
 echo "== starting $tenant (the service refuses by itself if an endpoint is not on this machine) =="

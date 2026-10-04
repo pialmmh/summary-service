@@ -5,6 +5,7 @@ import com.telcobright.summary.context.api.ContextRegistry;
 import com.telcobright.summary.outbox.internal.OutboxReaper;
 import com.telcobright.summary.ping.internal.PingListener;
 import com.telcobright.summary.registry.api.SummaryBeanRegistry;
+import com.telcobright.summary.runtime.internal.StoreDataSource;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
 import com.telcobright.summary.tenancy.api.TenantWatcher;
 
@@ -48,6 +49,7 @@ public class SummaryBootstrap {
     private final OutboxReaper reaper;
     private final PingListener pingListener;
     private final TenantWatcher tenants;
+    private final StoreDataSource store;
     private final boolean autostart;
 
     @Inject
@@ -57,6 +59,7 @@ public class SummaryBootstrap {
                             OutboxReaper reaper,
                             PingListener pingListener,
                             TenantWatcher tenants,
+                            StoreDataSource store,
                             @ConfigProperty(name = "summary.autostart", defaultValue = "false") boolean autostart) {
         this.registry = registry;
         this.discoveredBeans = discoveredBeans;
@@ -64,6 +67,7 @@ public class SummaryBootstrap {
         this.reaper = reaper;
         this.pingListener = pingListener;
         this.tenants = tenants;
+        this.store = store;
         this.autostart = autostart;
     }
 
@@ -73,6 +77,7 @@ public class SummaryBootstrap {
         if (!showEndpointsAndDecide(config, enabled)) {
             return;                                      // print-only: nothing is started, nothing is dialled
         }
+        LOG.info(store.secretAtStart());                 // a password named by its variable must BE in the environment: else the start is refused
         registerBeans(enabled);
         if (!autostart) {
             LOG.infof("autostart off — %d bean(s) registered; no schema served, workers/ping/reaper NOT started, nothing dialled", enabled.size());
@@ -120,14 +125,26 @@ public class SummaryBootstrap {
         }
         if (printOnly) {
             int elsewhere = StartEndpoints.notLoopback(endpoints).size();
+            boolean secretInPlace = sayTheSecretsSource();
             System.out.println(StartEndpoints.LINE_MARK + "S " + endpoints.size() + " resolved, " + elsewhere + " not on this machine — print-only: nothing was started");
-            Quarkus.asyncExit(elsewhere == 0 ? 0 : 3);
+            Quarkus.asyncExit(elsewhere != 0 ? 3 : secretInPlace ? 0 : 4);
             return false;
         }
         if (config.getOptionalValue("summary.endpoints.loopback-only", Boolean.class).orElse(false)) {
             StartEndpoints.requireLoopbackOnly(endpoints);
         }
         return true;
+    }
+
+    /** Print-only: where the store's password comes from (never its value), or why the start would be refused. */
+    private boolean sayTheSecretsSource() {
+        try {
+            System.out.println("SECRET " + store.secretAtStart());
+            return true;
+        } catch (IllegalStateException refusal) {
+            System.out.println("SECRET " + refusal.getMessage());
+            return false;
+        }
     }
 
     @PreDestroy
