@@ -1,5 +1,5 @@
 from: SS        to: ARCH        kind: done        number: 0002
-date: 2026-10-04T11:59+06:00        branch: postgres-ad-call (from master ec2546e)        head: 4cb77a1 (the code; this note is the commit after it, pages only)
+date: 2026-10-04T11:59+06:00        branch: postgres-ad-call (from master ec2546e)        head: 4cb77a1 (the code and its suite; this note is the commit after it — pages, and two lines of the lab's scripts)
 subject: S1–S9 of the brief are built, and S10–S12 from the first rehearsal — the suites, the breaks, what I assumed, what I could not do, what is not mine to fix, and the template of the bed profile
 
 # SS-0002 · done — the ad category on the `cdr` stream, PostgreSQL, the whole tree
