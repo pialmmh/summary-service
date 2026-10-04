@@ -132,7 +132,9 @@ class KafkaListenersIT {
         doorbell.start();
         try {
             assertTrue(Await.until(doorbell::hearing, 60_000), "the broker gave the listener its partitions");
-            assertTrue(rings.get() >= 1, "a read of the tree was asked the moment it could hear: a ring before that would have been lost");
+            // the listener says it hears, THEN asks for the read — on its own thread: wait for it (asserting at once raced
+            // with that thread on a loaded box: seen red once in a dozen suite runs)
+            assertTrue(Await.until(() -> rings.get() >= 1, 10_000), "a read of the tree was asked the moment it could hear: a ring before that would have been lost");
             Await.pause(SETTLE_MILLIS);                             // the broker may hand the partitions over more than once at a start
             int before = rings.get();
 

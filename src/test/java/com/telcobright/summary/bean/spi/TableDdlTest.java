@@ -229,6 +229,20 @@ class TableDdlTest {
     }
 
     @Test
+    void an_older_ad_table_of_any_earlier_shape_is_brought_up_by_the_same_rule() {
+        // stream X's first MySQL table (ec2546e): 17 columns — no chargedunits, no tup_contentid — tup_app 32 and tup_rulecode 20 wide
+        Map<String, Integer> streamXs = without(columnsAsDescribed(adDay()), "chargedunits", "tup_contentid");
+        streamXs.put("tup_app", 32);
+        streamXs.put("tup_rulecode", 20);
+
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_rulecode VARCHAR(64) NOT NULL DEFAULT ''",
+                        "ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_app VARCHAR(64) NOT NULL DEFAULT ''",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN chargedunits DECIMAL(18,6) NOT NULL DEFAULT 0",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, streamXs), "every described column it lacks, every text column that is narrower — in the columns' order");
+    }
+
+    @Test
     void only_a_text_column_is_widened_and_only_when_the_catalog_gives_its_width() {
         Map<String, Integer> oddCatalog = new HashMap<>(columnsAsDescribed(adDay()));
         oddCatalog.put("tup_zone", -1);               // a text column whose width the catalog does not give (an unlimited text): not narrower
