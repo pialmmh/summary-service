@@ -475,9 +475,20 @@ the build tenant's keys — so a start told to serve another tenant still held t
 lab start dialled another tenant's config-manager once (2026-10-04; refused, nothing exchanged; reported).
 Now `TenantProfileConfigSource` lists NOTHING and answers `summary.*` keys by name only
 (`BuildBakesNoTenantIT` reads the packaged jar). A start names its tenant (`SUMMARY_ACTIVE_TENANT=<tenant>/
-<profile>` or `-Dsummary.active-tenant=`); a deployment's profile is a FILE beside the working directory, which
-wins over a profile inside the jar — the jar is not rebuilt for a tenant. With `summary.autostart` off a start
-dials nothing at all (the beans' contexts are loaded only when the workers start).
+<profile>` or `-Dsummary.active-tenant=`). With `summary.autostart` off a start dials nothing at all (the beans'
+contexts are loaded only when the workers start).
+
+**A deployment's configuration is OUTSIDE the jar (brief S10; the rehearsal's finding 6).** ONE key names the
+directory that holds `config/tenants/<tenant>/<profile>/profile-<profile>.yml`: `-Dsummary.config.dir` or
+`SUMMARY_CONFIG_DIR` (not named: the working directory) — as billing-core's `billing.config.dir` and seed's
+`seed.config.dir`. A file found there wins, whole; else the jar's own is read. The directory's own
+`config/tenants.yml` may say which tenant the deployment serves (the house rule: a file says it; `-D` and the
+environment are a start's override); a deployment's registry that enables nothing serves nothing — the jar's is
+not asked behind its back. The start's FIRST line says which tenant, what named it, and which file was read
+(`PROFILE …`; a fallback to the jar reads `THE JAR'S OWN …`). What a person wrote wrong refuses the start in
+words, and nothing falls back to the jar behind it: a named directory that is none, a tenant with no profile
+file anywhere, a file that cannot be parsed. The loader never throws into the configuration system (the logging
+is not up there): the profile source carries the fault (`summary.profile.fault`) and the bootstrap refuses.
 
 ### 16l. A start says what it will dial, before it dials — the lab's rule
 `StartEndpoints`: the database URL, the brokers, each configuration source's base URL and the listener are said

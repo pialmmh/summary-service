@@ -117,6 +117,39 @@ class SummaryBootstrapTest {
         assertFalse(registry.beanNames().isEmpty(), "the start went on: the beans are registered");
     }
 
+    // ---- brief S10: the start's first lines ----
+
+    @Test
+    void the_starts_first_line_says_which_tenant_it_serves_what_named_it_and_which_profile_file_was_read() {
+        try (LogCapture said = LogCapture.of(SummaryBootstrap.class)) {
+            bootstrap(false).onStart(null);
+
+            List<String> lines = said.lines();
+            assertTrue(lines.get(0).startsWith("PROFILE tenant tcbl, profile dev (the first enabled entry of the jar's config/tenants.yml): "
+                    + "THE JAR'S OWN config/tenants/tcbl/dev/profile-dev.yml (no such file under the working directory "), "the FIRST line: " + lines.get(0));
+            assertTrue(lines.get(1).startsWith("ENDPOINT store "), "then every endpoint, before anything is dialled: " + lines.get(1));
+            assertTrue(lines.indexOf("the store: none is configured (nothing is to be served: summary.autostart is off)") > lines.indexOf(lines.stream()
+                    .filter(line -> line.startsWith("ENDPOINT listens-on ")).findFirst().orElseThrow()), "and only then the checks: " + lines);
+        }
+    }
+
+    @Test
+    void a_fault_of_the_profile_refuses_the_start_in_words_and_the_first_lines_are_still_said() {
+        // what the profile source found wrong (a config directory that is none, a tenant with no profile, a file that cannot be parsed)
+        System.setProperty("summary.profile.fault", "SUMMARY_CONFIG_DIR names /nowhere, which is not a directory");
+        try (LogCapture said = LogCapture.of(SummaryBootstrap.class)) {
+            IllegalStateException refused = assertThrows(IllegalStateException.class, () -> bootstrap(false).onStart(null));
+
+            assertEquals("REFUSING TO START: SUMMARY_CONFIG_DIR names /nowhere, which is not a directory", refused.getMessage());
+            assertTrue(said.lines().get(0).startsWith("PROFILE "), "a refused start has its first lines in the log too: " + said.lines());
+            assertTrue(said.lines().stream().anyMatch(line -> line.startsWith("ENDPOINT store ")));
+        } finally {
+            System.clearProperty("summary.profile.fault");
+        }
+        assertTrue(registry.beanNames().isEmpty(), "refused before a bean was registered — with the workers off too");
+        assertEquals(List.of(), contextsFetched, "and nothing was dialled");
+    }
+
     @Test
     void with_autostart_off_the_beans_are_registered_and_nothing_is_dialled() {
         bootstrap(false).onStart(null);

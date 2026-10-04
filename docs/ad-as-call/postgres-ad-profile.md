@@ -48,17 +48,27 @@ The lab's copy of it, with the lab's addresses: `src/main/resources/config/tenan
 
 ## 2 · Where the profile lives, and how a start names it
 
+A deployment keeps its configuration OUTSIDE the jar, in one directory — the one that holds `config/tenants/…`:
+
+```
+<the directory>/config/tenants/<tenant>/<profile>/profile-<profile>.yml     the profile
+<the directory>/config/tenants.yml                                         (optional) which tenant this deployment serves
+```
+
 | | |
 |---|---|
-| the file | `config/tenants/<tenant>/<profile>/profile-<profile>.yml`, **beside the unit's working directory**. The deploy tool renders it on the box. A file there wins over a profile of the same name inside the jar. The jar is not rebuilt for a tenant, and no box's address is committed in this repository |
-| the start | names its tenant: `SUMMARY_ACTIVE_TENANT=btcl/<profile>` in the unit's environment (or `-Dsummary.active-tenant=btcl/<profile>`). A start that names none takes the first enabled entry of the jar's `config/tenants.yml` — today `tcbl/dev`. **Always name it** |
+| the directory | named by ONE key: `-Dsummary.config.dir=<directory>`, or `SUMMARY_CONFIG_DIR` in the unit's environment. Not named: the unit's working directory (where Quarkus also reads `config/application.properties`). The files stay source-controlled; the directory is where the deploy tool puts them |
+| the file | found there, it **wins** — whole: it is not merged with the jar's. Not found there: the jar's own profile of that name is read. So the jar is not rebuilt for a tenant or for a value, a root the jar does not name has its profile, and no box's address is committed in this repository |
+| the tenant | the start names it: `SUMMARY_ACTIVE_TENANT=btcl/<profile>` (or `-Dsummary.active-tenant=btcl/<profile>`). Or a file says it: the directory's own `config/tenants.yml` with one entry `enabled: true`. With neither, the first enabled entry of the jar's `config/tenants.yml` is taken — today `tcbl/dev`. **A deployment always says it** |
+| the start's first line | says which tenant, what named it, and which FILE was read: `PROFILE tenant btcl, profile bed (named by SUMMARY_ACTIVE_TENANT): the file /etc/summary-service/config/tenants/btcl/bed/profile-bed.yml`. A start that fell back to the jar says `THE JAR'S OWN config/tenants/…`. Read this line at every start |
 | Quarkus's own keys | the listener (`quarkus.http.host`, `quarkus.http.port`) go into `config/application.properties` beside the working directory, or into the unit's environment. A profile is not asked for them. The house rule: bind the host's 10.10.x.x address. The service serves `/q/health` only |
 | the password | by the NAME of its variable (`password-ref: env:NAME`). The value comes from secreteer's `/etc/secreteer/<tenant>/<app>.env` through the unit's `EnvironmentFile=`. It is never in the profile, a URL or a command line. Wherever a configured value is printed, a password in it is hidden |
 
 ```
 [Service]
-WorkingDirectory=/opt/summary-service            # holds config/tenants/btcl/<profile>/profile-<profile>.yml
-Environment=SUMMARY_ACTIVE_TENANT=btcl/<profile>
+WorkingDirectory=/opt/summary-service                        # config/application.properties here: Quarkus's own keys
+Environment=SUMMARY_CONFIG_DIR=/etc/summary-service          # holds config/tenants/btcl/<profile>/profile-<profile>.yml
+Environment=SUMMARY_ACTIVE_TENANT=btcl/<profile>             # or: /etc/summary-service/config/tenants.yml enables it
 EnvironmentFile=/etc/secreteer/btcl/summary-service.env
 ExecStart=/usr/bin/java -jar /opt/summary-service/quarkus-app/quarkus-run.jar
 ```
@@ -68,6 +78,7 @@ ExecStart=/usr/bin/java -jar /opt/summary-service/quarkus-app/quarkus-run.jar
 The first lines of a start, before anything is dialled:
 
 ```
+PROFILE tenant btcl, profile <profile> (named by SUMMARY_ACTIVE_TENANT): the file /etc/summary-service/config/tenants/btcl/<profile>/profile-<profile>.yml
 ENDPOINT store jdbc:postgresql://<pg host>:5432/routesphere hosts=<pg host> …
 ENDPOINT ping-kafka <kafka host>:9092 hosts=<kafka host> …
 ENDPOINT tree-prime-context http://<prime-context host>:7091 hosts=<prime-context host> …
@@ -78,6 +89,9 @@ the store's password: from the environment variable TENANT_BTCL_SWITCH_SUMMARY_S
 
 | a start is refused, in words, when | |
 |---|---|
+| `summary.config.dir` / `SUMMARY_CONFIG_DIR` names something that is not a directory | the jar's profile is not read behind a wrong directory |
+| the tenant the start serves has no profile file, in the directory or in the jar | a slip in the name does not come up green with nothing to serve. It says where it looked |
+| the profile file cannot be parsed, or the tenant is not written `<tenant>/<profile>` | the jar's profile is not read in its place |
 | the variable `password-ref` names is not set, or is empty | it names the variable. Nothing was dialled |
 | `password` and `password-ref` are both set; `password-ref` is not `env:NAME`; the URL carries a password (a parameter, or `user:password@` before a host) | what was written there is not shown |
 | `kind` says one engine and the URL is the other's; `kind` is not `mysql` or `postgresql` | |
@@ -86,8 +100,8 @@ the store's password: from the environment variable TENANT_BTCL_SWITCH_SUMMARY_S
 | (a lab) `summary.endpoints.loopback-only: true` and an endpoint is not this machine | every such endpoint is named |
 
 `-Dsummary.endpoints.print-only=true` prints these lines and exits: nothing is started and nothing is dialled.
-Exit code 0 = every host is this machine, 3 = not, 4 = the store's configuration refuses the start (the `SECRET`
-line says why: most often the named password variable is not set).
+Exit code 0 = every host is this machine, 3 = not, 4 = the configuration refuses the start (a line
+`REFUSING TO START: …` says why: most often the named password variable is not set).
 
 What does **not** refuse a start: a store, a broker or a prime-context that does not answer. The service stays
 up, says it (ERROR), and tries again: after `retry-seconds`, each try a little later, up to `refresh-seconds`.
@@ -123,6 +137,15 @@ Do not delete all the bookmarks of a schema: it would then look new and be summe
 bean, delete that bean's row only.
 
 ## 6 · Every key
+
+What a START is given (an option of the JVM or a variable of the unit — these are read before any profile):
+
+| option / variable | what |
+|---|---|
+| `-Dsummary.config.dir` / `SUMMARY_CONFIG_DIR` | the directory that holds `config/tenants/…`. Not set: the working directory |
+| `-Dsummary.active-tenant` / `SUMMARY_ACTIVE_TENANT` | `<tenant>/<profile>`: the tenant this start serves. Not set: the first enabled entry of the directory's `config/tenants.yml`, else of the jar's |
+
+The keys of a profile:
 
 | key | default | what |
 |---|---|---|

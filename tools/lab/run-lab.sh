@@ -5,8 +5,11 @@
 # database URL, the Kafka bootstrap, each configuration source's base URL — and do not start it unless every host
 # is 127.0.0.1 or localhost. An address of a box is never dialled from a lab, not even for a read.
 #
-#   tools/lab/run-lab.sh btcl/lab [-Dkey=value ...]          show the endpoints, then start (foreground; Ctrl-C stops)
-#   tools/lab/run-lab.sh --show btcl/lab [-Dkey=value ...]   show the endpoints and stop
+#   tools/lab/run-lab.sh btcl/lab [-Dkey=value ...]          show the profile and the endpoints, then start (foreground; Ctrl-C stops)
+#   tools/lab/run-lab.sh --show btcl/lab [-Dkey=value ...]   show them and stop
+#
+# A profile from outside the jar: -Dsummary.config.dir=<the directory that holds config/tenants/...> (or SUMMARY_CONFIG_DIR).
+# The PROFILE line says which file was read.
 #
 # How: the service itself resolves its endpoints from the profile and the -D options given here, exactly as the real
 # start will (summary.endpoints.print-only=true: it prints them and exits; it starts no worker, no listener, and dials
@@ -14,8 +17,8 @@
 # summary.endpoints.loopback-only=true, so the service refuses by itself if anything changed in between.
 #
 # A secret is never given here: a profile that names its password's variable (summary.store.password-ref: env:NAME)
-# takes it from THIS shell's environment. Exit codes: 3 = a host is not this machine, 4 = the store's configuration
-# refuses the start (that variable is not set; or the engine contradicts the URL, a password rides in the URL, ...).
+# takes it from THIS shell's environment. Exit codes: 3 = a host is not this machine, 4 = the configuration refuses the
+# start (that variable is not set; the engine contradicts the URL; a password rides in the URL; the profile has a fault).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -33,7 +36,7 @@ shift
 
 common=(-Dsummary.active-tenant="$tenant" -Dquarkus.http.host=127.0.0.1 -Dquarkus.http.port="$HTTP_PORT" "$@")
 
-echo "== the endpoints this start resolved ($tenant) =="
+echo "== the profile and the endpoints this start resolved ($tenant) =="
 set +e
 resolved=$(java "${common[@]}" -Dsummary.endpoints.print-only=true -Dquarkus.log.level=WARN -jar "$JAR" 2>&1)
 shown=$?
@@ -42,6 +45,7 @@ lines=$(printf '%s\n' "$resolved" | grep '^ENDPOINT ' || true)
 if [ -z "$lines" ]; then
   echo "the service printed no endpoint — NOT STARTED. Its output:"; printf '%s\n' "$resolved" | tail -20; exit 3
 fi
+printf '%s\n' "$resolved" | grep '^PROFILE ' || true     # which tenant, what named it, which profile FILE was read
 printf '%s\n' "$lines"
 
 # this script's own reading of the hosts: every one must be a loopback name
@@ -66,10 +70,10 @@ fi
 echo "== every host is this machine =="
 # where the store's password comes from — the NAME of its variable, never a value. A variable the profile names
 # and this environment does not hold, or another fault of the store's configuration: the service would refuse the
-# start; it is not started. The SECRET line says which.
-printf '%s\n' "$resolved" | grep '^SECRET ' || true
+# start; it is not started. The service says why, as its start would (REFUSING TO START: ...).
+printf '%s\n' "$resolved" | grep -E '^SECRET |^REFUSING TO START' || true
 if [ "$shown" -eq 4 ]; then
-  echo "== NOT STARTED: the store's configuration refuses the start (the SECRET line above says why) =="
+  echo "== NOT STARTED: the configuration refuses the start (the line above says why) =="
   exit 4
 fi
 $show_only && exit 0

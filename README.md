@@ -110,10 +110,14 @@ instance under its own name/offset/table, e.g. the SG11 pair (legacy summarised 
 
 - `application.properties` — `summary.autostart` (default off; gates the workers, ping listener, and reaper;
   with it off nothing is dialled).
+- **A deployment's configuration is OUTSIDE the jar**, in ONE directory — the one that holds `config/tenants/…` —
+  named by one key: `-Dsummary.config.dir=<directory>` or `SUMMARY_CONFIG_DIR` (not named: the working directory).
+  A profile file found there wins; else the jar's own is read. The start's first line says which tenant, what
+  named it and which FILE was read (`PROFILE tenant btcl, profile bed (…): the file /etc/…/profile-bed.yml`).
 - The active tenant/profile: the one the START names (`SUMMARY_ACTIVE_TENANT=<tenant>/<profile>` or
-  `-Dsummary.active-tenant=`), else the first entry flagged `enabled: true` in `config/tenants.yml`.
-- `config/tenants/<tenant>/<profile>/profile-<profile>.yml` — a FILE beside the working directory first, else the
-  one in the jar: the store (`summary.store.*`: kind, url, username, password | password-ref), the tenants
+  `-Dsummary.active-tenant=`), else the first entry flagged `enabled: true` in the directory's own
+  `config/tenants.yml`, else in the jar's.
+- `config/tenants/<tenant>/<profile>/profile-<profile>.yml`: the store (`summary.store.*`: kind, url, username, password | password-ref), the tenants
   (`summary.tenants.*`: single | tree), the `summary.contexts` (config-manager) block, the `summary.outbox`
   settings, and the **`enabledSummary`** list + each bean's `table-suffix`/`service-group`/`context` (the window
   is the class — or the `window:` key for config-instantiated instances). A profile answers `summary.*` keys by

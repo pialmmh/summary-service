@@ -67,7 +67,7 @@ env -u SS_LAB_STORE_PASSWORD tools/lab/run-lab.sh --show btcl/lab "${OPTIONS[@]}
 env -u SS_LAB_STORE_PASSWORD java -Dsummary.active-tenant=btcl/lab -Dquarkus.http.host=127.0.0.1 -Dquarkus.http.port=7671 "${OPTIONS[@]}" \
     -Dsummary.endpoints.loopback-only=true -Dsummary.autostart=true -jar "$JAR" > "$WORK/secret-1-start.log" 2>&1; started=$?
 set -e
-grep -E "^ENDPOINT|^SECRET|^== " "$WORK/secret-1-show.log" | cut -c1-230
+grep -E "^PROFILE|^ENDPOINT|^SECRET|^REFUSING|^== " "$WORK/secret-1-show.log" | cut -c1-230
 echo "run-lab.sh --show exit code: $shown (4 = the named variable is not set)"
 echo "the service's own start: exit code $started; it said:"
 grep -m1 -o "REFUSING TO START: the environment variable [A-Z_]* is not set[^\"]*" "$WORK/secret-1-start.log" | cut -c1-260
