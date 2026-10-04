@@ -66,6 +66,31 @@ public final class PgLab {
         return new RoleDataSource(urlFor(schema), role);
     }
 
+    /**
+     * A datasource that hands out ONE physical connection again and again and never closes it — what a pool does
+     * with a connection, in the open: a test can then look at what a unit of work left on it.
+     */
+    public static DataSource neverClosing(Connection physical) {
+        Connection handedOut = (Connection) java.lang.reflect.Proxy.newProxyInstance(PgLab.class.getClassLoader(), new Class<?>[] {Connection.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("close")) {
+                        if (!physical.getAutoCommit()) physical.rollback();       // as a pool returns a connection: no open transaction,
+                        physical.setAutoCommit(true);                             // autocommit as it was
+                        return null;
+                    }
+                    try {
+                        return method.invoke(physical, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+        return (DataSource) java.lang.reflect.Proxy.newProxyInstance(PgLab.class.getClassLoader(), new Class<?>[] {DataSource.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("getConnection")) return handedOut;
+                    throw new UnsupportedOperationException(method.getName());
+                });
+    }
+
     /** As prime-context provisions a tier: the schema anew, the services let in, what they create shared (R5). */
     public static void provisionTier(String schema) {
         run(PRIME_CONTEXT, null,

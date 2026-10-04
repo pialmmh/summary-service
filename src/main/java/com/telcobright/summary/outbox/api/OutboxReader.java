@@ -217,16 +217,6 @@ public class OutboxReader {
         }
     }
 
-    /** The name of the connection's own schema (a one-tenant deployment's tier). Opens and closes one connection. */
-    public String ownSchema() {
-        UnitOfWork unitOfWork = unitOfWorkFactory.begin();
-        try {
-            return unitOfWork.schema();
-        } finally {
-            closeQuietly(unitOfWork);
-        }
-    }
-
     /**
      * Trim the outbox of {@code schema}: delete the rows every one of {@code beanNames} has passed — its own
      * transaction. Nothing is deleted while a bean has no bookmark; in a schema with no outbox yet every bookmark

@@ -2,6 +2,9 @@ package com.telcobright.summary.config.internal;
 
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
+import io.smallrye.config.PropertiesConfigSource;
+import io.smallrye.config.SmallRyeConfigBuilder;
+import org.eclipse.microprofile.config.Config;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -137,6 +140,23 @@ class WifiProfileTest {
         Files.writeString(broken, "summary:\n\tstore: [unclosed");
 
         assertTrue(ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("btcl", "bed"), workingDirectory).isEmpty());
+    }
+
+    @Test
+    void the_lab_profile_refuses_by_itself_a_start_that_would_leave_this_machine() {
+        assertEquals("true", PROFILE.get("summary.endpoints.loopback-only"), "the guard is in the profile: it does not depend on who starts it");
+        assertEquals(null, ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("tcbl", "dev")).get("summary.endpoints.loopback-only"),
+                "a deployment's profile does not carry it");
+    }
+
+    @Test
+    void a_profile_may_switch_the_workers_on_over_the_jars_default() {
+        // application.properties in the jar says summary.autostart=false (ordinal 250); a deployment's profile says true
+        TenantProfileConfigSource profile = new TenantProfileConfigSource(Map.of("summary.autostart", "true"));
+        Config config = new SmallRyeConfigBuilder()
+                .withSources(new PropertiesConfigSource(Map.of("summary.autostart", "false"), "application.properties", 250), profile).build();
+
+        assertEquals(true, config.getValue("summary.autostart", Boolean.class));
     }
 
     @Test

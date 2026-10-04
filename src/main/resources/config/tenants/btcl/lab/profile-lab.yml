@@ -8,6 +8,11 @@
 # =====================================================================================
 
 summary:
+  # ---- a LAB profile: a start of it is refused unless every endpoint it resolved is this machine ----
+  # (the store, the brokers, prime-context, the listener: 127.0.0.1 / localhost only. A lab never dials a box.)
+  endpoints:
+    loopback-only: true
+
   # ---- the store (brief S5): the switch database on PostgreSQL; a tenant is a SCHEMA of it ----
   # The engine is chosen here, at run time (kind: mysql | postgresql): one jar serves either.
   store:

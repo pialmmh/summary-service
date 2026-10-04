@@ -7,6 +7,7 @@ import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.outbox.api.OutboxReader;
 import com.telcobright.summary.outbox.internal.OutboxCodec;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
+import com.telcobright.summary.runtime.spi.UnitOfWork;
 import com.telcobright.summary.summarybeans.ad.internal.AdSummaryBean;
 import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
@@ -192,6 +193,38 @@ class PostgresOutboxConsumerIT extends OutboxConsumerContract {
         // the service's units of work read a backslash as MySQL does; nobody else's session is touched
         assertEquals("on", PgLab.queryText(PgLab.AD_SPHERE, null, "show standard_conforming_strings"));
         assertEquals("on", PgLab.queryText(PgLab.SUMMARY_SERVICE, null, "show standard_conforming_strings"), "a plain connection of the same role");
+    }
+
+    @Test
+    void a_unit_of_work_leaves_nothing_on_its_connection_the_schema_and_the_string_setting_end_with_its_transaction() throws SQLException {
+        // ONE physical connection, handed out again and again as a pool does (it is never really closed here)
+        String other = PgLab.schema("other");
+        PgLab.provisionTier(other);
+        try (Connection physical = PgLab.connect(PgLab.SUMMARY_SERVICE, TIER)) {
+            JdbcUnitOfWorkFactory onOneConnection = new JdbcUnitOfWorkFactory(PgLab.neverClosing(physical), SqlDialect.POSTGRESQL);
+            String inside;
+            try (UnitOfWork work = onOneConnection.begin(other)) {
+                inside = settingsOf(physical);                                    // asked inside the unit of work's transaction
+                work.commit();
+            }
+            assertEquals(other + "|off", inside, "inside its transaction: its schema, a backslash read as MySQL reads it");
+            assertEquals(TIER + "|on", settingsOf(physical), "after the commit: the connection is as it was");
+
+            try (UnitOfWork work = onOneConnection.begin(other)) {
+                work.rollback();
+            }
+            assertEquals(TIER + "|on", settingsOf(physical), "after a rollback too");
+        } finally {
+            PgLab.dropTier(other);
+        }
+    }
+
+    private static String settingsOf(Connection connection) throws SQLException {
+        try (java.sql.Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("select current_schema() || '|' || current_setting('standard_conforming_strings')")) {
+            rs.next();
+            return rs.getString(1);
+        }
     }
 
     private static void assertDenied(String refusal, String why) {
