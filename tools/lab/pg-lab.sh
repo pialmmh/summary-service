@@ -6,7 +6,7 @@
 #   tools/lab/pg-lab.sh up        # PostgreSQL 16 on 127.0.0.1:7643, the switch database and the roles
 #   tools/lab/pg-lab.sh mysql     # MySQL 5.7.44 on 127.0.0.1:7633 (empty root password) for the MySQL ITs
 #   tools/lab/pg-lab.sh kafka     # Kafka 3.9 on 127.0.0.1:7692 (the ping and the doorbell)
-#   tools/lab/pg-lab.sh down      # remove the three containers
+#   tools/lab/pg-lab.sh down      # remove the three containers and their volumes: nothing is left
 #
 # The database is made as ad-is-a-call §3 and prime-context's postgres-tenancy.md §3 say: database "routesphere" owned by
 # prime_context; the roles ad_sphere, billing_core, summary_service (LOGIN); prime_context a member of the two that create
@@ -64,7 +64,7 @@ kafka_up() {
 }
 
 down() {
-  for c in "$PG" "$MY" "$KA"; do exists "$c" && docker rm -f "$c" >/dev/null && echo "removed $c"; done
+  for c in "$PG" "$MY" "$KA"; do exists "$c" && docker rm -f -v "$c" >/dev/null && echo "removed $c (and its volumes)"; done
   true
 }
 

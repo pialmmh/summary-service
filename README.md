@@ -128,7 +128,8 @@ instance under its own name/offset/table, e.g. the SG11 pair (legacy summarised 
 - **The ping's topic carries the ROOT on a deployment**: `summary.outbox.ping-topic: cdr_summary_ping_<root>`, and
   the SAME name on billing-core's side (its `billing.summary.ping-topic`) — as the lane's other topics do
   (`cdr_<root>`, `cdr_dlq_<root>`, `config_event_loader_<root>`). On one broker with two operators a shared
-  `cdr_summary_ping` would wake every summary-service. **The topic must EXIST** (a deployment's broker makes none
+  `cdr_summary_ping` would bring every operator's pings to every summary-service (a ping wakes the tier it names:
+  two trees may hold a tier of the same name, and a one-tenant deployment wakes on every ping). **The topic must EXIST** (a deployment's broker makes none
   by itself): without it billing-core's ingest waits 60 s per tier per batch for the ping's metadata (seen in the
   rehearsal), and this service runs on the poll alone, with about one WARN line a second from the Kafka client
   that names the topic; made later, the topic is heard with no restart (`tools/lab/ping-topic-e2e.sh`). The same

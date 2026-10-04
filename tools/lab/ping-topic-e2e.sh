@@ -30,7 +30,7 @@ kt()    { docker exec "$KA" /opt/kafka/bin/kafka-topics.sh --bootstrap-server "1
 service_pid=""
 cleanup() {
   [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null || true
-  docker rm -f "$KA" >/dev/null 2>&1 || true
+  docker rm -f -v "$KA" >/dev/null 2>&1 || true        # -v: its anonymous volumes go with it
   super -c "DROP SCHEMA IF EXISTS $SCHEMA CASCADE" 2>/dev/null || true
 }
 trap cleanup EXIT

@@ -464,7 +464,9 @@ position and look once the moment they can hear (what landed before is not misse
 **On a deployment the topic carries the root (brief S12; the rehearsal's finding 2): `cdr_summary_ping_<root>`**
 — a profile value (`summary.outbox.ping-topic`), the SAME name on billing-core's side
 (`billing.summary.ping-topic`), as the lane's other topics (`cdr_<root>`, `cdr_dlq_<root>`,
-`config_event_loader_<root>`): on one broker with two operators a shared ping would wake every summary-service.
+`config_event_loader_<root>`): on one broker with two operators a shared topic would bring every operator's pings
+to every summary-service (a ping wakes the tier it names — two trees may hold a tier of the same name, and a
+one-tenant deployment wakes on every ping).
 The topic must EXIST (a deployment's broker makes none by itself). Seen: without it billing-core's ingest waits
 60 s per tier per batch; this service stays up on the poll alone, with about one WARN a second from the Kafka
 client that names the topic, and hears it with no restart once it is made (`tools/lab/ping-topic-e2e.sh`). No
