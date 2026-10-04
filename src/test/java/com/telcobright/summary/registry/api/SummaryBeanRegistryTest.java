@@ -206,6 +206,30 @@ class SummaryBeanRegistryTest {
     }
 
     @Test
+    void a_bean_enabled_by_a_restart_on_a_served_schema_sums_from_now_never_from_the_residue() {
+        // An earlier run served btcl with the daily bean alone, up to row 2; rows 1 and 2 are still in the outbox (the
+        // reaper has not trimmed them). The profile then gains the hourly bean and the service is RESTARTED: the schema
+        // is served already, so the new bean starts at the head — summing rows 1 and 2 would be a partial backfill that
+        // looks like complete windows. This is decided when the schema is served, BEFORE its workers start.
+        Tier btcl = database.tier("btcl");
+        btcl.outbox().seed(1, rootViewRow());
+        btcl.outbox().seed(2, rootViewRow());
+        btcl.outbox().advanceOffset("cdr", DAILY, 2);           // the earlier run's bookmark
+        registry(1, AdTestSupport.dailyBean(), AdTestSupport.hourlyBean());
+
+        registry.serve("btcl");                                 // the restart
+
+        assertTrue(Await.until(() -> btcl.outbox().hasBookmark("cdr", HOURLY), 10_000));
+        assertEquals(2, offset(btcl, HOURLY), "the late bean's first bookmark is the head");
+        assertEquals(2, offset(btcl, DAILY), "the bean that was there keeps its own");
+        assertTrue(Await.never(() -> btcl.store().ranSqlMatching("insert into sum_ad_hr_30"), 2500), "the residue is never summed by the late bean");
+
+        btcl.outbox().seed(3, rootViewRow());
+        assertTrue(Await.until(() -> offset(btcl, HOURLY) == 3 && offset(btcl, DAILY) == 3, 10_000), "what lands after the restart flows to both");
+        assertEquals(1, btcl.store().countSqlMatching("insert into sum_ad_hr_30"), "row 3 only");
+    }
+
+    @Test
     void a_bookmark_that_exists_is_never_moved_by_a_restart() {
         registry(NEVER_POLLS, AdTestSupport.dailyBean(), AdTestSupport.hourlyBean());
         Tier btcl = database.tier("btcl");

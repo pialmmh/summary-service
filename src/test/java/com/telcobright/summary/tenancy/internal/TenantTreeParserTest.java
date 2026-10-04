@@ -20,7 +20,9 @@ class TenantTreeParserTest {
     static String tree() {
         return "{\"dbName\":\"btcl\",\"parent\":null,"
                 + "\"context\":{\"partners\":{\"44\":{\"idPartner\":44,\"partnerName\":\"R1\",\"dbName\":\"not_a_tenant\"}},"
-                + "\"children\":{\"also_not_a_tenant\":{\"dbName\":\"fake\"}},\"rates\":[[1,2,3],{\"deep\":{\"dbName\":\"nor_this\"}}]},"
+                + "\"children\":{\"also_not_a_tenant\":{\"dbName\":\"fake\"}},\"rates\":[[1,2,3],{\"deep\":{\"dbName\":\"nor_this\"}}],"
+                // a whole tenant-SHAPED object directly inside the context (its own dbName, its own children): still data
+                + "\"self\":{\"dbName\":\"shaped_like_a_tenant\",\"children\":{\"its_child\":{\"dbName\":\"its_child\"}}}},"
                 + "\"children\":{"
                 + "\"res_44\":{\"dbName\":\"res_44\",\"parent\":\"btcl\",\"context\":{\"partners\":{}},"
                 + "\"children\":{\"res_44_7\":{\"dbName\":\"res_44_7\",\"parent\":\"res_44\",\"children\":{},\"context\":null}}},"
@@ -41,7 +43,8 @@ class TenantTreeParserTest {
     void a_dbname_or_children_inside_a_context_is_not_a_tenant() throws IOException {
         List<String> schemas = schemasOf(tree());
 
-        for (String inContext : List.of("not_a_tenant", "also_not_a_tenant", "fake", "nor_this")) {
+        assertEquals(4, schemas.size(), "the four tiers and nothing else: " + schemas);
+        for (String inContext : List.of("not_a_tenant", "also_not_a_tenant", "fake", "nor_this", "shaped_like_a_tenant", "its_child")) {
             assertEquals(false, schemas.contains(inContext), inContext + " is data of a tier's context, skipped unparsed");
         }
     }
