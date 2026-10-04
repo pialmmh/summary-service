@@ -148,16 +148,24 @@ class KafkaListenersIT {
         }
     }
 
+    /**
+     * Does the lab's broker answer? Asked up to three times, ten seconds each: a broker that is only SLOW to answer the
+     * first question of a JVM (a loaded box) is there, and a test must not be skipped for it — a skipped test proves
+     * nothing. (Seen: one of the three tests skipped in one full run, with the broker up.)
+     */
     private static boolean brokerAnswers() {
         Properties p = new Properties();
         p.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, BROKER);
-        p.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 3000);
-        p.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 3000);
-        try (AdminClient admin = AdminClient.create(p)) {
-            admin.describeCluster().nodes().get(4, TimeUnit.SECONDS);
-            return true;
-        } catch (Exception unreachable) {
-            return false;
+        p.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 10_000);
+        p.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 10_000);
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try (AdminClient admin = AdminClient.create(p)) {
+                admin.describeCluster().nodes().get(11, TimeUnit.SECONDS);
+                return true;
+            } catch (Exception notThisTime) {
+                // asked again
+            }
         }
+        return false;
     }
 }
