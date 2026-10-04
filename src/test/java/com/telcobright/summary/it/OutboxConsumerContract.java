@@ -172,6 +172,29 @@ abstract class OutboxConsumerContract {
     }
 
     @Test
+    void a_failure_after_some_writes_takes_every_one_of_them_back() {
+        // two outbox rows in ONE transaction: row 1's window is WRITTEN, then row 2's write fails in the database
+        // (its cost does not fit the column). The step must leave nothing — else the retry adds row 1 a second time
+        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
+        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 20, 10, 0), 42,
+                new java.math.BigDecimal("60"), new java.math.BigDecimal("10000000000000")))));     // 14 digits: more than DECIMAL(18,6) holds
+
+        assertThrows(RuntimeException.class, () -> reader.drainOnce(bean));
+
+        assertEquals(0, count(DAY_TABLE), "row 1's window, written before the failure, is gone with it");
+        assertEquals(0, offset("dailyCallSummary"), "and the bookmark did not move");
+        assertEquals(0, count("summary_affected_dlq"), "a database failure is never taken for a poison row");
+
+        // one row per transaction now: row 1 commits alone, exactly once; row 2 still fails and waits
+        OutboxReader oneRowPerStep = new OutboxReader(unitOfWorkFactory(), new SummaryEngine(), 1000, 1, 8);
+        assertEquals(1, oneRowPerStep.drainOnce(bean));
+        assertEquals(1, sumTotalCalls(), "counted once");
+        assertThrows(RuntimeException.class, () -> oneRowPerStep.drainOnce(bean));
+        assertEquals(1, offset("dailyCallSummary"));
+        assertEquals(1, sumTotalCalls());
+    }
+
+    @Test
     void a_poison_row_is_quarantined_to_the_deadletter_table_and_skipped() {
         seedOutbox(1, "%%% not base64 %%%");
         seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
@@ -205,6 +228,10 @@ abstract class OutboxConsumerContract {
         assertEquals(2, offset("dailyCallSummary"), "head-init is a no-op once the bookmark exists");
 
         seedOutbox(3, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 21, 8, 0)))));
+        // a restart head-inits again while row 3 waits: a bookmark that exists must NOT move to the new head —
+        // moving it would skip row 3 for ever
+        reader.initOffsetAtHead(bean);
+        assertEquals(2, offset("dailyCallSummary"), "a bookmark that exists is never moved, wherever the head is now");
         assertEquals(1, reader.drain(bean), "rows landing after enablement flow normally");
         assertEquals(3, offset("dailyCallSummary"));
     }

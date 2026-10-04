@@ -103,10 +103,7 @@ public final class StartEndpoints {
      */
     public static List<String> hostsOf(String value) {
         String text = value.trim();
-        if (text.toLowerCase(Locale.ROOT).startsWith("jdbc:")) {
-            text = text.substring(5);
-        }
-        int scheme = text.indexOf("://");
+        int scheme = text.indexOf("://");                      // jdbc:postgresql://…, jdbc:mysql://…, http://…
         if (scheme >= 0) {
             String authority = text.substring(scheme + 3);
             for (char end : new char[] {'/', '?', '#'}) {
