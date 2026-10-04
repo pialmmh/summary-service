@@ -71,7 +71,10 @@ test whose lab does not answer is SKIPPED, never passed. PostgreSQL's and Kafka'
 (`-Dsummary.it.pg.url`, `-Dsummary.it.kafka`); MySQL's default is `127.0.0.1:3306` with a password given at run
 time (`-Dsummary.it.mysql.password`), so name the lab's as above. The lab's stories with the packaged jar:
 `tools/lab/tree-e2e.sh`, `reconcile-with-billing-core.sh`, `secret-e2e.sh` — a service is started there only
-through `tools/lab/run-lab.sh`, which shows the endpoints first and starts only when every host is this machine.
+through `tools/lab/run-lab.sh`, which shows the profile and the endpoints first and starts only when every host is
+THIS BOX: localhost, a loopback address, or an address one of this box's own interfaces holds (a real
+prime-context never listens on loopback; `tools/lab/this-box-e2e.sh` shows both sides). A host name is never
+looked up. The lab's key is `summary.endpoints.local-only: true` — the lab profile carries it itself.
 
 ## The pipeline (per bean, per drain)
 

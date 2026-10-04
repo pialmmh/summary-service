@@ -12,7 +12,7 @@
 #       -Dbc.lab.pg.url=jdbc:postgresql://127.0.0.1:7643/routesphere
 #
 # THEN this script: it starts the stand-in for prime-context's read road (the tree btcl > res_44) and the PACKAGED
-# summary-service through tools/lab/run-lab.sh (the endpoints first; every host must be this machine), waits until
+# summary-service through tools/lab/run-lab.sh (the endpoints first; every host must be this box), waits until
 # every bean has passed billing-core's outbox rows, and prints — per tier — what the summaries hold beside what
 # billing-core's own cdr and acc_chargeable rows add up to. Every line must say SAME. Then it stops what it started
 # (the two schemas stay: they are billing-core's lab output; "tools/lab/tree-e2e.sh down" removes them).

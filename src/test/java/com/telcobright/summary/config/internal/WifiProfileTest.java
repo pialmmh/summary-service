@@ -266,10 +266,11 @@ class WifiProfileTest {
     }
 
     @Test
-    void the_lab_profile_refuses_by_itself_a_start_that_would_leave_this_machine() {
-        assertEquals("true", PROFILE.get("summary.endpoints.loopback-only"), "the guard is in the profile: it does not depend on who starts it");
-        assertEquals(null, ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("tcbl", "dev")).get("summary.endpoints.loopback-only"),
-                "a deployment's profile does not carry it");
+    void the_lab_profile_refuses_by_itself_a_start_that_would_leave_this_box() {
+        assertEquals("true", PROFILE.get("summary.endpoints.local-only"), "the guard is in the profile: it does not depend on who starts it");
+        for (String key : new String[] {"summary.endpoints.local-only", "summary.endpoints.loopback-only"}) {
+            assertEquals(null, ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("tcbl", "dev")).get(key), "a deployment's profile does not carry " + key);
+        }
     }
 
     @Test

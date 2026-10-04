@@ -63,9 +63,9 @@ echo "role $ROLE: $(docker exec "$PG" sed -n "1p" "$HBA")   (every other role of
 say "1 · the variable is NOT in the environment"
 set +e
 env -u SS_LAB_STORE_PASSWORD tools/lab/run-lab.sh --show btcl/lab "${OPTIONS[@]}" > "$WORK/secret-1-show.log" 2>&1; shown=$?
-# the service's own refusal, without the script's check in front of it (the endpoints above are all this machine)
+# the service's own refusal, without the script's check in front of it (the endpoints above are all this box)
 env -u SS_LAB_STORE_PASSWORD java -Dsummary.active-tenant=btcl/lab -Dquarkus.http.host=127.0.0.1 -Dquarkus.http.port=7671 "${OPTIONS[@]}" \
-    -Dsummary.endpoints.loopback-only=true -Dsummary.autostart=true -jar "$JAR" > "$WORK/secret-1-start.log" 2>&1; started=$?
+    -Dsummary.endpoints.local-only=true -Dsummary.autostart=true -jar "$JAR" > "$WORK/secret-1-start.log" 2>&1; started=$?
 set -e
 grep -E "^PROFILE|^ENDPOINT|^SECRET|^REFUSING|^== " "$WORK/secret-1-show.log" | cut -c1-230
 echo "run-lab.sh --show exit code: $shown (4 = the named variable is not set)"

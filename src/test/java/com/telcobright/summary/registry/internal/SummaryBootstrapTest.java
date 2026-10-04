@@ -117,7 +117,7 @@ class SummaryBootstrapTest {
         assertFalse(registry.beanNames().isEmpty(), "the start went on: the beans are registered");
     }
 
-    // ---- brief S10: the start's first lines ----
+    // ---- brief S10, S11: the start's first lines ----
 
     @Test
     void the_starts_first_line_says_which_tenant_it_serves_what_named_it_and_which_profile_file_was_read() {
@@ -148,6 +148,24 @@ class SummaryBootstrapTest {
         }
         assertTrue(registry.beanNames().isEmpty(), "refused before a bean was registered — with the workers off too");
         assertEquals(List.of(), contextsFetched, "and nothing was dialled");
+    }
+
+    @Test
+    void a_lab_start_is_refused_when_an_endpoint_is_another_boxs_by_the_key_or_by_its_first_name() {
+        // the unit test's profile is the jar's tcbl/dev: CCL's database, broker and config-manager — exactly what a lab must never reach
+        for (String key : new String[] {"summary.endpoints.local-only", "summary.endpoints.loopback-only"}) {
+            System.setProperty(key, "true");
+            try {
+                IllegalStateException refused = assertThrows(IllegalStateException.class, () -> bootstrap(false).onStart(null), key);
+
+                assertTrue(refused.getMessage().startsWith("REFUSING TO START: summary.endpoints.local-only is set (a lab start)"), refused.getMessage());
+                assertTrue(refused.getMessage().contains("103.95.96.77:3306"), "the box is named: " + refused.getMessage());
+            } finally {
+                System.clearProperty(key);
+            }
+            assertTrue(registry.beanNames().isEmpty(), "refused before a bean was registered");
+            assertEquals(List.of(), contextsFetched, "and nothing was dialled");
+        }
     }
 
     @Test

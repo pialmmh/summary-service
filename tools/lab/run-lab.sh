@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Start the PACKAGED summary-service on a lab profile — and ONLY when every endpoint it resolved is on this machine.
+# Start the PACKAGED summary-service on a lab profile — and ONLY when every endpoint it resolved is on THIS BOX.
 #
 # The rule (the architect, 2026-10-04): BEFORE a service starts in a lab, print the endpoints it resolved — the
 # database URL, the Kafka bootstrap, each configuration source's base URL — and do not start it unless every host
-# is 127.0.0.1 or localhost. An address of a box is never dialled from a lab, not even for a read.
+# is this box: localhost, a loopback address, or an address one of this box's own interfaces holds (a real
+# prime-context never listens on loopback). A host name is never looked up. An address of another box is never
+# dialled from a lab, not even for a read.
 #
 #   tools/lab/run-lab.sh btcl/lab [-Dkey=value ...]          show the profile and the endpoints, then start (foreground; Ctrl-C stops)
 #   tools/lab/run-lab.sh --show btcl/lab [-Dkey=value ...]   show them and stop
@@ -14,10 +16,10 @@
 # How: the service itself resolves its endpoints from the profile and the -D options given here, exactly as the real
 # start will (summary.endpoints.print-only=true: it prints them and exits; it starts no worker, no listener, and dials
 # nothing). THIS script reads the hosts and decides. The real start then also carries
-# summary.endpoints.loopback-only=true, so the service refuses by itself if anything changed in between.
+# summary.endpoints.local-only=true, so the service refuses by itself if anything changed in between.
 #
 # A secret is never given here: a profile that names its password's variable (summary.store.password-ref: env:NAME)
-# takes it from THIS shell's environment. Exit codes: 3 = a host is not this machine, 4 = the configuration refuses the
+# takes it from THIS shell's environment. Exit codes: 3 = a host is not this box, 4 = the configuration refuses the
 # start (that variable is not set; the engine contradicts the URL; a password rides in the URL; the profile has a fault).
 set -euo pipefail
 
@@ -48,7 +50,9 @@ fi
 printf '%s\n' "$resolved" | grep '^PROFILE ' || true     # which tenant, what named it, which profile FILE was read
 printf '%s\n' "$lines"
 
-# this script's own reading of the hosts: every one must be a loopback name
+# this script's own reading of the hosts: every one must be this box — a loopback name, or an address that one of
+# this box's own interfaces holds (asked of the kernel here, not of the service)
+own=" $(ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ')"
 elsewhere=0
 while IFS= read -r line; do
   hosts=$(printf '%s\n' "$line" | sed -n 's/.* hosts=\([^ ]*\) .*/\1/p')
@@ -57,17 +61,19 @@ while IFS= read -r line; do
   if [ -z "$hosts" ] || [ "$hosts" = "-" ]; then elsewhere=$((elsewhere + 1)); echo "   ^ no host could be read: not taken for local"; continue; fi
   IFS=',' read -ra each <<< "$hosts"
   for host in "${each[@]}"; do
-    if ! [[ "$host" =~ ^(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost|::1)$ ]]; then
-      elsewhere=$((elsewhere + 1)); echo "   ^ $host is NOT this machine"
+    if [[ "$host" =~ ^(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost|::1)$ ]]; then continue; fi
+    if [[ "$host" =~ ^[0-9a-fA-F.:]+$ ]] && [ "$host" != "0.0.0.0" ] && [ "$host" != "::" ] && [[ "$own" == *" $host "* ]]; then
+      echo "   ^ $host is an address of this box's own interface"; continue
     fi
+    elsewhere=$((elsewhere + 1)); echo "   ^ $host is NOT this box"
   done
 done <<< "$lines"
 
 if [ "$elsewhere" -ne 0 ]; then
-  echo "== NOT STARTED: $elsewhere host(s) are not 127.0.0.1 / localhost. A lab never dials a box, not even for a read. =="
+  echo "== NOT STARTED: $elsewhere host(s) are not this box (localhost, a loopback address, an address of its own interfaces). A lab never dials another box, not even for a read. =="
   exit 3
 fi
-echo "== every host is this machine =="
+echo "== every host is this box =="
 # where the store's password comes from — the NAME of its variable, never a value. A variable the profile names
 # and this environment does not hold, or another fault of the store's configuration: the service would refuse the
 # start; it is not started. The service says why, as its start would (REFUSING TO START: ...).
@@ -78,5 +84,5 @@ if [ "$shown" -eq 4 ]; then
 fi
 $show_only && exit 0
 
-echo "== starting $tenant (the service refuses by itself if an endpoint is not on this machine) =="
-exec java "${common[@]}" -Dsummary.endpoints.loopback-only=true -Dsummary.autostart=true -jar "$JAR"
+echo "== starting $tenant (the service refuses by itself if an endpoint is not on this box) =="
+exec java "${common[@]}" -Dsummary.endpoints.local-only=true -Dsummary.autostart=true -jar "$JAR"

@@ -97,10 +97,10 @@ the store's password: from the environment variable TENANT_BTCL_SWITCH_SUMMARY_S
 | `kind` says one engine and the URL is the other's; `kind` is not `mysql` or `postgresql` | |
 | the workers are to start (`autostart`) and the profile names no store | it asks whether the start named its tenant |
 | `tenants.mode: tree` without `root` or `prime-context.base-url` (when the workers are to start) | |
-| (a lab) `summary.endpoints.loopback-only: true` and an endpoint is not this machine | every such endpoint is named |
+| (a lab) `summary.endpoints.local-only: true` and an endpoint is not THIS BOX | every such endpoint is named. This box = `localhost`, a loopback address, or an address one of this box's own interfaces holds. A host name is never looked up, so a name is refused; so is a listener on every interface (`0.0.0.0`) |
 
 `-Dsummary.endpoints.print-only=true` prints these lines and exits: nothing is started and nothing is dialled.
-Exit code 0 = every host is this machine, 3 = not, 4 = the configuration refuses the start (a line
+Exit code 0 = every host is this box, 3 = not, 4 = the configuration refuses the start (a line
 `REFUSING TO START: …` says why: most often the named password variable is not set).
 
 What does **not** refuse a start: a store, a broker or a prime-context that does not answer. The service stays
@@ -176,7 +176,7 @@ The keys of a profile:
 | `summary.enabledSummary` | — | the beans to run |
 | `summary.beans.<name>.window` / `service-group` / `table-suffix` | — | a call bean made from the profile alone (group 30: suffix `"30"`) |
 | `summary.zone` | `Asia/Dhaka` | MySQL only: "this year" of the partition horizon |
-| `summary.endpoints.loopback-only` | `false` | a lab's guard: refuse a start that would reach anything but this machine |
+| `summary.endpoints.local-only` | `false` | a lab's guard: refuse a start that would reach, or listen on, anything but this box (its first name, `summary.endpoints.loopback-only`, is the same switch). Never set on a deployment |
 
 Threads: one per (schema, bean) — 6 for each tier with this profile. They sleep until a ping or the poll.
 
@@ -187,10 +187,11 @@ Everything on 127.0.0.1, in containers named `ss-*`; no password exists.
 | | |
 |---|---|
 | `tools/lab/pg-lab.sh up \| mysql \| kafka \| all \| down` | PostgreSQL 16 (7643), MySQL 5.7.44 (7633), Kafka 3.9 (7692) |
-| `tools/lab/run-lab.sh <tenant>/<profile>` | the only way a service is started in the lab: it shows the endpoints the start resolved, and starts only when every host is this machine. `--show` stops after showing |
+| `tools/lab/run-lab.sh <tenant>/<profile>` | the only way a service is started in the lab: it shows the profile and the endpoints the start resolved, and starts only when every host is this box. `--show` stops after showing |
 | `tools/lab/tree-e2e.sh` | the tree's story with the packaged jar: billing-core's tables from its own DDL file, rows written as it writes them, a reseller made at run time |
 | `tools/lab/reconcile-with-billing-core.sh` | the summaries beside billing-core's OWN rows (its lab command first; the file's head says how) |
 | `tools/lab/secret-e2e.sh` | the password by its variable's name, against a role that needs one |
+| `tools/lab/this-box-e2e.sh` | the lab's key: an address of this box's own interface is this box (a real prime-context never listens on loopback); another box's refuses the start |
 
 `mvn verify` runs the integration tests against the three containers; a test whose lab is away is skipped,
 never passed. MySQL's lab is named with

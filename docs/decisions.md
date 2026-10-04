@@ -491,12 +491,23 @@ file anywhere, a file that cannot be parsed. The loader never throws into the co
 is not up there): the profile source carries the fault (`summary.profile.fault`) and the bootstrap refuses.
 
 ### 16l. A start says what it will dial, before it dials — the lab's rule
-`StartEndpoints`: the database URL, the brokers, each configuration source's base URL and the listener are said
-first, one line each. `summary.endpoints.print-only=true` prints them and exits (0 = every host is this
-machine, 3 = not, 4 = the store's configuration refuses the start). `summary.endpoints.loopback-only=true`
-refuses a start that would reach anything but this machine — the lab profile carries it itself. In a lab a
-service is started only through `tools/lab/run-lab.sh`, which does both. A value with no host that can be read
-is never taken for local.
+`StartEndpoints`: after the profile's line (§16k), the database URL, the brokers, each configuration source's
+base URL and the listener are said, one line each, before anything is dialled — a refused start has them in its
+log too. `summary.endpoints.print-only=true` prints them and exits (0 = every host is this box, 3 = not, 4 = the
+configuration refuses the start).
+
+`summary.endpoints.local-only=true` is the LAB's key (the lab profile carries it itself): a start that would
+reach, or listen on, anything but THIS BOX is refused, in words, before anything is dialled. **This box (brief
+S11; the rehearsal's finding 7)** = the word `localhost`, a loopback address, or an address that one of this
+box's own interfaces holds — a real prime-context never listens on loopback (its bind guard), so a lab gives it
+an address of this box (a bridge, a namespace's own address). As billing-core's `billing.lab.local-only`. A host
+NAME is never looked up — the lookup itself would leave the box — so a name is not this box; an address is
+parsed, never resolved (four numbers up to 255, or an IPv6 text in brackets, which the JDK parses or refuses
+without a lookup); the any-address (`0.0.0.0`) is not this box: a listener on every interface is reachable from
+other boxes. A value with no host that can be read is never taken for this box. The key's first name,
+`summary.endpoints.loopback-only`, is the same switch: a kit that sets it keeps its guard. In a lab a service is
+started only through `tools/lab/run-lab.sh`, which reads the hosts itself (it asks the kernel for this box's
+addresses, not the service) and then starts with the key.
 
 ### 16m. One string means the same on both engines
 The entities render their own SQL literals the MySQL way (a backslash is doubled). The PostgreSQL unit of work

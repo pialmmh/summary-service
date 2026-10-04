@@ -5,7 +5,8 @@
 > schema of its root's tree**, the ad beans read the **`cdr`** stream (service group 30), and a password may come
 > from the unit's **environment** by the NAME of its variable. Where this brief says "MySQL only", "OpenBao" or
 > "one tenant", `docs/decisions.md` **§16** and `docs/ad-as-call/` win. In a lab: start the service only through
-> `tools/lab/run-lab.sh` (the endpoints are shown first; every host must be this machine; a start names its tenant).
+> `tools/lab/run-lab.sh` (the profile and the endpoints are shown first; every host must be THIS BOX — localhost, a
+> loopback address, or an address one of its own interfaces holds; a start names its tenant).
 
 > You were started via `/start-dev summary-service`. Read this file, then **read the AUTHORITATIVE design at
 > `/tmp/shared-instruction/summary-service-outbox-design.md`** (dotnet/billing-core, **user-ratified 2026-06-27**;

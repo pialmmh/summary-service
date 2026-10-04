@@ -119,28 +119,28 @@ public class SummaryBootstrap {
      * BEFORE anything is dialled, the start's first lines: which profile file was read, then what it will dial — the
      * database, the brokers, each configuration source — and where it listens. They are said FIRST, so a refused
      * start has them in its log too. Then the checks, each a refusal in words that fails the start: a fault of the
-     * profile, a lab start that would leave this machine ({@link StartEndpoints}), a fault of the store's configuration.
+     * profile, a lab start that would leave this box ({@link StartEndpoints}), a fault of the store's configuration.
      */
     private void sayAndCheckWhatThisStartResolved(Config config, List<StartEndpoints.Endpoint> endpoints) {
         LOG.info(PROFILE_MARK + " " + profileReadFrom(config));
         endpoints.forEach(endpoint -> LOG.info(endpoint.line()));
         refuseAFaultOfTheProfile(config);
-        if (config.getOptionalValue("summary.endpoints.loopback-only", Boolean.class).orElse(false)) {
-            StartEndpoints.requireLoopbackOnly(endpoints);
+        if (StartEndpoints.isALabStart(config)) {
+            StartEndpoints.requireThisBoxOnly(endpoints);
         }
         LOG.info(store.checkAtStart(autostart));
     }
 
     /**
      * Print-only: the same lines on standard output (the lab script reads them), and an exit code — 0 = every host
-     * is this machine and the configuration starts, 3 = a host is not, 4 = the configuration refuses the start.
+     * is this box and the configuration starts, 3 = a host is not this box, 4 = the configuration refuses the start.
      */
     private void printWhatThisStartResolvedAndExit(Config config, List<StartEndpoints.Endpoint> endpoints) {
         System.out.println(PROFILE_MARK + " " + profileReadFrom(config));
         endpoints.forEach(endpoint -> System.out.println(endpoint.line()));
-        int elsewhere = StartEndpoints.notLoopback(endpoints).size();
+        int elsewhere = StartEndpoints.notThisBox(endpoints).size();
         boolean configurationStarts = sayWhetherTheConfigurationStarts(config);
-        System.out.println(StartEndpoints.LINE_MARK + "S " + endpoints.size() + " resolved, " + elsewhere + " not on this machine — print-only: nothing was started");
+        System.out.println(StartEndpoints.LINE_MARK + "S " + endpoints.size() + " resolved, " + elsewhere + " not on this box — print-only: nothing was started");
         Quarkus.asyncExit(elsewhere != 0 ? 3 : configurationStarts ? 0 : 4);
     }
 
