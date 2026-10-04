@@ -26,7 +26,7 @@ final class JdbcUnitOfWork implements UnitOfWork {
         this.connection = connection;
         this.schema = schema;
         this.dialect = dialect;
-        this.store = new JdbcSummaryStore(connection);
+        this.store = new JdbcSummaryStore(connection, dialect);
         this.outbox = new JdbcOutboxStore(connection, dialect);
     }
 

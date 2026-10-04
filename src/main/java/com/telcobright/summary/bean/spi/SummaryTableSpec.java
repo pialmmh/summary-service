@@ -11,6 +11,11 @@ import java.util.List;
  *
  * <p>Every column is NOT NULL (a summary row has no unknown): a dimension defaults to {@code ''} or 0, a measure
  * to 0, the bucket has no default.
+ *
+ * <p>A table whose shape this service OWNS may be {@link Builder#keptUpToDate() kept up to date}: a table of that
+ * name made by an earlier version is then brought up to this description at its first use — a column it lacks is
+ * added, a text column that is narrower is widened ({@link TableDdl#bringUpToDate}). A table that is NOT marked is
+ * never altered: a summary table another system also writes (the voice deployment's legacy tables) stays as it is.
  */
 public final class SummaryTableSpec {
 
@@ -37,6 +42,7 @@ public final class SummaryTableSpec {
     private final List<String> primaryKey;
     private final List<Index> indexes;
     private final String partitionColumn;
+    private final boolean keptUpToDate;
 
     private SummaryTableSpec(Builder builder) {
         this.name = builder.name;
@@ -44,6 +50,7 @@ public final class SummaryTableSpec {
         this.primaryKey = List.copyOf(builder.primaryKey);
         this.indexes = List.copyOf(builder.indexes);
         this.partitionColumn = builder.partitionColumn;
+        this.keptUpToDate = builder.keptUpToDate;
     }
 
     public static Builder table(String name) {
@@ -76,12 +83,18 @@ public final class SummaryTableSpec {
         return columns.stream().map(Column::name).toList();
     }
 
+    /** True when an EXISTING table of this name is brought up to this description at its first use. */
+    public boolean keptUpToDate() {
+        return keptUpToDate;
+    }
+
     public static final class Builder {
         private final String name;
         private final List<Column> columns = new ArrayList<>();
         private List<String> primaryKey = List.of();
         private final List<Index> indexes = new ArrayList<>();
         private String partitionColumn;
+        private boolean keptUpToDate;
 
         private Builder(String name) {
             this.name = name;
@@ -160,6 +173,15 @@ public final class SummaryTableSpec {
         /** Partitioned by day on this column where the engine partitions summary tables. */
         public Builder partitionedByDayOn(String bucketColumn) {
             this.partitionColumn = bucketColumn;
+            return this;
+        }
+
+        /**
+         * This service owns the table's shape: an existing table of this name is brought up to the description —
+         * a missing column added, a narrower text column widened. Never for a table another system also writes.
+         */
+        public Builder keptUpToDate() {
+            this.keptUpToDate = true;
             return this;
         }
 

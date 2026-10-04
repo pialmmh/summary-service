@@ -1,12 +1,16 @@
 package com.telcobright.summary.bean.spi;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.StringJoiner;
 
 /**
  * Renders a {@link SummaryTableSpec} for an engine — the statements that make the table when it is absent, in
- * the order they must run. Every statement is safe to run again ({@code IF NOT EXISTS}).
+ * the order they must run. Every statement is safe to run again ({@code IF NOT EXISTS}). And, for a table the
+ * service owns the shape of, the statements that bring an OLDER table up to the description ({@link #bringUpToDate}).
  *
  * <ul>
  *   <li><b>MySQL</b>: ONE statement. The table is RANGE-partitioned by day on its bucket column, and the FULL
@@ -58,6 +62,54 @@ public final class TableDdl {
                     + " (" + String.join(", ", index.columns()) + ")");
         }
         return statements;
+    }
+
+    /**
+     * The statements that bring an EXISTING table up to its description — only for a table whose shape this service
+     * owns ({@link SummaryTableSpec#keptUpToDate()}); for any other table: none, ever.
+     *
+     * <ul>
+     *   <li>a column the table LACKS is added, with its default — the rows that are there read it as that default
+     *       (history is not rebuilt);</li>
+     *   <li>a text column that is NARROWER than described is widened. Nothing is ever narrowed, dropped, renamed or
+     *       re-typed.</li>
+     * </ul>
+     *
+     * {@code existing} is what the table has NOW: column name → the width of a text column, or -1
+     * ({@code SummaryStore.columnWidths}). A table that is as described gives no statement — so the step is safe at
+     * every start: the second time it changes nothing. An empty {@code existing} (no such table to compare with)
+     * gives none either.
+     */
+    public static List<String> bringUpToDate(SummaryTableSpec table, SqlDialect dialect, Map<String, Integer> existing) {
+        if (!table.keptUpToDate() || existing.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Integer> now = new HashMap<>();
+        existing.forEach((name, width) -> now.put(name.toLowerCase(Locale.ROOT), width));
+        boolean postgres = dialect == SqlDialect.POSTGRESQL;
+        List<String> statements = new ArrayList<>();
+        for (SummaryTableSpec.Column column : table.columns()) {
+            Integer width = now.get(column.name().toLowerCase(Locale.ROOT));
+            if (width == null) {
+                statements.add(addColumn(table, column, postgres));
+            } else if (column.type() == SummaryTableSpec.Type.VARCHAR && width >= 0 && width < column.width()) {
+                statements.add(postgres
+                        ? "ALTER TABLE " + table.name() + " ALTER COLUMN " + column.name() + " TYPE VARCHAR(" + column.width() + ")"
+                        : "ALTER TABLE " + table.name() + " MODIFY COLUMN " + mysqlColumn(column));
+            }
+        }
+        return statements;
+    }
+
+    /** A column an existing table lacks. One without a default cannot be given to rows that are already there. */
+    private static String addColumn(SummaryTableSpec table, SummaryTableSpec.Column column, boolean postgres) {
+        if (column.identity() || column.defaultLiteral() == null) {
+            throw new IllegalStateException("table " + table.name() + " has no column " + column.name() + ", and that column has no default: "
+                    + "it cannot be added to a table that holds rows. Is " + table.name() + " this service's table?");
+        }
+        return postgres
+                ? "ALTER TABLE " + table.name() + " ADD COLUMN IF NOT EXISTS " + postgresColumn(column)
+                : "ALTER TABLE " + table.name() + " ADD COLUMN " + mysqlColumn(column);
     }
 
     private static String mysqlColumn(SummaryTableSpec.Column column) {

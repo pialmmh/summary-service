@@ -1,6 +1,7 @@
 package com.telcobright.summary.summarybeans.ad;
 
 import com.telcobright.summary.bean.spi.SqlDialect;
+import com.telcobright.summary.bean.spi.TableDdl;
 import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
 import com.telcobright.summary.summarybeans.ad.model.AdSummary;
 import org.junit.jupiter.api.Test;
@@ -36,10 +37,25 @@ class AdReaderContractTest {
     private static final List<String> READER_FILTERS = List.of("tup_partnerid", "tup_starttime", "tup_campaignid");
 
     @Test
-    void the_insert_columns_are_the_seventeen_the_reader_knows_in_their_order_and_the_ruled_units_measure_last() {
+    void the_insert_columns_are_the_seventeen_the_reader_knows_in_their_order_then_the_units_measure_then_the_content() {
+        // what came later is APPENDED — chargedunits (SS-0001), tup_contentid (S13): a table that gets a column by
+        // ALTER (which can only append on PostgreSQL) is then the same table as one made with it
         assertEquals("tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
-                        + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits",
+                        + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits,tup_contentid",
                 AdSummary.INSERT_COLUMNS, "a renamed, removed or moved column breaks ad-sphere's reader (and every existing table)");
+    }
+
+    @Test
+    void the_content_is_a_column_of_both_tables_on_both_engines_64_wide_never_null() throws IOException {
+        // S13: the reader gets contentId on a summary row (stream-x); the per-content reports group by it
+        Map<String, Map<String, String>> onPostgres = tablesOf(resource("db/postgres/sum_ad.sql"));
+        for (var bean : List.of(AdTestSupport.dailyBean(), AdTestSupport.hourlyBean())) {
+            assertEquals("VARCHAR(64)", columnsOf(bean.tableDdl()).get("tup_contentid"), bean.table() + " on MySQL");
+            assertEquals("VARCHAR(64)", onPostgres.get(bean.table()).get("tup_contentid"), bean.table() + " on PostgreSQL");
+            for (String ddl : List.of(bean.tableDdl(), bean.tableDdl(SqlDialect.POSTGRESQL).get(0))) {
+                assertTrue(ddl.contains("tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"), "empty when a record carries none, never NULL: " + ddl);
+            }
+        }
     }
 
     @Test
@@ -91,9 +107,13 @@ class AdReaderContractTest {
     void the_postgres_ddl_the_service_runs_is_the_reference_file_statement_for_statement() throws IOException {
         // db/postgres/sum_ad.sql is what ad-sphere's side was given (brief §4.2); the service renders its own DDL
         // from the bean's table description — the two must be one text, or the file lies
+        // … and, after each table, what brings a table of an EARLIER version up to it (the service runs these only
+        // for a table that needs them; by hand they are safe to run on any)
         List<String> rendered = new ArrayList<>();
-        rendered.addAll(AdTestSupport.dailyBean().tableDdl(SqlDialect.POSTGRESQL));
-        rendered.addAll(AdTestSupport.hourlyBean().tableDdl(SqlDialect.POSTGRESQL));
+        for (var bean : List.of(AdTestSupport.dailyBean(), AdTestSupport.hourlyBean())) {
+            rendered.addAll(bean.tableDdl(SqlDialect.POSTGRESQL));
+            rendered.addAll(TableDdl.bringUpToDate(bean.tableSpec(), SqlDialect.POSTGRESQL, theTableOfTheFirstVersion()));
+        }
 
         List<String> reference = new ArrayList<>();
         for (String statement : resource("db/postgres/sum_ad.sql").replaceAll("--[^\\n]*", "").split(";")) {
@@ -101,6 +121,17 @@ class AdReaderContractTest {
         }
 
         assertEquals(rendered.stream().map(AdReaderContractTest::oneLine).toList(), reference);
+    }
+
+    /** The columns of the ad table as the FIRST PostgreSQL version made it (branch head 938ab19): name → text width, or -1. */
+    private static Map<String, Integer> theTableOfTheFirstVersion() {
+        Map<String, Integer> columns = new LinkedHashMap<>();
+        for (String number : List.of("id", "tup_partnerid", "tup_campaignid", "tup_starttime", "views", "shown", "completed", "credited", "failed",
+                "watchedsec", "chargedamount", "chargedunits")) {
+            columns.put(number, -1);
+        }
+        columns.putAll(Map.of("tup_tenant", 100, "tup_rulecode", 20, "tup_zone", 64, "tup_site", 64, "tup_app", 64, "tup_mediakind", 16, "tup_outcome", 32));
+        return columns;
     }
 
     /** A statement with its layout taken out: one space between words, none around a comma or inside a parenthesis. */

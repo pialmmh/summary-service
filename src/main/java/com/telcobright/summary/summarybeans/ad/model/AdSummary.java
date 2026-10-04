@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
  * One {@code sum_ad_*} row — the AD summary entity (design AD-AS-CALL §2.9, 2026-09-29; net-new, no legacy
  * counterpart). One row per TIER of an ad call (the chargeable pattern): the key is the tier's tenant (its
  * database: a reseller's summary is the rows where {@code tup_tenant} = its database) and partner, the campaign,
+ * the CONTENT shown (a campaign holds several; {@code ''} when the record carries none),
  * the rule code, the zone, the site, the app, the media kind and the outcome, plus the window bucket
  * ({@code tup_starttime} = the call's start truncated to the window). Measures all {@code +=}; {@code multiply}
  * scales ALL of them (net-new stays clean).
@@ -25,7 +26,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
     /** INSERT column list (CSV, in {@link #insertValues()} order, WITHOUT id). */
     public static final String INSERT_COLUMNS =
             "tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
-                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits";
+                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits,tup_contentid";
 
     public static final String BUCKET_COLUMN = "tup_starttime";
 
@@ -42,6 +43,12 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
     public String tup_mediakind = "";
     public String tup_outcome = "";
     public LocalDateTime tup_starttime;
+    /**
+     * The content shown — {@code AdditionalMetaData.contentId}; {@code ''} when the record carries none. A key
+     * dimension like the others. Its COLUMN is the table's last: a table that got it later (by ALTER, which can
+     * only append on PostgreSQL) is then the same table as one made with it.
+     */
+    public String tup_contentid = "";
 
     // -- measures (all +=; multiply scales ALL) --
     public long views;
@@ -65,13 +72,14 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         this.id = id;
     }
 
-    /** The 10-token dimension + bucket tuple, as canonical tokens. */
+    /** The 11-token dimension + bucket tuple, as canonical tokens. */
     @Override
     public SummaryKey tupleKey() {
         return SummaryKey.of(
                 tup_tenant,
                 Integer.toString(tup_partnerid),
                 Integer.toString(tup_campaignid),
+                tup_contentid,
                 tup_rulecode,
                 tup_zone,
                 tup_site,
@@ -119,6 +127,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         c.tup_mediakind = tup_mediakind;
         c.tup_outcome = tup_outcome;
         c.tup_starttime = tup_starttime;
+        c.tup_contentid = tup_contentid;
         c.views = views;
         c.shown = shown;
         c.completed = completed;
@@ -150,6 +159,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
                 + "," + SqlLiterals.num(watchedsec)
                 + "," + SqlLiterals.num(chargedamount)
                 + "," + SqlLiterals.num(chargedunits)
+                + "," + SqlLiterals.str(tup_contentid)
                 + ")";
     }
 

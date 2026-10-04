@@ -10,6 +10,10 @@ import com.telcobright.summary.summarybeans.ad.model.AdSummary;
  *
  * <p>MySQL partitions it by day on the bucket (the full set inside the CREATE), so there every unique key carries
  * the bucket — hence PK {@code (id, tup_starttime)}, kept on PostgreSQL too so the key is one on both engines.
+ *
+ * <p>The ad tables are net-new and this service's alone, so the description is KEPT UP TO DATE: a table made by an
+ * earlier version gets what it lacks at its first use ({@code TableDdl.bringUpToDate}) — {@code tup_contentid}
+ * (added 2026-10-04; the rows that are there read it as {@code ''}).
  */
 final class SumAdDdl {
 
@@ -37,10 +41,12 @@ final class SumAdDdl {
                 .bigint("watchedsec")
                 .decimal("chargedamount", 18, 6)
                 .decimal("chargedunits", 18, 6)
+                .varchar("tup_contentid", AdSummaryBuilder.CONTENT_WIDTH)   // the content shown; the LAST column (see AdSummary)
                 .primaryKey("id", AdSummary.BUCKET_COLUMN)        // the partition column is in every unique key
                 .index("ix_starttime", "tup_starttime")
                 .index("ix_tenant_partner", "tup_tenant", "tup_partnerid", "tup_starttime")
                 .partitionedByDayOn(AdSummary.BUCKET_COLUMN)
+                .keptUpToDate()                                   // net-new, ours alone: an older table is brought up to this
                 .build();
     }
 }

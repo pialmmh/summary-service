@@ -82,6 +82,7 @@ public final class AdTestSupport {
         private String rule = "1001";
         private String media = "video";
         private Object campaign = 5;
+        private Object content = "lux-30";
         private String zone = "dhaka-01";
         private String site = "dhaka-site-1";
         private String app = "wifi";
@@ -107,6 +108,8 @@ public final class AdTestSupport {
         public View rule(String code) { this.rule = code; return this; }
         public View media(String kind) { this.media = kind; return this; }
         public View campaign(Object id) { this.campaign = id; return this; }
+        /** The content shown, as the switch writes it ({@code contentId}): a text, or a number; null = the record carries none. */
+        public View content(Object id) { this.content = id; return this; }
         public View zone(String name) { this.zone = name; return this; }
         public View site(String name) { this.site = name; return this; }
         public View app(String name) { this.app = name; return this; }
@@ -163,7 +166,8 @@ public final class AdTestSupport {
             if (rawMeta != null) return rawMeta;
             StringBuilder m = new StringBuilder("{\"levelIndex\":0,\"partnerName\":\"Unilever\"");
             if (campaign != null) m.append(",\"campaignId\":").append(campaign instanceof String text ? quoted(text) : campaign);
-            m.append(",\"campaignName\":\"lux-soap\",\"contentId\":\"lux-30\"");
+            m.append(",\"campaignName\":\"lux-soap\"");
+            if (content != null) m.append(",\"contentId\":").append(content instanceof String text ? quoted(text) : content);
             if (app != null) m.append(",\"app\":").append(quoted(app));
             if (zone != null) m.append(",\"zone\":").append(quoted(zone));
             if (site != null) m.append(",\"site\":").append(quoted(site));
@@ -215,6 +219,13 @@ public final class AdTestSupport {
 
     public static BigDecimal totalCharged(Collection<AdSummary> rows) {
         return rows.stream().map(r -> r.chargedamount).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /** The one row of {@code content} among {@code rows}. */
+    public static AdSummary ofContent(Collection<AdSummary> rows, String content) {
+        List<AdSummary> found = rows.stream().filter(r -> r.tup_contentid.equals(content)).toList();
+        if (found.size() != 1) throw new AssertionError("content '" + content + "' has " + found.size() + " row(s), not one: " + rows.size() + " row(s) in all");
+        return found.get(0);
     }
 
     public static BigDecimal totalUnits(Collection<AdSummary> rows) {

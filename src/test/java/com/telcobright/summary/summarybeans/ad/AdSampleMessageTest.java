@@ -36,13 +36,13 @@ class AdSampleMessageTest {
         Map<String, List<String>> outbox = BillingStandIn.outboxEntriesByTier(asTheSwitchSendsIt(BillingStandIn.wireMessage(SAMPLE)));
 
         assertEquals(List.of("res_44", "btcl"), List.copyOf(outbox.keySet()), "one outbox entry in EACH tier's schema");
-        assertEquals("('res_44',1,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0.50,0)",
+        assertEquals("('res_44',1,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0.50,0,'c-81')",
                 oneRow(AdTestSupport.dailyBean(), outbox, "res_44").insertValues(), "the advertiser's tier: partner 1 pays 0.50");
-        assertEquals("('btcl',44,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0.40,0)",
+        assertEquals("('btcl',44,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0.40,0,'c-81')",
                 oneRow(AdTestSupport.dailyBean(), outbox, "btcl").insertValues(), "the operator's tier: the reseller (partner 44) pays 0.40");
-        assertEquals("('res_44',1,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 21:00:00',1,1,1,1,0,10,0.50,0)",
+        assertEquals("('res_44',1,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 21:00:00',1,1,1,1,0,10,0.50,0,'c-81')",
                 oneRow(AdTestSupport.hourlyBean(), outbox, "res_44").insertValues(), "the hour of 21:14:03");
-        assertEquals("('btcl',44,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 21:00:00',1,1,1,1,0,10,0.40,0)",
+        assertEquals("('btcl',44,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 21:00:00',1,1,1,1,0,10,0.40,0,'c-81')",
                 oneRow(AdTestSupport.hourlyBean(), outbox, "btcl").insertValues());
     }
 
@@ -50,9 +50,9 @@ class AdSampleMessageTest {
     void the_sample_as_the_brief_writes_it_leaves_the_root_tiers_row_without_the_views_facts() {
         Map<String, List<String>> outbox = BillingStandIn.outboxEntriesByTier(BillingStandIn.wireMessage(SAMPLE));
 
-        assertEquals("('res_44',1,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0.50,0)",
+        assertEquals("('res_44',1,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0.50,0,'c-81')",
                 oneRow(AdTestSupport.dailyBean(), outbox, "res_44").insertValues(), "the leaf's record is whole in the brief");
-        assertEquals("('btcl',44,12,'7001','','','','image','done','2026-10-02 00:00:00',1,1,0,0,0,10,0.40,0)",
+        assertEquals("('btcl',44,12,'7001','','','','image','done','2026-10-02 00:00:00',1,1,0,0,0,10,0.40,0,'')",
                 oneRow(AdTestSupport.dailyBean(), outbox, "btcl").insertValues(),
                 "a root record with only campaignId in its meta data: no zone, no site, no app, completed 0, credited 0");
     }
@@ -66,9 +66,9 @@ class AdSampleMessageTest {
 
         Map<String, List<String>> outbox = BillingStandIn.outboxEntriesByTier(message);
 
-        assertEquals("('res_44',1,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0,10)",
+        assertEquals("('res_44',1,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0,10,'c-81')",
                 oneRow(AdTestSupport.dailyBean(), outbox, "res_44").insertValues(), "money 0, units 10 — never 10 in the money column");
-        assertEquals("('btcl',44,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0.40,0)",
+        assertEquals("('btcl',44,12,'7001','dhaka-north','mirpur-10','captive','image','done','2026-10-02 00:00:00',1,1,1,1,0,10,0.40,0,'c-81')",
                 oneRow(AdTestSupport.dailyBean(), outbox, "btcl").insertValues());
     }
 
@@ -87,7 +87,7 @@ class AdSampleMessageTest {
         Map<String, List<String>> outbox = BillingStandIn.outboxEntriesByTier(message);
 
         assertEquals(List.of("btcl"), List.copyOf(outbox.keySet()), "one record, on the entry tenant");
-        assertEquals("('btcl',1,0,'dhaka-north','dhaka-north','','captive','image','failed','2026-10-02 00:00:00',1,0,0,0,1,0,0,0)",
+        assertEquals("('btcl',1,0,'dhaka-north','dhaka-north','','captive','image','failed','2026-10-02 00:00:00',1,0,0,0,1,0,0,0,'')",
                 oneRow(AdTestSupport.dailyBean(), outbox, "btcl").insertValues(), "1 view, failed, never shown, money 0, units 0");
     }
 

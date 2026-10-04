@@ -14,7 +14,8 @@ import java.math.RoundingMode;
  * Builds one {@link AdSummary} row from ONE ad view as ONE tier recorded it (ad-is-a-call §4.1, §5; brief S1).
  *
  * <p>The key: the tier (the schema's own name — one pair of tables per tier schema, so {@code tup_tenant} is
- * always it), the payer ({@code InPartnerId}), the campaign, the rule's code ({@code OriginatingCalledNumber}),
+ * always it), the payer ({@code InPartnerId}), the campaign, the content shown ({@code contentId} of the meta data;
+ * empty when the record carries none), the rule's code ({@code OriginatingCalledNumber}),
  * the zone, the site, the app, the media kind ({@code Codec}), the outcome ({@code done} when {@code HangupCause}
  * is {@code NORMAL_CLEARING}, else {@code failed}), and the bucket: the record's {@code StartTime} — the tenant's
  * wall clock — cut to the bean's window. Key strings are cut to their column widths so a fresh build keys
@@ -38,6 +39,8 @@ final class AdSummaryBuilder {
      * its start road refuses a longer one). It was 32: two apps sharing their first 32 characters merged into one row.
      */
     static final int APP_WIDTH = 64;
+    /** The width of {@code tup_contentid}: 64, the width of a content's id at its source (ad-sphere's {@code ad_content.id}). */
+    static final int CONTENT_WIDTH = 64;
     /** The unit of money on a chargeable; every other unit is a package's. */
     static final String MONEY_UOM = "BDT";
 
@@ -54,6 +57,7 @@ final class AdSummaryBuilder {
         s.tup_tenant = clip(orEmpty(view.tier()), 100);
         s.tup_partnerid = cdr.inPartnerId() == null ? 0 : cdr.inPartnerId();
         s.tup_campaignid = facts.campaignId();
+        s.tup_contentid = clip(orEmpty(facts.contentId()), CONTENT_WIDTH);
         s.tup_rulecode = clip(orEmpty(cdr.originatingCalledNumber()), 20);
         s.tup_zone = clip(orEmpty(facts.zone()), 64);
         s.tup_site = clip(orEmpty(facts.site()), 64);

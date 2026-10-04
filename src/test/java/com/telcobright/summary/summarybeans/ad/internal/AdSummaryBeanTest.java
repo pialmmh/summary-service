@@ -322,6 +322,106 @@ class AdSummaryBeanTest {
         assertTrue(dailyBean().tableDdl().contains("tup_app VARCHAR(64) "), "and the column is that wide");
     }
 
+    // ---- S13: the summary is keyed by CONTENT too ----
+
+    @Test
+    void two_contents_of_one_campaign_in_one_hour_are_two_rows_and_their_sum_is_what_the_campaigns_one_row_was() {
+        // the campaign lux-soap shows a 30-second clip and a 15-second clip; everything else of the three views is the same
+        List<View> oneHour = List.of(leafView(MORNING).content("lux-30"), leafView(MORNING.plusMinutes(5)).content("lux-15").charge("0.30").watched("9"),
+                leafView(MORNING.plusMinutes(9)).content("lux-30"));
+
+        for (AdSummaryBean bean : List.of(hourlyBean(), dailyBean())) {
+            Collection<AdSummary> rows = rollup(bean, LEAF, oneHour);
+
+            assertEquals(2, rows.size(), bean.table() + ": one row per content");
+            AdSummary clip30 = AdTestSupport.ofContent(rows, "lux-30"), clip15 = AdTestSupport.ofContent(rows, "lux-15");
+            assertEquals(2, clip30.views);
+            assertEquals(30, clip30.watchedsec);
+            assertEquals(0, clip30.chargedamount.compareTo(new BigDecimal("1.00")), "its own charges: 0.50 + 0.50");
+            assertEquals(1, clip15.views);
+            assertEquals(9, clip15.watchedsec);
+            assertEquals(0, clip15.chargedamount.compareTo(new BigDecimal("0.30")));
+            for (AdSummary row : rows) {
+                assertEquals(5, row.tup_campaignid, "both are the campaign's");
+                assertEquals(bean.window().bucketStart(MORNING), row.tup_starttime, "the same window");
+            }
+            assertNotEquals(clip30.tupleKey(), clip15.tupleKey());
+
+            // what the campaign's ONE row was before the content was in the key: the same views, summed without it
+            AdSummary before = theCampaignsOneRow(rows);
+            assertEquals(3, before.views);
+            assertEquals(3, before.shown);
+            assertEquals(3, before.completed);
+            assertEquals(3, before.credited);
+            assertEquals(0, before.failed);
+            assertEquals(39, before.watchedsec);
+            assertEquals(0, before.chargedamount.compareTo(new BigDecimal("1.30")), "0.50 + 0.30 + 0.50");
+            assertEquals(0, before.chargedunits.signum());
+        }
+    }
+
+    /** Rows that differ ONLY in their content, folded into the one row the key gave before the content was in it. */
+    private static AdSummary theCampaignsOneRow(Collection<AdSummary> rows) {
+        java.util.Map<List<String>, AdSummary> byTheOldKey = new java.util.HashMap<>();
+        for (AdSummary row : rows) {
+            AdSummary copy = row.cloneWithFakeId();
+            copy.tup_contentid = "";
+            byTheOldKey.merge(copy.tupleKey().tokens(), copy, (a, b) -> { a.merge(b); return a; });
+        }
+        assertEquals(1, byTheOldKey.size(), "the rows differ in nothing but their content");
+        return byTheOldKey.values().iterator().next();
+    }
+
+    @Test
+    void the_two_charge_measures_stay_apart_per_content() {
+        Collection<AdSummary> rows = rollup(hourlyBean(), LEAF, List.of(leafView(MORNING).content("lux-30"),
+                leafView(MORNING.plusMinutes(1)).content("lux-30").uom("OTH_ea").charge("1"), leafView(MORNING.plusMinutes(2)).content("lux-15").uom("OTH_ea").charge("1")));
+
+        assertEquals(2, rows.size());
+        AdSummary clip30 = AdTestSupport.ofContent(rows, "lux-30"), clip15 = AdTestSupport.ofContent(rows, "lux-15");
+        assertEquals(0, clip30.chargedamount.compareTo(new BigDecimal("0.50")), "money of its own");
+        assertEquals(0, clip30.chargedunits.compareTo(BigDecimal.ONE), "units of its own, never added to the money");
+        assertEquals(0, clip15.chargedamount.signum());
+        assertEquals(0, clip15.chargedunits.compareTo(BigDecimal.ONE));
+    }
+
+    @Test
+    void a_record_with_no_content_is_the_empty_string_row() {
+        // a refused view (no rule matched: nothing was chosen), a house ad with no content, a record with no meta data at all
+        AdSummary refused = dailyBean().buildBatch(batchOf(refusedView(MORNING)), ROOT).get(0);
+        AdSummary houseAd = dailyBean().buildBatch(batchOf(leafView(MORNING).content(null)), LEAF).get(0);
+        AdSummary noMeta = dailyBean().buildBatch(batchOf(leafView(MORNING).noMeta()), LEAF).get(0);
+        AdSummary jsonNull = dailyBean().buildBatch(batchOf(leafView(MORNING).meta("{\"campaignId\":5,\"contentId\":null}")), LEAF).get(0);
+
+        for (AdSummary row : List.of(refused, houseAd, noMeta, jsonNull)) {
+            assertEquals("", row.tup_contentid, "the empty string, never null");
+            assertEquals(1, row.views, "and the view counts");
+        }
+        assertTrue(refused.insertValues().endsWith(",'')"), refused.insertValues());
+
+        // in one window they are ONE row beside the contents' rows
+        Collection<AdSummary> rows = rollup(dailyBean(), LEAF, List.of(leafView(MORNING).content(null), leafView(MORNING.plusMinutes(3)).content(null),
+                leafView(MORNING.plusMinutes(4)).content("lux-30")));
+        assertEquals(2, rows.size());
+        assertEquals(2, AdTestSupport.ofContent(rows, "").views);
+        assertEquals(1, AdTestSupport.ofContent(rows, "lux-30").views);
+    }
+
+    @Test
+    void a_content_id_is_a_text_a_number_is_read_as_its_digits_and_blanks_around_it_are_not_part_of_it() {
+        assertEquals("c-81", contentOf(leafView(MORNING).content("c-81")));
+        assertEquals("4711", contentOf(leafView(MORNING).content(4711)), "an id that is a number at its source");
+        assertEquals("c-81", contentOf(leafView(MORNING).content("  c-81 ")));
+        assertEquals("", contentOf(leafView(MORNING).content("   ")));
+        assertEquals("", contentOf(leafView(MORNING).meta("{\"campaignId\":5,\"contentId\":{\"id\":\"c-81\"}}")), "not a text or a number: absent, never a failed drain");
+        // two ids that differ only in case are two contents (the id is a key at its source)
+        assertNotEquals(contentOf(leafView(MORNING).content("Lux-30")), contentOf(leafView(MORNING).content("lux-30")));
+    }
+
+    private static String contentOf(View view) {
+        return dailyBean().buildBatch(batchOf(view), LEAF).get(0).tup_contentid;
+    }
+
     @Test
     void a_campaign_id_reads_as_a_number_or_as_digits_in_a_string() {
         assertEquals(12, campaignOf(leafView(MORNING).campaign(12)));

@@ -33,6 +33,7 @@ final class AdMetaData {
         }
         return new AdViewFacts(
                 number(meta.get("campaignId")),
+                text(meta.get("contentId")),            // a text at its source (ad_content.id); a number is read as its digits
                 text(meta.get("zone")),
                 text(meta.get("site")),
                 text(meta.get("app")),

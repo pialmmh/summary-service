@@ -3,6 +3,8 @@ package com.telcobright.summary.outbox.api;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryEntity;
 import com.telcobright.summary.bean.spi.SummaryMode;
+import com.telcobright.summary.bean.spi.SummaryTableSpec;
+import com.telcobright.summary.bean.spi.TableDdl;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.engine.spi.MissingWindowException;
 import com.telcobright.summary.outbox.internal.OutboxCodec;
@@ -139,8 +141,10 @@ public class OutboxReader {
             for (String ddl : bean.tableDdl(unitOfWork.dialect())) {
                 unitOfWork.store().executeNonQuery(ddl);
             }
+            int changes = bringAnOlderTableUpToDate(bean, unitOfWork);
             unitOfWork.commit();
-            LOG.infof("schema=%s bean=%s table %s ensured (CREATE IF NOT EXISTS)", unitOfWork.schema(), bean.name(), bean.table());
+            LOG.infof("schema=%s bean=%s table %s ensured (CREATE IF NOT EXISTS%s)", unitOfWork.schema(), bean.name(), bean.table(),
+                    changes == 0 ? "" : "; an older table brought up to its description: " + changes + " change(s)");
         } catch (RuntimeException failure) {
             rollbackQuietly(unitOfWork, bean, failure);
             throw failure;
@@ -323,6 +327,27 @@ public class OutboxReader {
         } finally {
             closeQuietly(unitOfWork);
         }
+    }
+
+    /**
+     * A table of this name that an EARLIER version made is brought up to the bean's description: a column it lacks
+     * is added (the rows that are there read its default — history is not rebuilt), a text column that is narrower
+     * is widened. Only for a table whose shape this service owns ({@code keptUpToDate}); any other table is not even
+     * looked at. The catalog is read first, so a table that is as described gets no statement and no lock: running
+     * this at every start changes nothing the second time. Returns the number of changes made.
+     */
+    private int bringAnOlderTableUpToDate(SummaryBean<?> bean, UnitOfWork unitOfWork) {
+        SummaryTableSpec table = bean.tableSpec();
+        if (!table.keptUpToDate()) {
+            return 0;
+        }
+        List<String> changes = TableDdl.bringUpToDate(table, unitOfWork.dialect(), unitOfWork.store().columnWidths(table.name()));
+        for (String change : changes) {
+            LOG.warnf("schema=%s bean=%s table %s was made by an earlier version — bringing it up to its description: %s",
+                    unitOfWork.schema(), bean.name(), table.name(), change);
+            unitOfWork.store().executeNonQuery(change);
+        }
+        return changes.size();
     }
 
     /**

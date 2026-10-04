@@ -328,6 +328,139 @@ abstract class OutboxConsumerContract {
         }
     }
 
+    // ---- S13: the ad summaries are keyed by CONTENT too ----
+
+    @Test
+    void two_contents_of_one_campaign_in_one_hour_are_two_rows_and_a_reread_of_the_same_outbox_rows_changes_nothing() {
+        AdSummaryBean adHourly = AdTestSupport.hourlyBean();
+        provisionSmall(adHourly);
+        java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
+        // one campaign, one hour, two contents: the 30-second clip twice, the 15-second clip once
+        seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t).content("lux-30"),
+                AdTestSupport.leafView(t.plusMinutes(5)).content("lux-15").charge("0.30").watched("9"), AdTestSupport.leafView(t.plusMinutes(9)).content("lux-30"))));
+
+        assertEquals(1, reader.drain(adHourly));
+
+        assertEquals(2, count("sum_ad_hr_30"), "one row per content of the campaign");
+        assertEquals("2 | 1.000000 | 30", contentRow("lux-30"), "its own views, its own charges, its own seconds");
+        assertEquals("1 | 0.300000 | 9", contentRow("lux-15"));
+        assertEquals("3 | 1.300000 | 39", queryText("select concat_ws(' | ', sum(views), sum(chargedamount), sum(watchedsec)) from sum_ad_hr_30 where tup_campaignid = 5"),
+                "summed over its contents: what the campaign's ONE row was before the content was in the key");
+        assertEquals(1, queryLong("select count(distinct tup_starttime) from sum_ad_hr_30"), "the same hour");
+
+        // the same outbox rows read again: the bookmark has passed them, nothing is applied twice
+        assertEquals(0, reader.drain(adHourly));
+        assertEquals("2 | 1.000000 | 30", contentRow("lux-30"));
+
+        // a second batch of the same two contents, and the process dies at its commit: nothing of it stays
+        seedOutbox(2, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t.plusMinutes(20)).content("lux-30"),
+                AdTestSupport.leafView(t.plusMinutes(21)).content("lux-15").charge("0.30").watched("9"))));
+        CrashAtCommit dying = new CrashAtCommit(unitOfWorkFactory(), 1);
+        assertThrows(RuntimeException.class, () -> new OutboxReader(dying, new SummaryEngine(), 1000, 1, 8).drainOnce(adHourly));
+        assertEquals(1, dying.crashes);
+        assertEquals("2 | 1.000000 | 30", contentRow("lux-30"), "the crashed step's UPDATE was rolled back with its bookmark");
+        assertEquals(1, offset("hourlyAdSummary"));
+
+        // the restart reads that row again and applies it ONCE — into the two rows that are there, not into new ones
+        assertEquals(1, reader.drain(adHourly));
+        assertEquals(2, count("sum_ad_hr_30"), "the reloaded rows keyed as the built ones: updated, never a second row for a content");
+        assertEquals("3 | 1.500000 | 45", contentRow("lux-30"));
+        assertEquals("2 | 0.600000 | 18", contentRow("lux-15"));
+        assertEquals(0, reader.drain(adHourly));
+        assertEquals("3 | 1.500000 | 45", contentRow("lux-30"));
+    }
+
+    /** {@code views | chargedamount | watchedsec} of the hour row of one content; null when there is none (or more than one). */
+    private String contentRow(String content) {
+        return queryLong("select count(*) from sum_ad_hr_30 where tup_contentid = '" + content + "'") != 1 ? null
+                : queryText("select concat_ws(' | ', views, chargedamount, watchedsec) from sum_ad_hr_30 where tup_contentid = '" + content + "'");
+    }
+
+    @Test
+    void a_view_with_no_content_is_the_empty_string_row_beside_the_contents_rows() {
+        AdSummaryBean adHourly = AdTestSupport.hourlyBean();
+        provisionSmall(adHourly);
+        java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
+        // a house ad with no content, a refused view (nothing was chosen), and a view of a content — one hour
+        seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t).content(null), AdTestSupport.leafView(t.plusMinutes(1)).content(null),
+                AdTestSupport.refusedView(t.plusMinutes(2)), AdTestSupport.leafView(t.plusMinutes(3)).content("lux-30"))));
+
+        assertEquals(1, reader.drain(adHourly));
+
+        assertEquals(3, count("sum_ad_hr_30"), "the house ad's row, the refused view's row, the content's row");
+        assertEquals(0, queryLong("select count(*) from sum_ad_hr_30 where tup_contentid is null"), "never NULL");
+        assertEquals(2, queryLong("select views from sum_ad_hr_30 where tup_contentid = '' and tup_outcome = 'done'"), "the two house-ad views are ONE row");
+        assertEquals(1, queryLong("select views from sum_ad_hr_30 where tup_contentid = '' and tup_outcome = 'failed'"));
+        assertEquals(1, queryLong("select views from sum_ad_hr_30 where tup_contentid = 'lux-30'"));
+    }
+
+    @Test
+    void an_ad_table_made_before_the_content_gets_the_column_at_its_first_use_and_its_rows_stay_as_they_are() throws SQLException {
+        AdSummaryBean adDaily = AdTestSupport.dailyBean();
+        String olderTable = adDaily.table();
+        // the table as the first PostgreSQL version of this branch made it (938ab19): no tup_contentid — with a row a deployment summed
+        try (Connection service = dbConnection()) {
+            for (String statement : withSmallHorizon(() -> adDaily.tableDdl(dialect()))) {
+                exec(service, statement.replace(",tup_contentid VARCHAR(64) NOT NULL DEFAULT ''", ""));
+            }
+            exec(service, "insert into " + olderTable + " (tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
+                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits) values ('" + schemaName()
+                    + "',61,5,'1001','dhaka-01','dhaka-site-1','wifi','video','done','2026-09-29 00:00:00',7,7,7,7,0,105,3.50,0)");
+        }
+        assertEquals(0, queryLong(columnCount(olderTable, "tup_contentid")), "the older table has no such column");
+        long idOfTheOldRow = queryLong("select id from " + olderTable);
+
+        provisionSmall(adDaily);                                   // the service's first use of the schema after its upgrade
+
+        assertEquals(1, queryLong(columnCount(olderTable, "tup_contentid")), "the column is there");
+        assertEquals("", queryText("select tup_contentid from " + olderTable + " where id = " + idOfTheOldRow), "the old row reads the empty content");
+        assertEquals("7 | 3.500000 | 105", queryText("select concat_ws(' | ', views, chargedamount, watchedsec) from " + olderTable + " where id = " + idOfTheOldRow),
+                "and nothing else of it changed: history is not rebuilt");
+        assertEquals(1, count(olderTable));
+
+        // the stream goes on: a view of a content opens that content's row; a view with no content goes on in the old row
+        java.time.LocalDateTime t = AdTestSupport.at(2026, 9, 29, 10, 0);
+        seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t).content("lux-30"), AdTestSupport.leafView(t.plusMinutes(1)).content("lux-30"),
+                AdTestSupport.leafView(t.plusMinutes(2)).content(null))));
+        assertEquals(1, reader.drain(adDaily));
+        assertEquals(2, count(olderTable));
+        assertEquals(8, queryLong("select views from " + olderTable + " where id = " + idOfTheOldRow), "7 + the one view without a content");
+        assertEquals(2, queryLong("select views from " + olderTable + " where tup_contentid = 'lux-30'"));
+
+        // every later start: the table is as described — the step finds nothing to do, and does nothing
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(adDaily.tableSpec(), dialect(), look.store().columnWidths(olderTable)),
+                    "idempotent: the second time there is no statement");
+            assertEquals(64, look.store().columnWidths(olderTable).entrySet().stream().filter(c -> c.getKey().equalsIgnoreCase("tup_contentid"))
+                    .findFirst().orElseThrow().getValue(), "64 wide, as a table made today");
+            look.commit();
+        } finally {
+            look.close();
+        }
+        provisionSmall(adDaily);
+        assertEquals(2, count(olderTable));
+        assertEquals(8, queryLong("select views from " + olderTable + " where id = " + idOfTheOldRow));
+    }
+
+    /** How many columns named {@code column} the table has, in the schema the tests run in. */
+    private String columnCount(String table, String column) {
+        return "select count(*) from information_schema.columns where table_schema = '" + schemaName() + "' and table_name = '" + table
+                + "' and column_name = '" + column + "'";
+    }
+
+    /** A bean's DDL rendered with the tests' small MySQL partition horizon (PostgreSQL has none). */
+    private static List<String> withSmallHorizon(java.util.function.Supplier<List<String>> ddl) {
+        System.setProperty("summary.ddl.partition-start", "2026-09-01");
+        System.setProperty("summary.ddl.partition-days", "60");
+        try {
+            return ddl.get();
+        } finally {
+            System.clearProperty("summary.ddl.partition-start");
+            System.clearProperty("summary.ddl.partition-days");
+        }
+    }
+
     @Test
     void two_apps_that_share_32_characters_keep_their_own_rows_in_the_real_table() {
         System.setProperty("summary.ddl.partition-start", "2026-09-01");

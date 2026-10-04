@@ -27,6 +27,8 @@ public final class FakeSummaryStore implements SummaryStore {
     private final List<String> executedSql = new ArrayList<>();
     private boolean failWrites = false;
     private volatile String failingPrefix;
+    private final Map<String, Map<String, Integer>> columns = new HashMap<>();
+    private final List<String> catalogReads = new ArrayList<>();
 
     public synchronized void seed(String table, LocalDateTime bucket, Object entity) {
         seeded.computeIfAbsent(table, t -> new ArrayList<>()).add(new Seed(bucket, entity));
@@ -34,6 +36,22 @@ public final class FakeSummaryStore implements SummaryStore {
 
     public void failWrites() {
         this.failWrites = true;
+    }
+
+    /** {@code table} is there already, with these columns: name → the width of a text column, or -1. */
+    public synchronized void tableHas(String table, Map<String, Integer> columnWidths) {
+        columns.put(table, Map.copyOf(columnWidths));
+    }
+
+    @Override
+    public synchronized Map<String, Integer> columnWidths(String table) {
+        catalogReads.add(table);
+        return columns.getOrDefault(table, Map.of());
+    }
+
+    /** The tables whose columns were asked for, in order. */
+    public synchronized List<String> catalogReads() {
+        return List.copyOf(catalogReads);
     }
 
     /** Fail every statement that starts with {@code prefix} (a table that cannot be made); {@code null} = none. */

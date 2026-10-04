@@ -116,7 +116,8 @@ up, says it (ERROR), and tries again: after `retry-seconds`, each try a little l
 | on billing-core's tables | SELECT; DELETE on `summary_affected` only (billing-core grants it when it makes the table). The reaper deletes the outbox rows every bean has passed — nothing else |
 | it makes, at its first use of a schema | `summary_offset` (the bookmarks), `summary_affected_dlq` (poison rows), and one table per enabled bean: `sum_ad_day_30`, `sum_ad_hr_30`, `sum_voice_day_30`, `sum_voice_hr_30`, `sum_chargeable_day`, `sum_chargeable_hr`. Plain tables, the table and its indexes in one transaction |
 | it never makes | `summary_affected`, `cdr`, `cdrerror`, `acc_chargeable`. Only billing-core makes them. A tier that has no `summary_affected` yet WAITS: one WARN names the schema and the table, and it is picked up when the table appears — no restart |
-| who reads its tables | `ad_sphere`, through prime-context's default privileges. The DDL of the ad pair: `src/main/resources/db/postgres/sum_ad.sql` |
+| who reads its tables | `ad_sphere`, through prime-context's default privileges. The DDL of the ad pair: `src/main/resources/db/postgres/sum_ad.sql`; its columns: the README |
+| after an upgrade | an ad table made by an earlier version is brought up to the new description at its first use — a column it lacks is added (`ALTER TABLE … ADD COLUMN`, the old rows read its default). A WARN line says each change. A table that is as described gets no statement. The service owns its tables, so it needs no new right |
 | on its own connections | the tier's schema and `standard_conforming_strings = off` are set with `SET LOCAL`, inside each transaction. Nothing stays on a connection; no other session is touched |
 | Kafka | it only listens: `cdr_summary_ping_<root>` (billing-core) and `config_event_loader_<root>` (prime-context). It publishes nothing and makes no topic. **Both topics must exist** before billing-core starts: without the ping's topic billing-core's ingest waits 60 s per tier per batch, and this service runs on the poll alone, with about one WARN a second that names the topic; made later, it is heard with no restart. A broker that is away costs latency only: the poll and the refresh go on |
 | one process per root | a second process on the same tree would wait on the first one's bookmark locks; it is not a way to scale |
@@ -132,6 +133,7 @@ up, says it (ERROR), and tries again: after `retry-seconds`, each try a little l
 | a tier the tree lost | its workers stop. Its bookmarks and tables stay; served again, it goes on from them |
 | `tup_tenant` | always the schema's own name. One pair of ad tables per tier schema |
 | money and units | `chargedamount` = what was paid in money (the chargeable's unit is BDT). `chargedunits` = what was paid from a package, in its unit. Never added |
+| per content | a row of `sum_ad_*` is one content of one campaign (`tup_contentid` = the record's `contentId`; `''` when it carries none). The campaign's numbers are the sum over its contents |
 | time | a window is cut on the `cdr`'s own wall clock (the tenant's, Asia/Dhaka). No zone is converted; the JVM's zone does not matter |
 
 Do not delete all the bookmarks of a schema: it would then look new and be summed again from 0. To retire one

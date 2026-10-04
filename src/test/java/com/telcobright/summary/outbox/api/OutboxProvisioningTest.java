@@ -2,11 +2,16 @@ package com.telcobright.summary.outbox.api;
 
 import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.engine.api.SummaryEngine;
+import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.FakeOutboxStore;
 import com.telcobright.summary.testkit.FakeSummaryStore;
 import com.telcobright.summary.testkit.FakeUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -64,6 +69,66 @@ class OutboxProvisioningTest {
         assertNotNull(pgStore.firstSqlMatching("CREATE TABLE IF NOT EXISTS summary_affected_dlq"));
         assertEquals(null, pgStore.firstSqlMatching("CREATE TABLE IF NOT EXISTS summary_affected "),
                 "billing-core's outbox: whoever creates it there owns it");
+    }
+
+    // ---- S13: a table an EARLIER version made is brought up to the bean's description ----
+
+    /** The ad table as the catalog answers for it: every described column, a text column with its width. */
+    private static Map<String, Integer> theAdTableAsDescribed() {
+        Map<String, Integer> columns = new HashMap<>();
+        for (var column : AdTestSupport.dailyBean().tableSpec().columns()) {
+            columns.put(column.name(), column.type() == com.telcobright.summary.bean.spi.SummaryTableSpec.Type.VARCHAR ? column.width() : -1);
+        }
+        return columns;
+    }
+
+    private static OutboxReader readerOn(SqlDialect engine, FakeSummaryStore over) {
+        FakeUnitOfWorkFactory factory = new FakeUnitOfWorkFactory(over, new FakeOutboxStore());
+        factory.dialect = engine;
+        return new OutboxReader(factory, new SummaryEngine(), 1000, 1, 8);
+    }
+
+    @Test
+    void an_ad_table_made_before_the_content_gets_the_column_at_its_first_use_on_both_engines() {
+        for (SqlDialect engine : SqlDialect.values()) {
+            FakeSummaryStore database = new FakeSummaryStore();
+            Map<String, Integer> older = theAdTableAsDescribed();
+            older.remove("tup_contentid");
+            database.tableHas("sum_ad_day_30", older);
+
+            readerOn(engine, database).ensureProvisioned(AdTestSupport.dailyBean());
+
+            String added = database.executedSql().get(database.executedSql().size() - 1);
+            assertEquals(engine == SqlDialect.POSTGRESQL
+                    ? "ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"
+                    : "ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''", added, engine + ": the last statement of the provisioning");
+            assertTrue(database.executedSql().get(0).startsWith("CREATE TABLE IF NOT EXISTS sum_ad_day_30 "), "after the CREATE IF NOT EXISTS, in the same unit of work");
+            assertEquals(List.of("sum_ad_day_30"), database.catalogReads());
+        }
+    }
+
+    @Test
+    void an_ad_table_that_is_as_described_gets_no_alter_however_often_it_is_provisioned() {
+        FakeSummaryStore database = new FakeSummaryStore();
+        database.tableHas("sum_ad_day_30", theAdTableAsDescribed());
+        OutboxReader onPostgres = readerOn(SqlDialect.POSTGRESQL, database);
+
+        onPostgres.ensureProvisioned(AdTestSupport.dailyBean());
+        onPostgres.ensureProvisioned(AdTestSupport.dailyBean());
+
+        assertTrue(database.executedSql().stream().noneMatch(sql -> sql.startsWith("ALTER")), "idempotent: " + database.executedSql());
+        assertEquals(6, database.executedSql().size(), "the table and its two indexes (IF NOT EXISTS), twice — and nothing else");
+    }
+
+    @Test
+    void a_table_another_system_also_writes_is_not_even_looked_at() {
+        // the voice deployment's sum_voice_* are legacy tables: whatever they lack, the service never alters them
+        store.tableHas("sum_voice_day_03", Map.of("id", -1, "tup_starttime", -1));
+
+        reader.ensureProvisioned(CdrTestSupport.dailyBean());
+
+        assertEquals(List.of(), store.catalogReads(), "its columns are not read");
+        assertEquals(1, store.executedSql().size(), "one CREATE TABLE IF NOT EXISTS, as always");
     }
 
     @Test

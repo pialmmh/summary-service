@@ -109,6 +109,43 @@ instance under its own name/offset/table, e.g. the SG11 pair (legacy summarised 
 `window` (fixed per class) is one of: `5min` / `Nmin` (multiple of 5) / `hourly` / `daily` / `weekly`
 (Monday-start ISO week) / `monthly` / `yearly`.
 
+### The ad summary tables — `sum_ad_day_30`, `sum_ad_hr_30` (one pair per tier schema)
+
+The same columns on MySQL and on PostgreSQL (`src/main/resources/db/postgres/sum_ad.sql` is the reference copy).
+A row is one KEY — every `tup_*` column — in one window; the measures are summed over the views of that key.
+
+| column | type (MySQL / PostgreSQL) | from the tier's `cdr` record | |
+|---|---|---|---|
+| `id` | BIGINT, numbered by the database | | |
+| `tup_tenant` | VARCHAR(100) | the schema's own name | key: the tier |
+| `tup_partnerid` | INT / INTEGER | `InPartnerId` | key: this tier's payer |
+| `tup_campaignid` | INT / INTEGER | meta data `campaignId` | key (0 = none) |
+| `tup_rulecode` | VARCHAR(20) | `OriginatingCalledNumber` | key: the rule's code |
+| `tup_zone` | VARCHAR(64) | meta data `zone` | key |
+| `tup_site` | VARCHAR(64) | meta data `site` | key |
+| `tup_app` | VARCHAR(64) | meta data `app` | key |
+| `tup_mediakind` | VARCHAR(16) | `Codec` | key |
+| `tup_outcome` | VARCHAR(32) | `done` when `HangupCause` is `NORMAL_CLEARING`, else `failed` | key |
+| `tup_starttime` | DATETIME / TIMESTAMP (no zone) | `StartTime`, cut to the day or the hour | key: the window (MySQL partitions by it) |
+| `views`, `shown`, `completed`, `credited`, `failed`, `watchedsec` | BIGINT | 1 per view; an answer time; meta data `completed`, `credited`; not `done`; `DurationSec` | measures |
+| `chargedamount` | DECIMAL(18,6) / NUMERIC(18,6) | the customer chargeable's `BilledAmount` when its unit is `BDT` | measure: money |
+| `chargedunits` | DECIMAL(18,6) / NUMERIC(18,6) | the same amount when the unit is a package's | measure: units, never added to the money |
+| `tup_contentid` | VARCHAR(64) | meta data `contentId` | key: the content shown — a campaign holds several; `''` when the record carries none (a refused view, a house ad) |
+
+- **The key is the summary engine's**, not a database constraint: a drain loads the rows of the windows it touches
+  ONCE, merges by the key in memory, then inserts the new keys and updates the loaded rows by `id` — one writer
+  per table, the rows and the bookmark in one transaction. No `UNIQUE` index carries the key, on either engine
+  (decisions §5). Every text of the key is cut to its column's width before the key is taken, so a row that is
+  built keys as the row that is reloaded.
+- **Columns are only ever appended.** `tup_contentid` (2026-10-04) is the table's LAST column: a table that gets a
+  column by `ALTER` — which can only append on PostgreSQL — is then the same table as one made with it.
+- **An EXISTING table is brought up to this by the service itself**, at the table's first use after an upgrade
+  (`TableDdl.bringUpToDate`): it reads the table's columns from the database's catalog and adds what is missing —
+  `ALTER TABLE … ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''`. The rows that are there read `''` as
+  their content: **history is not rebuilt**. A table that is as described gets no statement and no lock, so the
+  step runs at every start and changes nothing the second time. It applies to the ad tables only (net-new, this
+  service's alone): the voice and chargeable tables, which a legacy system may also write, are never altered.
+
 ## Configuration (routesphere-like)
 
 - `application.properties` — `summary.autostart` (default off; gates the workers, ping listener, and reaper;

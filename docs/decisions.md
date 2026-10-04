@@ -406,6 +406,22 @@ its writer's shape are gone. The tables keep their columns (ad-sphere's reader n
 `tup_tenant` is ALWAYS the schema's own name (the drain passes the tier to the bean — `buildBatch(json, tier)`);
 `tup_app` is 64 wide, the width of the app's name at its source.
 
+**The key holds the CONTENT too (brief S13, 2026-10-04).** A campaign holds several contents, and the ad
+manager's per-content reports had no source but the raw `cdr` rows (the content id inside a JSON text: a scan
+with no index). `tup_contentid VARCHAR(64) NOT NULL DEFAULT ''` = the record's `AdditionalMetaData.contentId`
+(64 = `ad_content.id` at its source; a number is read as its digits; `''` when the record carries none — a
+refused view, a house ad). One row per (the key as before, content); every measure is as it was, and the rows of
+one campaign summed over its contents are what its one row was. The column is the table's LAST (README).
+
+**An existing table is brought up to its description by the service itself (`TableDdl.bringUpToDate`).** A table
+description may be marked `keptUpToDate()` — the ad tables are: net-new, this service's alone. At a table's first
+use the catalog is read (`SummaryStore.columnWidths`) and a column the table lacks is added with its default, so
+the rows that are there read `''`: history is not rebuilt. A table that is as described gets no statement and no
+lock — the step is safe at every start. A table that is NOT marked is never looked at, whatever it lacks: the
+voice deployment's `sum_voice_*` / `sum_chargeable_*` are legacy tables another system also writes (§15a), and a
+surprise `ALTER` on them is exactly what must not happen. A missing column that has no default (`id`, the
+bucket) is not added: such a table is not this service's, and the provisioning refuses it in words.
+
 ### 16c. Money and units are two measures — RULED (architect, decide 3)
 `chargedamount` = the customer chargeables whose unit is `BDT`; `chargedunits` = the ones in any other unit (a
 package's). Never added. A leg that names no unit is not taken for money. On MySQL the column is added by the

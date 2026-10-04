@@ -9,7 +9,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -47,7 +49,8 @@ class TableDdlTest {
         assertEquals(List.of(ddl), TableDdl.createIfAbsent(adDay(), SqlDialect.MYSQL), "ONE statement: never create bare, then ALTER");
         assertTrue(ddl.startsWith("CREATE TABLE IF NOT EXISTS sum_ad_day_30 (id BIGINT NOT NULL AUTO_INCREMENT,tup_tenant VARCHAR(100) NOT NULL DEFAULT '',"), ddl);
         assertTrue(ddl.contains(",tup_starttime DATETIME NOT NULL,views BIGINT NOT NULL DEFAULT 0,"));
-        assertTrue(ddl.contains(",chargedamount DECIMAL(18,6) NOT NULL DEFAULT 0,chargedunits DECIMAL(18,6) NOT NULL DEFAULT 0,PRIMARY KEY (id, tup_starttime),"
+        assertTrue(ddl.contains(",chargedamount DECIMAL(18,6) NOT NULL DEFAULT 0,chargedunits DECIMAL(18,6) NOT NULL DEFAULT 0,"
+                + "tup_contentid VARCHAR(64) NOT NULL DEFAULT '',PRIMARY KEY (id, tup_starttime),"
                 + "KEY ix_starttime (tup_starttime),KEY ix_tenant_partner (tup_tenant, tup_partnerid, tup_starttime)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4\n"
                 + "PARTITION BY RANGE COLUMNS(tup_starttime) (\n  PARTITION p20260601 VALUES LESS THAN ('2026-06-02 00:00:00'),"));
         assertTrue(ddl.endsWith("  PARTITION p20260603 VALUES LESS THAN ('2026-06-04 00:00:00'),\n  PARTITION pMAX VALUES LESS THAN (MAXVALUE)\n)"), ddl);
@@ -65,7 +68,7 @@ class TableDdlTest {
                 + "tup_mediakind VARCHAR(16) NOT NULL DEFAULT '',tup_outcome VARCHAR(32) NOT NULL DEFAULT '',tup_starttime TIMESTAMP NOT NULL,"
                 + "views BIGINT NOT NULL DEFAULT 0,shown BIGINT NOT NULL DEFAULT 0,completed BIGINT NOT NULL DEFAULT 0,credited BIGINT NOT NULL DEFAULT 0,"
                 + "failed BIGINT NOT NULL DEFAULT 0,watchedsec BIGINT NOT NULL DEFAULT 0,chargedamount NUMERIC(18,6) NOT NULL DEFAULT 0,"
-                + "chargedunits NUMERIC(18,6) NOT NULL DEFAULT 0,PRIMARY KEY (id, tup_starttime))", ddl.get(0));
+                + "chargedunits NUMERIC(18,6) NOT NULL DEFAULT 0,tup_contentid VARCHAR(64) NOT NULL DEFAULT '',PRIMARY KEY (id, tup_starttime))", ddl.get(0));
         assertEquals("CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_starttime ON sum_ad_day_30 (tup_starttime)", ddl.get(1));
         assertEquals("CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_tenant_partner ON sum_ad_day_30 (tup_tenant, tup_partnerid, tup_starttime)", ddl.get(2));
         assertEquals(ddl, TableDdl.createIfAbsent(adDay(), SqlDialect.POSTGRESQL));
@@ -167,6 +170,82 @@ class TableDdlTest {
             assertFalse(makesOneOfBillings.matcher(sql).find(), "billing-core's table is made here: " + sql);
         }
         assertTrue(everything.stream().anyMatch(sql -> sql.contains("summary_affected_dlq")), "the dead-letter table IS the service's own (the pattern does not take it for the outbox)");
+    }
+
+    // ---- an EXISTING table is brought up to its description (S13: the column a table made earlier lacks) ----
+
+    /** The columns a table has, as the catalog answers: name → the width of a text column, or -1. */
+    private static Map<String, Integer> columnsAsDescribed(SummaryTableSpec table) {
+        Map<String, Integer> columns = new HashMap<>();
+        for (SummaryTableSpec.Column column : table.columns()) {
+            columns.put(column.name(), column.type() == SummaryTableSpec.Type.VARCHAR ? column.width() : -1);
+        }
+        return columns;
+    }
+
+    private static Map<String, Integer> without(Map<String, Integer> columns, String... gone) {
+        Map<String, Integer> fewer = new HashMap<>(columns);
+        for (String column : gone) fewer.remove(column);
+        return fewer;
+    }
+
+    @Test
+    void a_column_an_older_table_lacks_is_added_with_its_default_on_both_engines() {
+        Map<String, Integer> madeBeforeTheContent = without(columnsAsDescribed(adDay()), "tup_contentid");
+
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, madeBeforeTheContent),
+                "the rows that are there read '' as their content: history is not rebuilt");
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, madeBeforeTheContent));
+    }
+
+    @Test
+    void a_table_that_is_as_described_gets_no_statement_so_the_step_changes_nothing_the_second_time() {
+        for (SqlDialect engine : SqlDialect.values()) {
+            assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), engine, columnsAsDescribed(adDay())), engine + ": idempotent");
+        }
+        // the catalog's own spelling of a name does not matter (MySQL keeps a column's case as it was written)
+        Map<String, Integer> upperCase = new HashMap<>();
+        columnsAsDescribed(adDay()).forEach((name, width) -> upperCase.put(name.toUpperCase(), width));
+        assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, upperCase));
+        // and nothing is ever taken away: a column the description does not know, a text column that is wider
+        Map<String, Integer> more = new HashMap<>(columnsAsDescribed(adDay()));
+        more.put("a_column_of_somebody_else", 10);
+        more.put("tup_zone", 200);
+        assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, more), "never narrowed, never dropped");
+    }
+
+    @Test
+    void a_table_another_system_also_writes_is_never_altered_whatever_it_lacks() {
+        // the voice deployment's summary tables are legacy tables: the service made them only when they were absent
+        SummaryTableSpec voice = CallSummaries.forWindow("x", "daily", "03", 10, null).tableSpec();
+        SummaryTableSpec chargeable = DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build().tableSpec();
+
+        for (SummaryTableSpec legacyShared : List.of(voice, chargeable)) {
+            assertFalse(legacyShared.keptUpToDate(), legacyShared.name());
+            Map<String, Integer> aLegacyShape = Map.of("id", -1, "tup_starttime", -1, "tup_incomingroute", 8);
+            for (SqlDialect engine : SqlDialect.values()) {
+                assertEquals(List.of(), TableDdl.bringUpToDate(legacyShared, engine, aLegacyShape), legacyShared.name() + " on " + engine);
+            }
+        }
+        assertTrue(adDay().keptUpToDate(), "the ad tables are net-new and the service's alone");
+        assertTrue(AdTestSupport.hourlyBean().tableSpec().keptUpToDate());
+    }
+
+    @Test
+    void a_missing_column_that_has_no_default_is_not_added_the_table_is_not_ours() {
+        // a table of the same name that has no id or no bucket was not made by this service: rows cannot be given one
+        for (String column : new String[] {"id", "tup_starttime"}) {
+            IllegalStateException refused = assertThrows(IllegalStateException.class,
+                    () -> TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, without(columnsAsDescribed(adDay()), column)));
+            assertTrue(refused.getMessage().startsWith("table sum_ad_day_30 has no column " + column + ", and that column has no default"), refused.getMessage());
+        }
+    }
+
+    @Test
+    void a_table_that_cannot_be_compared_with_is_left_as_it_is() {
+        assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, Map.of()), "no such table in the catalog: nothing to bring up");
     }
 
     @Test
