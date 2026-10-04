@@ -195,6 +195,7 @@ Everything on 127.0.0.1, in containers named `ss-*`; no password exists.
 | `tools/lab/tree-e2e.sh` | the tree's story with the packaged jar: billing-core's tables from its own DDL file, rows written as it writes them, a reseller made at run time |
 | `tools/lab/reconcile-with-billing-core.sh` | the summaries beside billing-core's OWN rows (its lab command first; the file's head says how) |
 | `tools/lab/secret-e2e.sh` | the password by its variable's name, against a role that needs one |
+| `tools/lab/upgrade-e2e.sh [an older commit]` | an upgrade of a deployment that has rows, with two packaged jars: the older version sums, this one starts on the same schemas, brings its tables up to date and leaves the rows as they were |
 | `tools/lab/ping-topic-e2e.sh` | a ping topic that does not exist (a broker of its own, auto-create off): what it costs, and that it is heard, with no restart, once made |
 | `tools/lab/this-box-e2e.sh` | the lab's key: an address of this box's own interface is this box (a real prime-context never listens on loopback); another box's refuses the start |
 
