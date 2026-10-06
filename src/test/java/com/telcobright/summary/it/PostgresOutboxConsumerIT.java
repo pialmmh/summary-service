@@ -240,4 +240,16 @@ class PostgresOutboxConsumerIT extends OutboxConsumerContract {
     protected Connection dbConnection() throws SQLException {
         return PgLab.connect(PgLab.SUMMARY_SERVICE, TIER);
     }
+
+    @Override
+    protected DataSource theServicesOwnPool(int size) {
+        return com.telcobright.summary.runtime.internal.TestPools.pool(SqlDialect.POSTGRESQL, PgLab.urlFor(TIER), PgLab.SUMMARY_SERVICE, "", size);
+    }
+
+    /** Every session of the role summary_service is ended by the server (as a restart ends them), by the lab's superuser. */
+    @Override
+    protected int endTheServicesSessions() throws SQLException {
+        return (int) PgLab.queryLong("postgres", null, "select count(pg_terminate_backend(pid)) from pg_stat_activity where usename = '"
+                + PgLab.SUMMARY_SERVICE + "' and pid <> pg_backend_pid()");
+    }
 }

@@ -8,6 +8,7 @@ import java.io.PrintWriter;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -58,6 +59,30 @@ class OutboxConsumerIT extends OutboxConsumerContract {
     @Override
     protected Connection dbConnection() throws SQLException {
         return DriverManager.getConnection(SERVER_URL.replace("/?", "/" + DB + "?"), USER, PASSWORD);
+    }
+
+    @Override
+    protected DataSource theServicesOwnPool(int size) {
+        return com.telcobright.summary.runtime.internal.TestPools.pool(SqlDialect.MYSQL, SERVER_URL.replace("/?", "/" + DB + "?"), USER, PASSWORD, size);
+    }
+
+    /** Every OTHER session in the test's database is killed by the server (as a restart ends them). */
+    @Override
+    protected int endTheServicesSessions() throws SQLException {
+        int ended = 0;
+        try (Connection admin = DriverManager.getConnection(SERVER_URL, USER, PASSWORD);
+             java.sql.Statement st = admin.createStatement();
+             java.sql.ResultSet sessions = st.executeQuery("select id from information_schema.processlist where id <> connection_id() and db = '" + DB + "'")) {
+            List<Long> ids = new java.util.ArrayList<>();
+            while (sessions.next()) ids.add(sessions.getLong(1));
+            for (long id : ids) {
+                try (java.sql.Statement kill = admin.createStatement()) {
+                    kill.execute("kill " + id);
+                    ended++;
+                }
+            }
+        }
+        return ended;
     }
 
     private static Connection tryConnect(String url) {

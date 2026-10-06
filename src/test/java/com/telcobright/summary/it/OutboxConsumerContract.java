@@ -32,6 +32,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * THE CONTRACT of the outbox consumer over a real database — the same tests, word for word, on every engine the
@@ -723,6 +724,49 @@ abstract class OutboxConsumerContract {
             assertEquals(1, queryLong("select count(*) from sum_ad_hr_30 where tup_starttime = '2026-10-03 23:00:00'"));
         } finally {
             java.util.TimeZone.setDefault(jvmZone);
+        }
+    }
+
+    // ---- S16: the store went away and came back ----
+
+    /** The service's OWN pool on this test's schema (the code a deployment runs: StoreDataSource), {@code size} connections at most. */
+    protected abstract DataSource theServicesOwnPool(int size);
+
+    /**
+     * What a database restart does to a pool: every session the service holds is ended by the SERVER. Returns how
+     * many were ended. (The container is stopped and started for real by tools/lab/outage-e2e.sh.)
+     */
+    protected abstract int endTheServicesSessions() throws SQLException;
+
+    @Test
+    void a_store_that_ended_every_session_is_written_again_by_the_next_drain_with_no_restart() throws SQLException {
+        DataSource pool = theServicesOwnPool(2);
+        OutboxReader overThePool = new OutboxReader(new JdbcUnitOfWorkFactory(pool, dialect()), new SummaryEngine(), 1000, 1, 8);
+        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
+        assertEquals(1, overThePool.drain(bean), "the pool now holds a connection, idle, between two drains");
+
+        assertTrue(endTheServicesSessions() >= 1, "the server ended the pool's session(s)");
+        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 11, 0)))));
+
+        // the first drain after the store answers again WRITES: a connection the server ended is never handed out
+        assertEquals(1, overThePool.drainOnce(bean), "a dead pooled connection was handed out (a stuck worker: every try fails until a restart)");
+        assertEquals(2, sumTotalCalls(), "each call once");
+        assertEquals(2, offset("dailyCallSummary"));
+
+        // and again, with both connections of the pool in use before the sessions end
+        seedOutbox(3, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 12, 0)))));
+        try (Connection one = pool.getConnection(); Connection two = pool.getConnection()) {
+            assertTrue(one.isValid(2) && two.isValid(2));
+        }
+        assertTrue(endTheServicesSessions() >= 2);
+        assertEquals(1, overThePool.drainOnce(bean));
+        assertEquals(3, sumTotalCalls());
+        if (pool instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (Exception ignored) {
+                // the test's own pool
+            }
         }
     }
 

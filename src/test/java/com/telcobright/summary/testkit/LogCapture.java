@@ -46,6 +46,11 @@ public final class LogCapture implements AutoCloseable {
         return records.stream().filter(r -> r.getLevel().intValue() == Level.WARNING.intValue()).map(LogCapture::text).toList();
     }
 
+    /** The lines so far at {@code level} (java.util.logging's: SEVERE = ERROR, WARNING = WARN, INFO, FINE = DEBUG). */
+    public List<String> records(Level level) {
+        return records.stream().filter(r -> r.getLevel().intValue() == level.intValue()).map(LogCapture::text).toList();
+    }
+
     /** Every line so far (any level), as it is printed. */
     public List<String> lines() {
         return records.stream().map(LogCapture::text).toList();

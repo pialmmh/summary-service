@@ -3,6 +3,8 @@ package com.telcobright.summary.runtime.internal;
 import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.engine.spi.SummaryStoreException;
 import io.agroal.api.AgroalDataSource;
+import io.agroal.api.configuration.AgroalConnectionPoolConfiguration.ConnectionValidator;
+import io.agroal.api.configuration.AgroalConnectionPoolConfiguration.ExceptionSorter;
 import io.agroal.api.configuration.supplier.AgroalDataSourceConfigurationSupplier;
 import io.agroal.api.security.NamePrincipal;
 import io.agroal.api.security.SimplePassword;
@@ -23,6 +25,10 @@ import java.util.function.Supplier;
  * FIRST use — so the app boots with no database reachable, and the engine (MySQL or PostgreSQL) is the profile's
  * choice at run time, not the build's. One pool for the whole process: on PostgreSQL every tenant is a schema of
  * the one switch database, on MySQL a database of the one server, entered per unit of work.
+ *
+ * <p>A database that goes away and comes back (a restart, a failover) ends every connection the pool holds. The
+ * pool asks a connection whether it is there before it hands it out, and throws one away at its first fatal error
+ * ({@link #fatalErrorsOf}) — so the first drain after the database answers again writes, with no restart (brief S16).
  */
 @ApplicationScoped
 public class StoreDataSource {
@@ -113,6 +119,30 @@ public class StoreDataSource {
         }
     }
 
+    /** How long the pool waits for a connection to answer "are you there?" before it is taken for dead. */
+    static final int VALIDATION_SECONDS = 5;
+
+    /**
+     * The errors after which a connection is thrown away, not given back to the pool: the connection classes
+     * ({@code 08…}: the link failed, the connection is closed) and, on PostgreSQL, the server's own ending of the
+     * session ({@code 57P01} admin shutdown, {@code 57P02} crash shutdown, {@code 57P03} cannot connect now). Without
+     * it a pool hands out the same dead connections for ever, and every worker fails until a restart — what the bed
+     * met after its database was restarted (X-0020, X-2).
+     */
+    static ExceptionSorter fatalErrorsOf(SqlDialect engine) {
+        return failure -> {
+            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+                if (cause instanceof SQLException sql && sql.getSQLState() != null) {
+                    String state = sql.getSQLState();
+                    if (state.startsWith("08") || (engine == SqlDialect.POSTGRESQL && state.startsWith("57P"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+    }
+
     /** The pool of a store (also what a test asks for directly). */
     static AgroalDataSource open(StoreConfig store) {
         AgroalDataSourceConfigurationSupplier configuration = new AgroalDataSourceConfigurationSupplier()
@@ -122,6 +152,11 @@ public class StoreDataSource {
                         .minSize(store.minSize())
                         .maxSize(store.maxSize())
                         .acquisitionTimeout(Duration.ofSeconds(store.acquisitionTimeoutSeconds()))
+                        // a connection the SERVER ended (a restart, a failover, an idle kill) is never handed out again
+                        // (brief S16): asked before every hand-out, and thrown away at its first fatal error
+                        .connectionValidator(ConnectionValidator.defaultValidatorWithTimeout(VALIDATION_SECONDS))
+                        .validateOnBorrow(true)
+                        .exceptionSorter(fatalErrorsOf(store.dialect()))
                         .connectionFactoryConfiguration(factory -> {
                             factory.jdbcUrl(store.url()).connectionProviderClassName(store.driverClassName()).autoCommit(true);
                             if (!store.username().isEmpty()) {
