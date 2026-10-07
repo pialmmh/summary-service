@@ -148,8 +148,8 @@ final class CallSummaryBuilder {
     private static void canonicalizeKeyDimensionsToColumnContract(CallSummary s) {
         s.tup_customerrate = scale6(s.tup_customerrate);    // DECIMAL(18,6) — MySQL rounds half away from zero
         s.tup_supplierrate = scale6(s.tup_supplierrate);
-        s.tup_incomingroute = clip(s.tup_incomingroute, 64);
-        s.tup_outgoingroute = clip(s.tup_outgoingroute, 64);
+        s.tup_incomingroute = clip(s.tup_incomingroute, 1000);
+        s.tup_outgoingroute = clip(s.tup_outgoingroute, 1000);
         s.tup_incomingip = clip(s.tup_incomingip, 64);
         s.tup_outgoingip = clip(s.tup_outgoingip, 64);
         s.tup_countryorareacode = clip(s.tup_countryorareacode, 32);
