@@ -34,6 +34,21 @@ billing-core is untouched: its `cdr.OutgoingRoute` is `TEXT` and its own mediati
 characters is not cut inside a part; `0/<app>` (no rule matched) keys as itself; a group-10 record's route is still the whole string.
 Break each rule once, see it red, restore.
 
+## 2a · S18 must CALL the ad's key helper, not re-derive the prefix (2026-10-07 15:35)
+
+The ad service now ships the route's reader beside its writer (ad-sphere main, ARCH-0057,
+`src/main/java/com/telcobright/adsphere/flow/api/AdCallPreprocessor.java:147–212`):
+
+| helper | what it answers |
+|---|---|
+| `routeKeyOf(route)` | `Optional<String>` — **exactly the key S18 needs**, `<ruleId>/<app>` AS THE ROW CARRIES IT (still encoded, so an app named `a/b` stays one part) |
+| `routePartsOf(route)` | the rule id and the seven parameters decoded, by name; **empty** for anything not of the fixed shape, so a pre-ARCH-0055 row (the zone alone) is never read as a route |
+| `routeValueFrom(value)` | the inverse of the encoding (`%2F` → `/` first, then `%25` → `%`) |
+
+**Use `routeKeyOf`.** Either call it, or copy those four lines WITH the citation above — do not write a second prefix rule. Two rules for
+one key drift the moment the route's shape changes again, and this summary is what the operator's money reports read. A row whose route is
+not of the fixed shape (an old row) keeps the whole route as its key, exactly as today: the helper answers empty and nothing is invented.
+
 ## 3 · What S16 and S17 still owe
 
 - **S16** — "recover after a database restart" is UNFINISHED on branch `s16-wip` (c8af8f1: `OutboxReaper`, `OutboxWorker`,
