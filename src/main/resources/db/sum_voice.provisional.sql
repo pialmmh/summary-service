@@ -75,12 +75,16 @@ CREATE TABLE IF NOT EXISTS sum_voice_day_03 (
     decimalAmount3              DECIMAL(18,6) NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
     KEY ix_starttime (tup_starttime),
-    UNIQUE KEY uq_tuple (
-        tup_switchid, tup_inpartnerid, tup_outpartnerid, tup_incomingroute, tup_outgoingroute,
-        tup_customerrate, tup_supplierrate, tup_incomingip, tup_outgoingip, tup_countryorareacode,
-        tup_matchedprefixcustomer, tup_matchedprefixsupplier, tup_sourceId, tup_destinationId,
-        tup_tax1currency, tup_tax2currency, tup_vatcurrency, tup_starttime,
-        tup_customercurrency, tup_suppliercurrency)
+    -- the owner 2026-10-07: both route columns are indexed. A 1000-wide utf8mb4 column cannot be indexed whole
+    -- (InnoDB's key is 3072 bytes = 768 such characters), so each index takes the route's first 255 characters —
+    -- every route we write fits inside that, and a longer pair that shares those characters only shares an index
+    -- entry: the engine still reads the row to tell them apart.
+    KEY ix_incomingroute (tup_incomingroute(255)),
+    KEY ix_outgoingroute (tup_outgoingroute(255))
+    -- uq_tuple (the 20-column GetTupleKey safety net) is GONE: with the routes 1000 wide the tuple passes InnoDB's
+    -- 3072-byte key by far, and this file's own contract above says to drop it if the key length is a problem. The
+    -- engine never needed it — it de-dups in memory and targets UPDATE/DELETE by id — and the service's own
+    -- described table (SumVoiceDdl) has never declared it.
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- the 3 pre-provisioned sets × {day, hr} — identical shape, different bucket + suffix (created up front, partitioned)

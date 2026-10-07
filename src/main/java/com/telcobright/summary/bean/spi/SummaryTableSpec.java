@@ -34,7 +34,17 @@ public final class SummaryTableSpec {
     public record Column(String name, Type type, int width, int scale, String defaultLiteral, boolean identity) {
     }
 
-    public record Index(String name, List<String> columns) {
+    /**
+     * One index of the table. {@code mysqlPrefixChars} greater than 0 indexes only the FIRST characters of each of its
+     * text columns on MySQL ({@code KEY ix (col(N))}): InnoDB's whole key is 3072 bytes, so a utf8mb4 column cannot be
+     * indexed past 768 characters and a 1000-wide one not at all. PostgreSQL has no prefix index and ignores the number:
+     * it indexes the column whole, which its btree takes while a value stays well under its own row limit.
+     */
+    public record Index(String name, List<String> columns, int mysqlPrefixChars) {
+
+        public Index(String name, List<String> columns) {
+            this(name, columns, 0);
+        }
     }
 
     private final String name;
@@ -167,6 +177,12 @@ public final class SummaryTableSpec {
 
         public Builder index(String indexName, String... indexColumns) {
             indexes.add(new Index(indexName, List.of(indexColumns)));
+            return this;
+        }
+
+        /** An index that takes only the first {@code prefixChars} characters of each of its text columns on MySQL ({@link Index}). */
+        public Builder indexOnPrefix(String indexName, int prefixChars, String... indexColumns) {
+            indexes.add(new Index(indexName, List.of(indexColumns), prefixChars));
             return this;
         }
 
