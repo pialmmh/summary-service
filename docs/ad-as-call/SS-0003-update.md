@@ -1,4 +1,4 @@
-from: ARCH  to: SS  kind: update  number: 0003  date: 2026-10-07 13:49 +06:00  ·  not launched: the owner starts the round
+from: ARCH  to: SS  kind: update  number: 0003  date: 2026-10-07 13:49 +06:00  ·  LAUNCHED 2026-10-08 14:33 (§5)
 
 # SS-0003 — S18 (the ad's new outgoing route), and what S16 / S17 still owe
 
@@ -62,3 +62,43 @@ not of the fixed shape (an old row) keeps the whole route as its key, exactly as
 Lab = this PC only, every endpoint printed before a start, nothing dials `10.10.x` / `10.9.9.x` / `103.95.96.77`; **never start this
 service's jar bare** (a bundled default tenant reaches live); the password by environment-variable NAME only; the suite green from a clean
 copy before each push; one commit per item; `date` before writing any time; your report `SS-0004-done.md`, a draft from the first commit.
+
+## 5 · 2026-10-08 14:33 +06:00 — LAUNCHED (the owner: "go"); the second rehearsal's F8 IS S16; the order of this round
+
+**What the rehearsal met.** The ad lane's second whole-chain rehearsal R-2 ran this service at `postgres-ad-call` **7218213** for six
+hours (ad-sphere `docs/ad-as-call/rehearsal/R-0002-update.md`, §1 row **F8** — read it:
+`git -C ~/telcobright-projects/ad-sphere show origin/main:docs/ad-as-call/rehearsal/R-0002-update.md`). After the switch database's 30 s
+stop (09:17:28; the same at 04:03:58) every bean of every tier that had traffic logged, every 60 s, `drain failed (N consecutive) — offset
+STUCK, summaries lag until fixed … Caused by: org.postgresql.util.PSQLException: This connection has been closed`
+(`JdbcOutboxStore.readOffset:46` ← `OutboxReader.drainOnce:274`; the rollback failed the same way), and
+`TenantWatcher: schema res_46 could NOT be served`. **6,312 ERROR lines in 5 h**; the summaries froze at the stop (wroot `sum_ad_day_30`
+2,670 views against `cdr` 3,257, five hours long, and `GET /summary` with them). A restart healed it in 5 s. The cause, as read there:
+`runtime/internal/StoreDataSource.java:118–131` builds the Agroal pool with sizes and a timeout and NO validator;
+`JdbcUnitOfWorkFactory.begin:83–96` closes a connection that fails at `enter`, but one that fails later in the drain goes back to the
+pool open and is handed out again. That is S16, which you started on `s16-wip` (c8af8f1) and were stopped in.
+
+**The order of this round** (one commit each; the rule broken once and seen red; push after each):
+
+1. **S16 — finish it.** The rule: **after the database closes every connection — a restart, a failover, `pg_terminate_backend` — the
+   summaries catch up with NO restart of this service:** the first drain after the database is back succeeds (at the latest the next
+   poll), no bean stays STUCK, a schema the watcher could not serve is served again, the ERROR lines stop. A connection that threw a fatal
+   error (SQLSTATE class 08, or 57P01 the administrator's termination) never goes back to the pool; one idle past a short interval is
+   checked before it is handed out. Prove it on BOTH engines, two ways each: (a) the pool's backends terminated, (b) the database's lab
+   container restarted — each followed by traffic whose summaries equal the `cdr` rows. Your `tools/lab/outage-e2e.sh` is the start.
+   Say what the check costs a borrow. Break it once (the check off) → red.
+2. **S18** — §2 and §2a as written (CALL the ad's `routeKeyOf`, never re-derive the prefix).
+3. **Stop and report** (`SS-0004-done.md`). **S17 waits for the owner's word** (it is a design change: the kinds as processors).
+
+**Where.** `s16-wip` also carries the owner's two schema orders, made by me (53b708e the route columns 1000 wide, 4976999 the two route
+indexes; the ledger's SC-001 / SC-002): keep them; your report's suite is of a head that has them. I moved this repository's MAIN checkout
+to `postgres-ad-call` so the branch is free: make your worktree `summary-service/worktrees/s16-wip` for branch `s16-wip` and work only
+there. After the round I verify, merge `s16-wip` into `postgres-ad-call`, and bring `no-bundled-tenant` up to it by a MERGE (no force
+push), so S15 stays one change on top, unmerged, for the owner.
+
+**Rules, in addition to §4.** Java 21. Your own Maven repository, chained read-only to the shared one: `-Dmaven.repo.local=$HOME/.m2/summary-service-repo
+-Dmaven.repo.local.tail=$HOME/.m2/repository` — never install into `~/.m2/repository`. The commit trailer `Co-Authored-By: <the model you
+run as> <noreply@anthropic.com>`. **WireGuard is UP on this PC:** `10.10.x.x` and `10.9.9.x` route to real boxes — never connect to
+`172.17.191.1`, `10.10.191.x`, `10.10.188.x`, `10.10.175.x`, `10.9.9.x` (the devlog card's Redis `10.9.9.7` is allowed) or `103.95.96.77`.
+Lab containers named for you and removed at the end; a test that fails because something cannot be reached: stop and report; nothing of
+yours left running; no live environment touched; the merges are mine. The agents run ONE AT A TIME (the owner's rule): nothing else runs
+on this PC while you work.
