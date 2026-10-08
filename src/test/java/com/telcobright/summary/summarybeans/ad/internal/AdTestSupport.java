@@ -84,6 +84,7 @@ public final class AdTestSupport {
         private Object campaign = 5;
         private Object content = "lux-30";
         private String zone = "dhaka-01";
+        private String route;                      // the record's outgoingRoute as written; null = the zone alone (a row before ARCH-0055)
         private String site = "dhaka-site-1";
         private String app = "wifi";
         private boolean completed = true;
@@ -106,6 +107,8 @@ public final class AdTestSupport {
         /** The unit the tier paid in: {@code BDT} is money; a package's unit ({@code TF_s}, {@code OTH_ea}) is units; null = none named. */
         public View uom(String unit) { this.uom = unit; return this; }
         public View rule(String code) { this.rule = code; return this; }
+        /** The record's {@code outgoingRoute} as the ad service writes it since ARCH-0055: {@code <ruleId>/<app>/<zone>/<site>/<district>/<gw>/<msisdn>/<mac>}. */
+        public View route(String outgoingRoute) { this.route = outgoingRoute; return this; }
         public View media(String kind) { this.media = kind; return this; }
         public View campaign(Object id) { this.campaign = id; return this; }
         /** The content shown, as the switch writes it ({@code contentId}): a text, or a number; null = the record carries none. */
@@ -137,7 +140,7 @@ public final class AdTestSupport {
             cdr.append(",\"EndTime\":").append(date(start.plusSeconds(20)));
             if (shown) cdr.append(",\"ConnectTime\":").append(date(start.plusSeconds(1))).append(",\"AnswerTime\":").append(date(start.plusSeconds(1)));
             cdr.append(",\"ChargingStatus\":").append(shown ? 1 : 0);          // group 30: 1 = shown (billing-core BC-0002)
-            cdr.append(",\"OutgoingRoute\":").append(quoted(zone == null ? "" : zone)).append(",\"TerminatingIP\":\"10.10.188.40\"");
+            cdr.append(",\"OutgoingRoute\":").append(quoted(route != null ? route : zone == null ? "" : zone)).append(",\"TerminatingIP\":\"10.10.188.40\"");
             cdr.append(",\"StartTime\":").append(date(start));
             if (partner != null) cdr.append(",\"InPartnerId\":").append(partner);
             cdr.append(",\"CustomerRate\":").append(charge).append(",\"OutPartnerId\":9,\"MatchedPrefixCustomer\":\"10\"");
@@ -154,7 +157,7 @@ public final class AdTestSupport {
             cdr.append(",\"IdPackageAccount\":3061,\"PackageAmount\":0}");
 
             String chargeable = "{\"id\":0,\"idEvent\":0,\"transactionTime\":" + date(start) + ",\"assignedDirection\":1,\"glAccountId\":0,"
-                    + "\"servicegroup\":30,\"servicefamily\":30,\"ProductId\":0," + (uom == null ? "" : "\"idBilledUom\":" + quoted(uom) + ",")
+                    + "\"servicegroup\":" + (serviceGroup == null ? 30 : serviceGroup) + ",\"servicefamily\":30,\"ProductId\":0," + (uom == null ? "" : "\"idBilledUom\":" + quoted(uom) + ",")
                     + "\"BilledAmount\":" + charge + ",\"Quantity\":" + watched + ",\"unitPriceOrCharge\":" + charge
                     + ",\"Prefix\":\"10\",\"RateId\":0,\"idBillingrule\":0}";
             return "{\"Cdr\":" + cdr + ",\"Chargeables\":[" + (noChargeable ? "" : chargeable) + "]}";

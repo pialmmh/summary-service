@@ -116,6 +116,10 @@ final class CallSummaryBuilder {
             // the same (the owner: no return policy). Nothing is bought and no tax is on the record: the supplier,
             // tax and VAT columns stay empty. A tier that paid from a package carries the package's unit as its
             // "currency", so units and money key apart and are never summed into one row.
+            // S18: the ad's route carries the DEVICE (<ruleId>/<app>/<zone>/<site>/<district>/<gw>/<msisdn>/<mac>); keyed
+            // whole it would make one row per phone. The key is <ruleId>/<app> — the ad service's own reader of its route
+            // (AdRouteKey). A route not of that shape (a row from before ARCH-0055) stays the whole text, as groups 10 and 11 keep theirs.
+            s.tup_outgoingroute = AdRouteKey.routeKeyOf(cdr.outgoingRoute()).orElse(s.tup_outgoingroute);
             s.tup_matchedprefixcustomer = cdr.matchedPrefixCustomer();
             s.tup_customerrate = nz(chargeable.unitPriceOrCharge());
             s.tup_customercurrency = chargeable.idBilledUom();

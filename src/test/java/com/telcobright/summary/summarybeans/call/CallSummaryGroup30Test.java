@@ -22,6 +22,7 @@ import static com.telcobright.summary.summarybeans.ad.internal.AdTestSupport.lea
 import static com.telcobright.summary.summarybeans.ad.internal.AdTestSupport.refusedView;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Brief S4: the CALL summary takes service group 30 — {@code sum_voice_day_30} / {@code sum_voice_hr_30} through
@@ -57,7 +58,7 @@ class CallSummaryGroup30Test {
         assertEquals(61, s.tup_inpartnerid, "the payer");
         assertEquals(9, s.tup_outpartnerid, "the network division");
         assertEquals("lux-soap", s.tup_incomingroute, "the campaign's route");
-        assertEquals("dhaka-01", s.tup_outgoingroute, "the zone");
+        assertEquals("dhaka-01", s.tup_outgoingroute, "a row from before ARCH-0055 (the zone alone): the whole text, nothing invented (S18)");
         assertEquals("10.20.0.1", s.tup_incomingip, "the gateway — never the device");
         assertEquals("10.10.188.40", s.tup_outgoingip, "the media server");
         assertEquals(LocalDateTime.of(2026, 9, 29, 0, 0), s.tup_starttime);
@@ -132,6 +133,66 @@ class CallSummaryGroup30Test {
         assertEquals(0, money.customercost.compareTo(new BigDecimal("1.00")));
         assertEquals(1, units.totalcalls);
         assertEquals(0, units.customercost.compareTo(new BigDecimal("15")));
+    }
+
+    // ---- S18: the group-30 key of the ad's route is <ruleId>/<app> — never the device (SS-0003 §2, §2a) ----
+
+    /** The route as the ad service writes it since ARCH-0055: the rule, then app, zone, site, district, gw, msisdn, mac. */
+    private static final String PHONE_A = "7/wifi/dhaka-01/dhaka-site-1/dhaka/gw-1/8801711000001/aa:bb:cc:dd:ee:01";
+    private static final String PHONE_B = "7/wifi/dhaka-01/dhaka-site-1/dhaka/gw-1/8801711000002/aa:bb:cc:dd:ee:02";
+
+    @Test
+    void two_devices_of_the_same_rule_and_app_summarise_into_ONE_row_keyed_ruleId_slash_app() {
+        Collection<CallSummary> rows = rollup(daily30(), List.of(leafView(MORNING).route(PHONE_A), leafView(MORNING.plusMinutes(3)).route(PHONE_B)));
+
+        assertEquals(1, rows.size(), "one row per rule and app per window — never one per phone");
+        CallSummary row = rows.iterator().next();
+        assertEquals("7/wifi", row.tup_outgoingroute, "the route's first two parts, as the row carries them");
+        assertEquals(2, row.totalcalls);
+    }
+
+    @Test
+    void a_route_longer_than_64_characters_is_not_cut_inside_a_part_the_key_is_whole_parts() {
+        String app = "a".repeat(40);
+        String longRoute = "12345/" + app + "/" + "z".repeat(30) + "/" + "s".repeat(30) + "/dhaka/gw-1/8801711000001/aa:bb:cc:dd:ee:01";
+        assertTrue(longRoute.length() > 64, "longer than the key's old width");
+
+        CallSummary s = daily30().buildBatch(batchOf(leafView(MORNING).route(longRoute))).get(0);
+
+        assertEquals("12345/" + app, s.tup_outgoingroute, "whole parts, whatever the route's length");
+    }
+
+    @Test
+    void no_rule_matched_keys_as_zero_slash_app() {
+        CallSummary s = daily30().buildBatch(batchOf(leafView(MORNING).route("0/wifi//////"))).get(0);
+
+        assertEquals("0/wifi", s.tup_outgoingroute);
+    }
+
+    @Test
+    void an_encoded_app_stays_one_part_of_the_key_as_the_row_carries_it() {
+        // the ad service percent-encodes a value's slash: an app named a/b is ONE part, still encoded in the key (ARCH-0057)
+        CallSummary s = daily30().buildBatch(batchOf(leafView(MORNING).route("7/a%2Fb/dhaka-01/////"))).get(0);
+
+        assertEquals("7/a%2Fb", s.tup_outgoingroute);
+    }
+
+    @Test
+    void a_route_not_of_the_fixed_shape_keeps_the_whole_text_as_its_key_nothing_is_invented() {
+        assertEquals("7/wifi/dhaka-01", daily30().buildBatch(batchOf(leafView(MORNING).route("7/wifi/dhaka-01"))).get(0).tup_outgoingroute,
+                "three parts, not eight: not a route of the fixed shape");
+        assertEquals("x/wifi/a/b/c/d/e/f", daily30().buildBatch(batchOf(leafView(MORNING).route("x/wifi/a/b/c/d/e/f"))).get(0).tup_outgoingroute,
+                "eight parts but no rule id in front: not one either");
+        assertEquals("", daily30().buildBatch(batchOf(leafView(MORNING).route(""))).get(0).tup_outgoingroute, "an empty route stays empty");
+    }
+
+    @Test
+    void a_group_10_records_route_is_still_the_whole_string() {
+        SummaryBean<CallSummary> daily10 = CallSummaries.forWindow("dailyCallSummary", "daily", "10", 10, null);
+
+        CallSummary s = daily10.buildBatch(batchOf(leafView(MORNING).serviceGroup(10).route(PHONE_A))).get(0);
+
+        assertEquals(PHONE_A, s.tup_outgoingroute, "groups 10, 11 (and 15) are untouched by S18");
     }
 
     @Test
