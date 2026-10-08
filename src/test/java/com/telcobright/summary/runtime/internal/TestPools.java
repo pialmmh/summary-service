@@ -22,6 +22,11 @@ public final class TestPools {
         return StoreDataSource.open(new StoreConfig(dialect, url, user, password, 0, maxSize, 30));
     }
 
+    /** How long a pooled connection may sit idle before it is asked whether it is there (S16). */
+    public static java.time.Duration checkAfterIdle() {
+        return StoreDataSource.CHECK_AFTER_IDLE;
+    }
+
     /**
      * The service's store over a given profile and a given ENVIRONMENT (name → value) — for the rule of where the
      * password comes from. Nothing is dialled until a connection is asked for.

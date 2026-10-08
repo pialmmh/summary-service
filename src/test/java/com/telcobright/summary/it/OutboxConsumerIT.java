@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class OutboxConsumerIT extends OutboxConsumerContract {
 
     private static final String SERVER_URL = System.getProperty("summary.it.mysql.url",
-            "jdbc:mysql://127.0.0.1:3306/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true");
+            "jdbc:mysql://127.0.0.1:7633/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true");
     private static final String USER = System.getProperty("summary.it.mysql.user", "root");
     private static final String PASSWORD = System.getProperty("summary.it.mysql.password", "");
     /** The throwaway database; {@code -Dsummary.it.mysql.db=…} lets two runs share one server without sharing tables. */

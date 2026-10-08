@@ -56,16 +56,17 @@ class OutboxWorkerTest {
         store.goAway();
         billingWrites(1, 10);
         startTheWorker(1);
-        assertTrue(Await.until(() -> store.triedWhileAway() >= 3, 15_000), "it tries again by itself while the store is away");
+        // at EVERY poll, never later: six tries within 8 s of a 1 s poll (a wait that grew — 1, 2, 3, 4, 5 s — would reach six at 15 s)
+        assertTrue(Await.until(() -> store.triedWhileAway() >= 6, 8_000), "it tries again at every poll while the store is away: " + store.triedWhileAway());
         assertEquals(0, database.outbox.readOffset("cdr", bean.name()), "nothing moved: the bookmark waits");
 
         store.comeBack();
         long back = System.nanoTime();
 
-        assertTrue(Await.until(() -> database.outbox.readOffset("cdr", bean.name()) == 1, OutboxWorker.MAX_BACKOFF_SECONDS * 1000L + 5_000),
+        assertTrue(Await.until(() -> database.outbox.readOffset("cdr", bean.name()) == 1, 5_000),
                 "the row is written by the SAME worker after the store is back — no ping, no restart");
         long seconds = (System.nanoTime() - back) / 1_000_000_000L;
-        assertTrue(seconds <= OutboxWorker.MAX_BACKOFF_SECONDS, "within the longest wait: " + seconds + " s");
+        assertTrue(seconds <= 2, "by the next poll (1 s) at the latest: " + seconds + " s");
         assertTrue(thread.isAlive(), "the worker did not die, nor was it replaced");
 
         billingWrites(2, 11);                                       // and it goes on as before
@@ -79,6 +80,7 @@ class OutboxWorkerTest {
             store.goAway();
             billingWrites(1, 10);
             startTheWorker(3600);                                   // only wakes (pings) make it try: twelve of them
+            assertTrue(Await.until(() -> store.triedWhileAway() == 1, 5_000), "the first try is the start's own, before any ping");
             for (int ping = 0; ping < 12; ping++) {
                 int before = store.triedWhileAway();
                 worker.wake();
@@ -133,12 +135,4 @@ class OutboxWorkerTest {
         }
     }
 
-    @Test
-    void while_failing_the_wait_grows_and_never_passes_the_cap_so_a_store_that_is_back_is_written_within_it() {
-        assertEquals(5, OutboxWorker.waitAfter(0, 5), "no trouble: the poll interval");
-        assertEquals(List.of(5, 10, 15, 20, 25, 30, 30, 30), java.util.stream.IntStream.rangeClosed(1, 8).mapToObj(n -> OutboxWorker.waitAfter(n, 5)).toList());
-        assertEquals(30, OutboxWorker.waitAfter(1, 600), "a long poll: still tried again within the cap while failing");
-        assertEquals(30, OutboxWorker.MAX_BACKOFF_SECONDS, "a store that is back is written within half a minute, without a ping");
-        assertEquals(30, OutboxWorker.waitAfter(1_000_000, 5), "a long trouble: never longer, never an overflow");
-    }
 }

@@ -26,6 +26,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import com.telcobright.summary.runtime.internal.TestPools;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Set;
@@ -727,7 +728,7 @@ abstract class OutboxConsumerContract {
         }
     }
 
-    // ---- S16: the store went away and came back ----
+    // ---- S16: the store ended every session and is back (the second rehearsal's F8) ----
 
     /** The service's OWN pool on this test's schema (the code a deployment runs: StoreDataSource), {@code size} connections at most. */
     protected abstract DataSource theServicesOwnPool(int size);
@@ -738,36 +739,89 @@ abstract class OutboxConsumerContract {
      */
     protected abstract int endTheServicesSessions() throws SQLException;
 
+    /**
+     * The pool's two rules, each pinned: a connection idle past the check is ASKED before it is handed out, so the
+     * first drain after the sessions ended writes; one ended within the check is handed out ONCE, fails with the
+     * fatal error, and is dropped — the next drain writes. Neither way is the service restarted, nor the pool
+     * remade. (With the check off, or the sorter off, this test is red: the dead connection is handed out for ever.)
+     */
     @Test
-    void a_store_that_ended_every_session_is_written_again_by_the_next_drain_with_no_restart() throws SQLException {
+    void a_store_that_ended_every_session_is_written_again_by_the_first_drain_with_no_restart() throws Exception {
         DataSource pool = theServicesOwnPool(2);
-        OutboxReader overThePool = new OutboxReader(new JdbcUnitOfWorkFactory(pool, dialect()), new SummaryEngine(), 1000, 1, 8);
-        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
-        assertEquals(1, overThePool.drain(bean), "the pool now holds a connection, idle, between two drains");
+        try {
+            OutboxReader overThePool = new OutboxReader(new JdbcUnitOfWorkFactory(pool, dialect()), new SummaryEngine(), 1000, 1, 8);
+            seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
+            assertEquals(1, overThePool.drain(bean), "the pool now holds a connection, idle, between two drains");
 
-        assertTrue(endTheServicesSessions() >= 1, "the server ended the pool's session(s)");
-        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 11, 0)))));
+            // (1) a restart: every session ended; by the time the database answers again the pool's connection has been
+            //     idle past the check — it is asked, found dead, dropped; the FIRST drain writes over a new one
+            assertTrue(endTheServicesSessions() >= 1, "the server ended the pool's session(s)");
+            seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 11, 0)))));
+            Thread.sleep(TestPools.checkAfterIdle().toMillis() + 300);
+            assertEquals(1, overThePool.drainOnce(bean), "the first drain after the sessions ended must write: a dead pooled "
+                    + "connection was handed out (F8: every try fails until a restart)");
+            assertEquals(2, sumTotalCalls(), "each call once");
+            assertEquals(2, offset("dailyCallSummary"));
 
-        // the first drain after the store answers again WRITES: a connection the server ended is never handed out
-        assertEquals(1, overThePool.drainOnce(bean), "a dead pooled connection was handed out (a stuck worker: every try fails until a restart)");
-        assertEquals(2, sumTotalCalls(), "each call once");
-        assertEquals(2, offset("dailyCallSummary"));
-
-        // and again, with both connections of the pool in use before the sessions end
-        seedOutbox(3, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 12, 0)))));
-        try (Connection one = pool.getConnection(); Connection two = pool.getConnection()) {
-            assertTrue(one.isValid(2) && two.isValid(2));
-        }
-        assertTrue(endTheServicesSessions() >= 2);
-        assertEquals(1, overThePool.drainOnce(bean));
-        assertEquals(3, sumTotalCalls());
-        if (pool instanceof AutoCloseable closeable) {
-            try {
+            // (2) ended WITHIN the check, under traffic: both of the pool's connections were just used, the server ends
+            //     them, the drains borrow at once — each dead connection is handed out at most ONCE (that drain fails with
+            //     the fatal error and the connection is dropped), then it writes. Never a restart.
+            seedOutbox(3, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 12, 0)))));
+            try (Connection one = pool.getConnection(); Connection two = pool.getConnection()) {
+                assertTrue(one.isValid(2) && two.isValid(2), "two live connections in the pool");
+            }
+            assertTrue(endTheServicesSessions() >= 2, "the server ended both");
+            int failedDrains = 0;
+            int written = 0;
+            while (written == 0 && failedDrains <= 2) {
+                try {
+                    written = overThePool.drainOnce(bean);
+                } catch (RuntimeException failure) {
+                    assertTrue(fatal(failure), "a drain over an ended connection fails with the FATAL error (08…, 57P01), not another: " + failure);
+                    failedDrains++;
+                }
+            }
+            assertEquals(1, written, "a dead connection was handed out AGAIN (more than once each): the pool keeps it — F8");
+            assertTrue(failedDrains <= 2, "at most once per dead connection: " + failedDrains);
+            assertEquals(3, sumTotalCalls());
+            assertEquals(3, offset("dailyCallSummary"));
+            System.out.printf("S16 %s: sessions ended within the idle check — %d drain(s) failed before one wrote (one per dead connection at most)%n",
+                    dialect(), failedDrains);
+        } finally {
+            if (pool instanceof AutoCloseable closeable) {
                 closeable.close();
-            } catch (Exception ignored) {
-                // the test's own pool
             }
         }
+    }
+
+    /** The check of an idle connection is ONE round trip ({@code isValid}): measured here, said in the report (S16). */
+    @Test
+    void what_the_idle_check_costs_a_borrow() throws SQLException {
+        try (Connection connection = dbConnection()) {
+            for (int warm = 0; warm < 100; warm++) {
+                assertTrue(connection.isValid(5));
+            }
+            long[] micros = new long[500];
+            for (int i = 0; i < micros.length; i++) {
+                long started = System.nanoTime();
+                assertTrue(connection.isValid(5));
+                micros[i] = (System.nanoTime() - started) / 1000;
+            }
+            java.util.Arrays.sort(micros);
+            System.out.printf("S16 %s: the idle check costs a borrow p50 %d us, p99 %d us, max %d us (isValid: one round trip, over %d runs)%n",
+                    dialect(), micros[250], micros[495], micros[499], micros.length);
+            assertTrue(micros[250] < 50_000, "one round trip on this box, not a query: " + micros[250] + " us");
+        }
+    }
+
+    private static boolean fatal(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sql && sql.getSQLState() != null
+                    && (sql.getSQLState().startsWith("08") || sql.getSQLState().startsWith("57P"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Make a bean's table with a small MySQL partition horizon around the tests' dates (PostgreSQL has none). */

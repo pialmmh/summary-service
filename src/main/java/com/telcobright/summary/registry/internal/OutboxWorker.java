@@ -14,19 +14,17 @@ import java.util.concurrent.TimeUnit;
  * ping or the fallback poll timer, then drain again. Each {@link OutboxReader#drain} step is its own exactly-once
  * transaction; a drain failure is retried (the offset never advanced, so no data is lost or double-counted).
  *
- * <p><b>Trouble is tried again for ever, and said twice</b> (brief S16): ONE ERROR when it starts — with its cause —
- * and ONE INFO when the worker writes again, with how long it lasted and how many tries it took. The tries in
- * between are DEBUG lines: a database that is away for an hour does not write a line per try for every worker.
- * While failing the worker waits a little longer each time, at most {@link #MAX_BACKOFF_SECONDS}; a ping wakes it at
- * once. So a store that comes back is written again within that time, by itself — no restart.
+ * <p><b>Trouble is tried again for ever, and said twice</b> (S16): ONE ERROR when it starts — with its cause — and
+ * ONE INFO when the worker writes again, with how long it lasted and how many tries it took. The tries in between
+ * are DEBUG lines: a database that is away for an hour does not write a line per try for every worker. While
+ * failing the worker tries again at EVERY poll, never later (a ping wakes it at once): so a store that comes back
+ * is written again by the next poll at the latest, by itself — no restart.
  *
  * @param <T> the summary entity this worker's bean builds
  */
 public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable {
 
     private static final Logger LOG = Logger.getLogger(OutboxWorker.class);
-    /** The longest wait between two tries while failing: a store that is back is written again within it (S16). */
-    static final int MAX_BACKOFF_SECONDS = 30;
 
     private final String schema;
     private final SummaryBean<T> bean;
@@ -83,11 +81,11 @@ public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable 
         if (consecutiveFailures == 1) {
             troubleSinceNanos = System.nanoTime();
             LOG.errorf(failure, "schema=%s bean=%s drain failed — offset STUCK, the summaries lag until it writes again. Tried again "
-                    + "by itself (at most every %ds, at once on a ping), quietly: ONE line says when it writes again",
-                    said(), bean.name(), MAX_BACKOFF_SECONDS);
+                    + "by itself (at every poll, %ds; at once on a ping), quietly: ONE line says when it writes again",
+                    said(), bean.name(), pollIntervalSeconds);
         } else if (LOG.isDebugEnabled()) {
             LOG.debugf("schema=%s bean=%s drain failed again (%d tries) — tried again in %ds: %s", said(), bean.name(),
-                    consecutiveFailures, waitSeconds(), failure.toString());
+                    consecutiveFailures, pollIntervalSeconds, failure.toString());
         }
     }
 
@@ -101,27 +99,15 @@ public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable 
         consecutiveFailures = 0;
     }
 
+    /** The poll, whether the last drain worked or not: a store that is back is written again by the next poll at the latest. */
     private void awaitWakeOrTimeout() {
         try {
-            wakeSignal.tryAcquire(waitSeconds(), TimeUnit.SECONDS);
+            wakeSignal.tryAcquire(pollIntervalSeconds, TimeUnit.SECONDS);
             wakeSignal.drainPermits();   // coalesce multiple pings into one drain
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             running = false;
         }
-    }
-
-    /** Normal tick = the poll interval; while failing, back off linearly up to the cap. */
-    private int waitSeconds() {
-        return waitAfter(consecutiveFailures, pollIntervalSeconds);
-    }
-
-    /** The wait after {@code failures} failed tries in a row: the poll interval when none, else a little longer each time, at most the cap. */
-    static int waitAfter(int failures, int pollIntervalSeconds) {
-        if (failures == 0) {
-            return pollIntervalSeconds;
-        }
-        return (int) Math.min((long) pollIntervalSeconds * failures, MAX_BACKOFF_SECONDS);
     }
 
     private String said() {
