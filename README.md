@@ -14,6 +14,8 @@ consumes the outbox **exactly-once per bean**, for **every tenant of its root's 
 - **The ad view is a `cdr` row of service group 30.** The ad beans (`sum_ad_day_30` / `sum_ad_hr_30`) read the call's
   own outbox stream; the call bean takes group 30 from a profile (`sum_voice_*_30`); the chargeable beans are as
   they were. Money and a package's units are two measures (`chargedamount`, `chargedunits`), never added.
+  A row is one CONTENT of one campaign (`tup_contentid`); no text of the key is wider than its column; a table
+  an earlier version made is brought up to date by the service itself (below, "The ad summary tables").
 - **PostgreSQL as the store**, chosen at run time (`summary.store.kind`): one jar serves either engine. A tenant
   is a schema there; the summary tables are plain; the service never makes billing-core's tables.
 - **Every tenant of the tree in one process**: a worker and a bookmark per (schema, bean). The tree comes from
@@ -26,7 +28,8 @@ consumes the outbox **exactly-once per bean**, for **every tenant of its root's 
   that names no tenant is REFUSED, in words that say how a deployment names one (below, "Configuration").
 
 The page for a deployment: [`docs/ad-as-call/postgres-ad-profile.md`](docs/ad-as-call/postgres-ad-profile.md).
-The work's notes: `docs/ad-as-call/SS-0001-update.md`, `SS-0002-done.md`.
+The work's notes: `docs/ad-as-call/SS-0001-update.md`, `SS-0002-done.md`. The branch `no-bundled-tenant` (one
+commit, prepared, not merged) makes the jar enable no tenant: a start that names none is refused.
 
 ## Status before that — built, tests green (outbox consumer; the numbers of 2026-07)
 
@@ -72,7 +75,8 @@ mvn verify -Dsummary.it.mysql.url='jdbc:mysql://127.0.0.1:7633/?useSSL=false&all
 test whose lab does not answer is SKIPPED, never passed. PostgreSQL's and Kafka's lab are the defaults
 (`-Dsummary.it.pg.url`, `-Dsummary.it.kafka`); MySQL's default is `127.0.0.1:3306` with a password given at run
 time (`-Dsummary.it.mysql.password`), so name the lab's as above. The lab's stories with the packaged jar:
-`tools/lab/tree-e2e.sh`, `reconcile-with-billing-core.sh`, `secret-e2e.sh`, `this-box-e2e.sh`, `ping-topic-e2e.sh` — a service is started there only
+`tools/lab/tree-e2e.sh`, `reconcile-with-billing-core.sh`, `secret-e2e.sh`, `this-box-e2e.sh`, `ping-topic-e2e.sh`,
+`upgrade-e2e.sh` (an older version's tables and rows, then this version on them) — a service is started there only
 through `tools/lab/run-lab.sh`, which shows the profile and the endpoints first and starts only when every host is
 THIS BOX: localhost, a loopback address, or an address one of this box's own interfaces holds (a real
 prime-context never listens on loopback; `tools/lab/this-box-e2e.sh` shows both sides). A host name is never

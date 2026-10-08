@@ -43,6 +43,35 @@ class TableDdlTest {
     }
 
     @Test
+    void an_index_on_a_prefix_names_the_characters_on_mysql_and_the_whole_column_on_postgresql() {
+        SummaryTableSpec wide = SummaryTableSpec.table("sum_probe")
+                .identity("id")
+                .varchar("tup_outgoingroute", 1000)
+                .primaryKey("id")
+                .indexOnPrefix("ix_outgoingroute", 255, "tup_outgoingroute")
+                .build();
+
+        // MySQL: a 1000-wide utf8mb4 column cannot be indexed whole (InnoDB's key is 3072 bytes = 768 such
+        // characters), so the index takes the route's first characters.
+        assertTrue(TableDdl.mysql(wide).contains("KEY ix_outgoingroute (tup_outgoingroute(255))"),
+                "MySQL takes the first characters: " + TableDdl.mysql(wide));
+
+        // PostgreSQL has no prefix index: the column is named whole.
+        assertTrue(TableDdl.createIfAbsent(wide, SqlDialect.POSTGRESQL).stream()
+                        .anyMatch(sql -> sql.equals("CREATE INDEX IF NOT EXISTS sum_probe_ix_outgoingroute ON sum_probe (tup_outgoingroute)")),
+                "PostgreSQL names the whole column: " + TableDdl.createIfAbsent(wide, SqlDialect.POSTGRESQL));
+
+        // An index declared without a prefix is unchanged on both engines.
+        SummaryTableSpec plain = SummaryTableSpec.table("sum_probe")
+                .identity("id")
+                .varchar("tup_outgoingroute", 1000)
+                .primaryKey("id")
+                .index("ix_outgoingroute", "tup_outgoingroute")
+                .build();
+        assertTrue(TableDdl.mysql(plain).contains("KEY ix_outgoingroute (tup_outgoingroute)"), TableDdl.mysql(plain));
+    }
+
+    @Test
     void mysql_is_one_create_with_the_full_partition_set_inside_it() {
         String ddl = TableDdl.mysql(adDay());
 

@@ -3,6 +3,8 @@ package com.telcobright.summary.runtime.internal;
 import com.telcobright.summary.bean.spi.SqlDialect;
 import com.telcobright.summary.engine.spi.SummaryStoreException;
 import io.agroal.api.AgroalDataSource;
+import io.agroal.api.configuration.AgroalConnectionPoolConfiguration.ConnectionValidator;
+import io.agroal.api.configuration.AgroalConnectionPoolConfiguration.ExceptionSorter;
 import io.agroal.api.configuration.supplier.AgroalDataSourceConfigurationSupplier;
 import io.agroal.api.security.NamePrincipal;
 import io.agroal.api.security.SimplePassword;
@@ -23,6 +25,21 @@ import java.util.function.Supplier;
  * FIRST use — so the app boots with no database reachable, and the engine (MySQL or PostgreSQL) is the profile's
  * choice at run time, not the build's. One pool for the whole process: on PostgreSQL every tenant is a schema of
  * the one switch database, on MySQL a database of the one server, entered per unit of work.
+ *
+ * <p>A database that goes away and comes back (a restart, a failover, {@code pg_terminate_backend}) ends every
+ * connection the pool holds (S16 — the second rehearsal's F8: a pool that kept handing them out, every worker
+ * STUCK until a restart). Two rules of this pool, and nothing else:
+ * <ul>
+ *   <li>a connection that threw a FATAL error — SQLSTATE class {@code 08}, or PostgreSQL's {@code 57P01} (the
+ *       administrator ended the session) — is dropped when it is given back, never handed out again
+ *       ({@link #fatalErrorsOf});</li>
+ *   <li>a connection idle longer than {@link #CHECK_AFTER_IDLE} is asked whether it is there before it is handed
+ *       out ({@code isValid}: ONE round trip to the server); one that is not is dropped and another is opened. A
+ *       connection borrowed again within that time is not asked: a backlog's steps cost nothing more.</li>
+ * </ul>
+ * So the first drain after the database answers again writes — with no restart. A connection the server ended
+ * WITHIN the idle interval is still handed out once: that drain fails, the connection is dropped, the next drain
+ * writes.
  */
 @ApplicationScoped
 public class StoreDataSource {
@@ -113,6 +130,33 @@ public class StoreDataSource {
         }
     }
 
+    /** A connection idle longer than this is asked whether it is there before it is handed out (S16). */
+    static final Duration CHECK_AFTER_IDLE = Duration.ofSeconds(1);
+    /** How long the pool waits for a connection to answer "are you there?" before it is taken for dead. */
+    static final int VALIDATION_SECONDS = 5;
+
+    /**
+     * The errors after which a connection is thrown away, not given back to the pool: the connection class
+     * ({@code 08…}: the link failed, the connection is closed — both engines say these) and, on PostgreSQL, the
+     * server's own ending of the session ({@code 57P01} the administrator's termination or a shutdown, {@code 57P02}
+     * a crash shutdown, {@code 57P03} cannot connect now). Without it a pool hands out the same dead connections for
+     * ever, and every worker fails until a restart — what the second rehearsal met after its database's 30 s stop
+     * (R-0002 F8: 6,312 ERROR lines in five hours, the summaries frozen).
+     */
+    static ExceptionSorter fatalErrorsOf(SqlDialect engine) {
+        return failure -> {
+            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+                if (cause instanceof SQLException sql && sql.getSQLState() != null) {
+                    String state = sql.getSQLState();
+                    if (state.startsWith("08") || (engine == SqlDialect.POSTGRESQL && state.startsWith("57P"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+    }
+
     /** The pool of a store (also what a test asks for directly). */
     static AgroalDataSource open(StoreConfig store) {
         AgroalDataSourceConfigurationSupplier configuration = new AgroalDataSourceConfigurationSupplier()
@@ -122,6 +166,11 @@ public class StoreDataSource {
                         .minSize(store.minSize())
                         .maxSize(store.maxSize())
                         .acquisitionTimeout(Duration.ofSeconds(store.acquisitionTimeoutSeconds()))
+                        // S16: a connection the SERVER ended (a restart, a failover, a terminated backend) is not handed
+                        // out again — one idle past CHECK_AFTER_IDLE is asked first; one that threw a fatal error is dropped
+                        .connectionValidator(ConnectionValidator.defaultValidatorWithTimeout(VALIDATION_SECONDS))
+                        .idleValidationTimeout(CHECK_AFTER_IDLE)
+                        .exceptionSorter(fatalErrorsOf(store.dialect()))
                         .connectionFactoryConfiguration(factory -> {
                             factory.jdbcUrl(store.url()).connectionProviderClassName(store.driverClassName()).autoCommit(true);
                             if (!store.username().isEmpty()) {
@@ -131,9 +180,10 @@ public class StoreDataSource {
                         }));
         try {
             AgroalDataSource opened = AgroalDataSource.from(configuration);
-            LOG.infof("store: %s at %s as %s (pool %d..%d, a worker waits %ds for a connection)", store.dialect().kind(),
+            LOG.infof("store: %s at %s as %s (pool %d..%d, a worker waits %ds for a connection; a connection idle over %d s is "
+                    + "checked before it is handed out, one that threw a fatal error is dropped)", store.dialect().kind(),
                     store.url(), store.username().isEmpty() ? "(no user)" : store.username(), store.minSize(), store.maxSize(),
-                    store.acquisitionTimeoutSeconds());
+                    store.acquisitionTimeoutSeconds(), CHECK_AFTER_IDLE.toSeconds());
             return opened;
         } catch (SQLException e) {
             throw new SummaryStoreException("the store's pool could not be made for " + store.url(), e);

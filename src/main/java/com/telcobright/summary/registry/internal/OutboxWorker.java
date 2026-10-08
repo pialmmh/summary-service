@@ -11,17 +11,20 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * The worker thread of ONE bean in ONE tenant schema: drain that schema's outbox, then wait until woken by a
- * ping or the fallback poll timer, then drain again. Each {@link OutboxReader#drain} step is its own exactly-once transaction; a drain failure is
- * logged and retried (the offset never advanced, so no data is lost or double-counted). Repeated failures — a
- * poison outbox row, a broken summary table — back off up to {@link #MAX_BACKOFF_SECONDS} with an escalating
- * count in the log, so a wedged bean is LOUD without hammering the database every tick.
+ * ping or the fallback poll timer, then drain again. Each {@link OutboxReader#drain} step is its own exactly-once
+ * transaction; a drain failure is retried (the offset never advanced, so no data is lost or double-counted).
+ *
+ * <p><b>Trouble is tried again for ever, and said twice</b> (S16): ONE ERROR when it starts — with its cause — and
+ * ONE INFO when the worker writes again, with how long it lasted and how many tries it took. The tries in between
+ * are DEBUG lines: a database that is away for an hour does not write a line per try for every worker. While
+ * failing the worker tries again at EVERY poll, never later (a ping wakes it at once): so a store that comes back
+ * is written again by the next poll at the latest, by itself — no restart.
  *
  * @param <T> the summary entity this worker's bean builds
  */
 public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable {
 
     private static final Logger LOG = Logger.getLogger(OutboxWorker.class);
-    private static final int MAX_BACKOFF_SECONDS = 60;
 
     private final String schema;
     private final SummaryBean<T> bean;
@@ -30,6 +33,7 @@ public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable 
     private final Semaphore wakeSignal = new Semaphore(0);
     private volatile boolean running = true;
     private int consecutiveFailures = 0;   // touched only by this worker's own thread
+    private long troubleSinceNanos;        // when the failing tries began (this worker's thread only)
 
     /** A worker on the connection's own schema. */
     public OutboxWorker(SummaryBean<T> bean, OutboxReader reader, int pollIntervalSeconds) {
@@ -59,33 +63,51 @@ public final class OutboxWorker<T extends SummaryEntity<T>> implements Runnable 
         try {
             // the until-caught-up loop lives HERE, not in the reader, so stop() takes effect between the
             // bounded per-tx steps even mid-backlog — a second worker must never start while one still drains
-            while (running && reader.drainOnce(schema, bean) > 0) {
-                // each step is its own exactly-once transaction
+            while (running) {
+                int written = reader.drainOnce(schema, bean);         // each step is its own exactly-once transaction
+                sayItWritesAgain();                                   // at the FIRST step that works — not after a backlog
+                if (written == 0) {
+                    break;
+                }
             }
-            consecutiveFailures = 0;
         } catch (RuntimeException e) {
-            consecutiveFailures++;
-            LOG.errorf(e, "schema=%s bean=%s drain failed (%d consecutive) — offset STUCK, summaries lag until fixed; "
-                    + "retrying in %ds", said(), bean.name(), consecutiveFailures, waitSeconds());
+            sayTheTrouble(e);
         }
     }
 
+    /** One ERROR when the trouble starts; the tries after it are DEBUG lines. */
+    private void sayTheTrouble(RuntimeException failure) {
+        consecutiveFailures++;
+        if (consecutiveFailures == 1) {
+            troubleSinceNanos = System.nanoTime();
+            LOG.errorf(failure, "schema=%s bean=%s drain failed — offset STUCK, the summaries lag until it writes again. Tried again "
+                    + "by itself (at every poll, %ds; at once on a ping), quietly: ONE line says when it writes again",
+                    said(), bean.name(), pollIntervalSeconds);
+        } else if (LOG.isDebugEnabled()) {
+            LOG.debugf("schema=%s bean=%s drain failed again (%d tries) — tried again in %ds: %s", said(), bean.name(),
+                    consecutiveFailures, pollIntervalSeconds, failure.toString());
+        }
+    }
+
+    /** One INFO when it writes again after trouble: how long, how many tries. Nothing when there was none. */
+    private void sayItWritesAgain() {
+        if (consecutiveFailures > 0) {
+            long seconds = (System.nanoTime() - troubleSinceNanos) / 1_000_000_000L;
+            LOG.infof("schema=%s bean=%s writes again — after %d s and %d failed tr%s; nothing was lost: the bookmark had not moved",
+                    said(), bean.name(), seconds, consecutiveFailures, consecutiveFailures == 1 ? "y" : "ies");
+        }
+        consecutiveFailures = 0;
+    }
+
+    /** The poll, whether the last drain worked or not: a store that is back is written again by the next poll at the latest. */
     private void awaitWakeOrTimeout() {
         try {
-            wakeSignal.tryAcquire(waitSeconds(), TimeUnit.SECONDS);
+            wakeSignal.tryAcquire(pollIntervalSeconds, TimeUnit.SECONDS);
             wakeSignal.drainPermits();   // coalesce multiple pings into one drain
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             running = false;
         }
-    }
-
-    /** Normal tick = the poll interval; while failing, back off linearly up to the cap. */
-    private int waitSeconds() {
-        if (consecutiveFailures == 0) {
-            return pollIntervalSeconds;
-        }
-        return (int) Math.min((long) pollIntervalSeconds * consecutiveFailures, MAX_BACKOFF_SECONDS);
     }
 
     private String said() {

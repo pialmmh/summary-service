@@ -42,10 +42,18 @@ public final class TableDdl {
         }
         body.add("PRIMARY KEY (" + String.join(", ", table.primaryKey()) + ")");
         for (SummaryTableSpec.Index index : table.indexes()) {
-            body.add("KEY " + index.name() + " (" + String.join(", ", index.columns()) + ")");
+            body.add("KEY " + index.name() + " (" + String.join(", ", mysqlIndexColumns(index)) + ")");
         }
         String create = "CREATE TABLE IF NOT EXISTS " + table.name() + " (" + body + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
         return table.partitionColumn() == null ? create : create + DdlPartitions.dailyRangeFromConfig(table.partitionColumn());
+    }
+
+    /** A MySQL index column: its name, or {@code name(prefix)} where the index takes only the column's first characters. */
+    private static List<String> mysqlIndexColumns(SummaryTableSpec.Index index) {
+        if (index.mysqlPrefixChars() <= 0) {
+            return index.columns();
+        }
+        return index.columns().stream().map(column -> column + "(" + index.mysqlPrefixChars() + ")").toList();
     }
 
     /** PostgreSQL: the plain table, then its indexes. */

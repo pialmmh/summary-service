@@ -8,7 +8,9 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,6 +21,10 @@ import java.util.concurrent.TimeUnit;
  * (a bean with no offset row yet counts as 0, so nothing is deleted until every bean has progressed). Each schema
  * is its own transaction; one that fails is said and the others go on. Keeps the tables bounded without holding
  * up any bean's transaction. A schema billing-core has not served yet has no outbox: nothing to trim there.
+ *
+ * <p>A schema that fails is said ONCE (a WARN) and once more when it trims again (an INFO) — not at every pass
+ * while a database is away (brief S16); the passes in between are DEBUG lines. The reaper is not a worker: a
+ * missed pass loses nothing, the next one trims what the last one could not.
  */
 @ApplicationScoped
 public class OutboxReaper {
@@ -30,6 +36,8 @@ public class OutboxReaper {
     private final String entityType;
     private final int intervalSeconds;
     private ScheduledExecutorService scheduler;
+    /** The schemas whose passes are failing, and how many in a row (the reaper's own thread, or a test's). */
+    private final Map<String, Integer> failingPasses = new ConcurrentHashMap<>();
 
     @Inject
     public OutboxReaper(OutboxReader reader, SummaryBeanRegistry registry,
@@ -78,10 +86,32 @@ public class OutboxReaper {
         for (String schema : registry.servedSchemas()) {
             try {
                 deleted += reader.reap(schema.equals(SummaryBeanRegistry.OWN_SCHEMA) ? null : schema, entityType, configured);
+                sayItTrimsAgain(schema);
             } catch (RuntimeException failure) {
-                LOG.warnf(failure, "reaper: schema %s failed this pass; the other schemas go on, it is tried again next interval", schema);
+                sayTheTrouble(schema, failure);
             }
         }
         return deleted;
+    }
+
+    private void sayTheTrouble(String schema, RuntimeException failure) {
+        int passes = failingPasses.merge(schema, 1, Integer::sum);
+        if (passes == 1) {
+            LOG.warnf(failure, "reaper: schema %s failed this pass; the other schemas go on. It is tried again every pass, quietly: "
+                    + "ONE line says when it trims again", said(schema));
+        } else if (LOG.isDebugEnabled()) {
+            LOG.debugf("reaper: schema %s failed again (%d passes): %s", said(schema), passes, failure.toString());
+        }
+    }
+
+    private void sayItTrimsAgain(String schema) {
+        Integer passes = failingPasses.remove(schema);
+        if (passes != null) {
+            LOG.infof("reaper: schema %s trims again — after %d failed pass%s", said(schema), passes, passes == 1 ? "" : "es");
+        }
+    }
+
+    private static String said(String schema) {
+        return schema.equals(SummaryBeanRegistry.OWN_SCHEMA) ? "(the connection's own)" : schema;
     }
 }
