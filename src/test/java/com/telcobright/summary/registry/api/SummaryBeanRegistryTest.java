@@ -389,6 +389,34 @@ class SummaryBeanRegistryTest {
     }
 
     @Test
+    void a_schema_the_reaper_cannot_reach_is_said_once_and_once_more_when_it_trims_again() {
+        // brief S16: a database that is away does not write a line per pass for every schema
+        com.telcobright.summary.testkit.StoreThatGoesAway store = new com.telcobright.summary.testkit.StoreThatGoesAway(database);
+        OutboxReader reader = new OutboxReader(store, new SummaryEngine(), 1000, 50, 8);
+        registry = new SummaryBeanRegistry(reader, NEVER_POLLS);
+        registry.register(AdTestSupport.dailyBean());
+        Tier btcl = database.tier("btcl");
+        for (int id = 1; id <= 3; id++) btcl.outbox().seed(id, "x");
+        registry.serve("btcl");
+        registry.stopAll();
+        btcl.outbox().advanceOffset("cdr", DAILY, 3);
+        OutboxReaper reaper = new OutboxReaper(reader, registry, "cdr", 60);
+
+        try (com.telcobright.summary.testkit.LogCapture said = com.telcobright.summary.testkit.LogCapture.of(OutboxReaper.class)) {
+            store.goAway();
+            for (int pass = 0; pass < 5; pass++) assertEquals(0, reaper.reapOnce());
+            store.comeBack();
+            assertEquals(3, reaper.reapOnce(), "the first pass after the store is back trims");
+            assertEquals(0, reaper.reapOnce());
+
+            assertEquals(1, said.warnings().size(), "ONE line when the trouble starts, not one per pass: " + said.lines());
+            assertTrue(said.warnings().get(0).startsWith("reaper: schema btcl failed this pass"), said.warnings().get(0));
+            assertEquals(java.util.List.of("reaper: schema btcl trims again — after 5 failed passes"),
+                    said.lines().stream().filter(line -> line.contains("trims again —")).toList());
+        }
+    }
+
+    @Test
     void starting_a_bean_nobody_registered_is_refused() {
         registry(NEVER_POLLS, AdTestSupport.dailyBean());
 

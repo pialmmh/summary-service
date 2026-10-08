@@ -12,6 +12,17 @@ import com.telcobright.summary.summarybeans.call.model.CallSummary;
  */
 final class SumVoiceDdl {
 
+    /** The route columns' width (the owner 2026-10-07): an ad view's route holds a rule id and seven request parameters. */
+    static final int ROUTE_WIDTH = 1000;
+
+    /**
+     * How much of a route each route index takes on MySQL (the owner 2026-10-07: both route columns are indexed). 255
+     * characters hold every route we write, keep an entry at most 1,020 bytes in utf8mb4 — far inside InnoDB's 3072-byte
+     * key — and cost correctness nothing: two routes that share their first 255 characters only share an index entry, and
+     * the engine still reads the row to tell them apart. 768 is the ceiling if the whole route ever has to be covered.
+     */
+    static final int ROUTE_INDEX_PREFIX = 255;
+
     private SumVoiceDdl() {
     }
 
@@ -21,8 +32,8 @@ final class SumVoiceDdl {
                 .integer("tup_switchid")
                 .integer("tup_inpartnerid")
                 .integer("tup_outpartnerid")
-                .varchar("tup_incomingroute", 64)
-                .varchar("tup_outgoingroute", 64)
+                .varchar("tup_incomingroute", ROUTE_WIDTH)
+                .varchar("tup_outgoingroute", ROUTE_WIDTH)
                 .decimal("tup_customerrate", 18, 6)
                 .decimal("tup_supplierrate", 18, 6)
                 .varchar("tup_incomingip", 64)
@@ -67,6 +78,8 @@ final class SumVoiceDdl {
                 .decimal("decimalAmount3", 18, 6)
                 .primaryKey("id", CallSummary.BUCKET_COLUMN)      // the partition column is in every unique key
                 .index("ix_starttime", "tup_starttime")
+                .indexOnPrefix("ix_incomingroute", ROUTE_INDEX_PREFIX, "tup_incomingroute")
+                .indexOnPrefix("ix_outgoingroute", ROUTE_INDEX_PREFIX, "tup_outgoingroute")
                 .partitionedByDayOn(CallSummary.BUCKET_COLUMN)
                 .build();
     }

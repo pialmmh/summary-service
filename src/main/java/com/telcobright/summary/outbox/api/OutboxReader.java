@@ -430,8 +430,11 @@ public class OutboxReader {
         return text.length() <= 500 ? text : text.substring(0, 500);
     }
 
+    /** The failure is the caller's to say (a worker says it ONCE per trouble, S16): here only a DEBUG line per try. */
     private void rollbackQuietly(UnitOfWork unitOfWork, SummaryBean<?> bean, RuntimeException failure) {
-        LOG.warnf(failure, "bean=%s drain rolled back; offset unchanged (will retry)", bean.name());
+        if (LOG.isDebugEnabled()) {
+            LOG.debugf("bean=%s drain rolled back; offset unchanged (tried again): %s", bean.name(), failure.toString());
+        }
         try {
             unitOfWork.rollback();
         } catch (RuntimeException rollbackFailure) {
