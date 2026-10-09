@@ -1,0 +1,81 @@
+# =====================================================================================
+# btcl / radius2 — summary-service on the radius-2 bed (bras-2), the ad lane: the ad view as a Call.
+#
+# The root tenant is btcl. An ad view's record is a cdr row of SERVICE GROUP 30 that billing-core writes in
+# each tier's schema, with one summary_affected row per tier. This profile lists every bean that sums group 30.
+# The ONE PostgreSQL of the bed (the owner, 2026-10-10: single db instance, single prime-context instance, one Kafka cluster): the switch
+# database `routesphere` on pair2 :5434; the tree from the bed's one prime-context, the facade on :7091, upgraded in place; the topics
+# named by the ROOT tenant (the owner's Kafka rule, 2026-10-10: every topic suffixed by the operator tenant; a reseller gets none).
+# The password by the NAME of its variable (secreteer's /etc/secreteer/btcl/summary-service.env through the unit's EnvironmentFile=);
+# never a value. The listener (10.10.188.2:7134) and the zone (Asia/Dhaka) are the unit's java line. The keys: docs/ad-as-call/postgres-ad-profile.md.
+# =====================================================================================
+
+summary:
+  # ---- a BED profile, not a lab: every endpoint below is this box, but the lab belt is off (the brokers advertise 10.10.188.2) ----
+  # (the store, the brokers, prime-context, the listener: localhost, a loopback address, or an address one of this
+  # box's own interfaces holds. A host name is never looked up. A lab never dials another box, not even for a read.)
+  endpoints:
+    local-only: false
+
+  # ---- the store (brief S5): the switch database on PostgreSQL; a tenant is a SCHEMA of it ----
+  # The engine is chosen here, at run time (kind: mysql | postgresql): one jar serves either.
+  store:
+    kind: postgresql
+    url: jdbc:postgresql://127.0.0.1:5434/routesphere    # pair2's PostgreSQL on this box
+    username: summary_service                            # USAGE + CREATE on each tier schema (prime-context's provisioning)
+    password-ref: env:TENANT_BTCL_AD_SUMMARY_SERVICE_PASSWORD   # the NAME of the variable; never the value
+    min-size: 0
+    max-size: 16
+
+  # ---- the tenants (brief S6): ONE process serves every tier schema of the root's tree ----
+  # A view writes one outbox row in EACH tier's schema, and a reseller is made at run time. The tree comes from
+  # prime-context (POST /get-specific-tenant-root — the road config-manager serves; a read). It is read at the
+  # start, at every doorbell (prime-context rings config_event_loader_<root> AFTER it rebuilt the tree) and every
+  # refresh-seconds. A schema the tree gained is served with no restart: its tables are made then.
+  tenants:
+    mode: tree                                           # single (one schema: the URL's own) | tree
+    root: btcl                                           # the root tenant = the root schema; names the doorbell's topic
+    prime-context:
+      base-url: http://10.10.188.2:7091                  # the bed's one prime-context (the facade, upgraded in place)
+    doorbell:
+      topic-base: config_event_loader                    # -> config_event_loader_btcl
+      bootstrap-servers: 10.10.188.2:9092                # kafka-s2, the bed's one cluster
+    reload-debounce-ms: 1000                             # several rings in a burst are ONE read of the tree
+    refresh-seconds: 300                                 # the tree is read even when no ring came
+
+  # ---- the beans of service group 30 (brief S1, S4) ----
+  #   the AD category      : sum_ad_day_30 / sum_ad_hr_30 — by tenant, payer, campaign, rule, zone, site, app,
+  #                          media kind, outcome. Its window classes: summarybeans/ad.
+  #   the CALL category    : sum_voice_day_30 / sum_voice_hr_30 — the view as a call: by payer, campaign route,
+  #                          zone. No class of its own: the `window:` key makes the bootstrap instantiate a call
+  #                          bean under this name (its own bookmark, worker and table).
+  #   the CHARGEABLE one   : sum_chargeable_day / sum_chargeable_hr — every chargeable of every group, as it is.
+  # All six read the SAME outbox stream (entity cdr), each from its own bookmark.
+  enabledSummary:
+    - dailyAdSummary                             # -> summarybeans/ad/DailyAdSummary.java   (sum_ad_day_30)
+    - hourlyAdSummary                            # -> summarybeans/ad/HourlyAdSummary.java  (sum_ad_hr_30)
+    - dailyCallSummarySg30                       # config-instantiated                       (sum_voice_day_30)
+    - hourlyCallSummarySg30                      # config-instantiated                       (sum_voice_hr_30)
+    - dailyChargeableSummary                     # -> summarybeans/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
+    - hourlyChargeableSummary                    # -> summarybeans/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
+  beans:
+    dailyCallSummarySg30:
+      window: daily                              # no catalog class -> config-instantiated call bean
+      service-group: 30                          # keep the records whose customer chargeable is of group 30
+      table-suffix: "30"                         # -> sum_voice_day_30
+    hourlyCallSummarySg30:
+      window: hourly
+      service-group: 30
+      table-suffix: "30"                         # -> sum_voice_hr_30
+
+  # ---- the outbox ----
+  outbox:
+    entity-type: cdr
+    ping-topic: cdr_summary_ping_btcl            # billing-core's ping {tenant, entity, rows}. The topic carries the ROOT, the
+                                                 # same name on both sides (its billing.summary.ping-topic), and it must exist
+    ping-bootstrap-servers: 10.10.188.2:9092     # kafka-s2, the bed's one cluster
+    poll-interval-seconds: 5                     # the fallback drain when no ping arrives
+    max-rows-per-tx: 1                           # 1 outbox row = 1 billing batch per drain transaction
+    segment-size: 1000
+    reaper-interval-seconds: 60
+    quarantine-after: 8
