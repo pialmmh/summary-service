@@ -11,6 +11,11 @@
 # =====================================================================================
 
 summary:
+  # ---- the workers, the ping listener and the reaper start with the service (the jar's default is false, 'the architect flips it on at
+  # cutover'). The bed's order: billing-core first (it makes summary_affected at its first batch), then this service — a start before that
+  # first batch is tolerated (the worker says trouble once and retries each poll), but the window page starts it after. ----
+  autostart: true
+
   # ---- a BED profile, not a lab: every endpoint below is this box, but the lab belt is off (the brokers advertise 10.10.188.2) ----
   # (the store, the brokers, prime-context, the listener: localhost, a loopback address, or an address one of this
   # box's own interfaces holds. A host name is never looked up. A lab never dials another box, not even for a read.)
