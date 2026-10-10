@@ -39,7 +39,7 @@ class MySqlTreeIT {
     private static final String SERVER_URL = System.getProperty("summary.it.mysql.url",
             "jdbc:mysql://127.0.0.1:7633/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true");
     private static final String USER = System.getProperty("summary.it.mysql.user", "root");
-    private static final String PASSWORD = System.getProperty("summary.it.mysql.password", "");
+    private static final String PASSWORD = System.getProperty("summary.it.mysql.password", System.getenv().getOrDefault("SUMMARY_IT_MYSQL_PASSWORD", ""));
     private static final String BASE = System.getProperty("summary.it.mysql.db", "summary_it");
     private static final String ROOT = BASE + "_root", RESELLER = BASE + "_res_233";
     private static final String DAILY = "dailyAdSummary";

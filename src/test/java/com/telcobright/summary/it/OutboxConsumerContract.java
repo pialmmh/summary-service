@@ -18,6 +18,7 @@ import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.CrashAtCommit;
+import com.telcobright.summary.testkit.WifiSessionTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -328,6 +329,37 @@ abstract class OutboxConsumerContract {
             System.clearProperty("summary.ddl.partition-start");
             System.clearProperty("summary.ddl.partition-days");
         }
+    }
+
+    // ---- ARCH-0077-S item 2: the pre-provisioned voice table set with suffix 101, on this engine ----
+
+    @Test
+    void the_101_table_set_is_made_on_this_engine_exactly_as_the_30_set_is_and_as_described() throws SQLException {
+        SummaryBean<CallSummary> daily30 = CallSummaries.forWindow("dailyCallSummarySg30", "daily", "30", 30, null);
+        SummaryBean<CallSummary> daily101 = WifiSessionTestSupport.daily101();
+        SummaryBean<CallSummary> hourly101 = WifiSessionTestSupport.hourly101();
+        provisionSmall(daily30);
+        provisionSmall(daily101);
+        provisionSmall(hourly101);
+
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            java.util.Map<String, Integer> set30 = look.store().columnWidths("sum_voice_day_30");
+            java.util.Map<String, Integer> day101 = look.store().columnWidths(WifiSessionTestSupport.DAY_TABLE);
+            java.util.Map<String, Integer> hour101 = look.store().columnWidths(WifiSessionTestSupport.HOUR_TABLE);
+
+            assertEquals(daily101.tableSpec().columnNames().size(), day101.size(), "id and the 47 data columns are in the real table");
+            assertEquals(set30, day101, "column for column, width for width: the 30 set's table under another suffix");
+            assertEquals(set30, hour101, "and the hour table the same");
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(daily101.tableSpec(), dialect(), day101),
+                    "as described: nothing for the next start to bring up to date");
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(hourly101.tableSpec(), dialect(), hour101));
+            look.commit();
+        } finally {
+            look.close();
+        }
+        assertEquals(0, count(WifiSessionTestSupport.DAY_TABLE), "made empty");
+        assertEquals(0, count(WifiSessionTestSupport.HOUR_TABLE));
     }
 
     // ---- S13: the ad summaries are keyed by CONTENT too ----
