@@ -2,7 +2,9 @@
 # btcl / radius2 — summary-service on the radius-2 bed (bras-2), the ad lane: the ad view as a Call.
 #
 # The root tenant is btcl. An ad view's record is a cdr row of SERVICE GROUP 30 that billing-core writes in
-# each tier's schema, with one summary_affected row per tier. This profile lists every bean that sums group 30.
+# each tier's schema, with one summary_affected row per tier. This profile lists every bean that sums group 30 — and, since
+# ARCH-0077-S, the two call beans that sum group 101, the domestic WiFi session (the voice row billing-core writes from the
+# switch's settlement), under sum_voice_day_101 / sum_voice_hr_101.
 # The ONE PostgreSQL of the bed (the owner, 2026-10-10: single db instance, single prime-context instance, one Kafka cluster): the switch
 # database `routesphere` on pair2 :5434; the tree from the bed's one prime-context, the facade on :7091, upgraded in place; the topics
 # named by the ROOT tenant (the owner's Kafka rule, 2026-10-10: every topic suffixed by the operator tenant; a reseller gets none).
@@ -55,12 +57,18 @@ summary:
   #                          zone. No class of its own: the `window:` key makes the bootstrap instantiate a call
   #                          bean under this name (its own bookmark, worker and table).
   #   the CHARGEABLE one   : sum_chargeable_day / sum_chargeable_hr — every chargeable of every group, as it is.
-  # All six read the SAME outbox stream (entity cdr), each from its own bookmark.
+  # ---- the beans of service group 101 (ARCH-0077-S): the domestic WiFi session, the voice row with ServiceGroup 101 that
+  # billing-core writes from the switch's settlement (ONE customer chargeable: the package minutes in TF_min, or money in BDT) ----
+  #   the CALL category    : sum_voice_day_101 / sum_voice_hr_101 — the session as a domestic call: by payer, site, unit.
+  #                          Config-instantiated like the 30 pair; minutes and money key apart (tup_customercurrency).
+  # All eight read the SAME outbox stream (entity cdr), each from its own bookmark.
   enabledSummary:
     - dailyAdSummary                             # -> summarybeans/ad/DailyAdSummary.java   (sum_ad_day_30)
     - hourlyAdSummary                            # -> summarybeans/ad/HourlyAdSummary.java  (sum_ad_hr_30)
     - dailyCallSummarySg30                       # config-instantiated                       (sum_voice_day_30)
     - hourlyCallSummarySg30                      # config-instantiated                       (sum_voice_hr_30)
+    - dailyCallSummarySg101                      # config-instantiated                       (sum_voice_day_101)
+    - hourlyCallSummarySg101                     # config-instantiated                       (sum_voice_hr_101)
     - dailyChargeableSummary                     # -> summarybeans/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
     - hourlyChargeableSummary                    # -> summarybeans/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
   beans:
@@ -72,6 +80,14 @@ summary:
       window: hourly
       service-group: 30
       table-suffix: "30"                         # -> sum_voice_hr_30
+    dailyCallSummarySg101:
+      window: daily                              # no catalog class -> config-instantiated call bean
+      service-group: 101                         # keep the records whose customer chargeable is of group 101 (the WiFi session)
+      table-suffix: "101"                        # -> sum_voice_day_101
+    hourlyCallSummarySg101:
+      window: hourly
+      service-group: 101
+      table-suffix: "101"                        # -> sum_voice_hr_101
 
   # ---- the outbox ----
   outbox:

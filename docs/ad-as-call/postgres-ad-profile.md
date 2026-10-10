@@ -38,11 +38,15 @@ summary:
     - hourlyAdSummary                      # sum_ad_hr_30
     - dailyCallSummarySg30                 # sum_voice_day_30
     - hourlyCallSummarySg30                # sum_voice_hr_30
+    - dailyCallSummarySg101                # sum_voice_day_101  (ARCH-0077-S: the domestic WiFi session, service group 101)
+    - hourlyCallSummarySg101               # sum_voice_hr_101
     - dailyChargeableSummary               # sum_chargeable_day
     - hourlyChargeableSummary              # sum_chargeable_hr
   beans:
-    dailyCallSummarySg30:  { window: daily,  service-group: 30, table-suffix: "30" }
-    hourlyCallSummarySg30: { window: hourly, service-group: 30, table-suffix: "30" }
+    dailyCallSummarySg30:   { window: daily,  service-group: 30,  table-suffix: "30" }
+    hourlyCallSummarySg30:  { window: hourly, service-group: 30,  table-suffix: "30" }
+    dailyCallSummarySg101:  { window: daily,  service-group: 101, table-suffix: "101" }
+    hourlyCallSummarySg101: { window: hourly, service-group: 101, table-suffix: "101" }
 ```
 
 The lab's copy of it, with the lab's addresses: `src/main/resources/config/tenants/btcl/lab/profile-lab.yml`.
@@ -114,7 +118,7 @@ up, says it (ERROR), and tries again: after `retry-seconds`, each try a little l
 | the role | `summary_service`, LOGIN, its password in secreteer |
 | in each tier schema | USAGE and CREATE (prime-context's provisioning gives them) |
 | on billing-core's tables | SELECT; DELETE on `summary_affected` only (billing-core grants it when it makes the table). The reaper deletes the outbox rows every bean has passed — nothing else |
-| it makes, at its first use of a schema | `summary_offset` (the bookmarks), `summary_affected_dlq` (poison rows), and one table per enabled bean: `sum_ad_day_30`, `sum_ad_hr_30`, `sum_voice_day_30`, `sum_voice_hr_30`, `sum_chargeable_day`, `sum_chargeable_hr`. Plain tables, the table and its indexes in one transaction |
+| it makes, at its first use of a schema | `summary_offset` (the bookmarks), `summary_affected_dlq` (poison rows), and one table per enabled bean: `sum_ad_day_30`, `sum_ad_hr_30`, `sum_voice_day_30`, `sum_voice_hr_30`, `sum_voice_day_101`, `sum_voice_hr_101`, `sum_chargeable_day`, `sum_chargeable_hr`. Plain tables, the table and its indexes in one transaction |
 | it never makes | `summary_affected`, `cdr`, `cdrerror`, `acc_chargeable`. Only billing-core makes them. A tier that has no `summary_affected` yet WAITS: one WARN names the schema and the table, and it is picked up when the table appears — no restart |
 | who reads its tables | `ad_sphere`, through prime-context's default privileges. The DDL of the ad pair: `src/main/resources/db/postgres/sum_ad.sql`; its columns: the README |
 | after an upgrade | an ad table made by an earlier version is brought up to the new description at its first use — a column it lacks is added (`tup_contentid`; the old rows read `''`), a text column that is narrower is widened (`tup_rulecode`, 20 → 64; what it holds stays). A WARN line says each change. A table that is as described gets no statement. The service owns its tables, so it needs no new right |
@@ -178,11 +182,11 @@ The keys of a profile:
 | `summary.outbox.quarantine-after` | `8` | tries on a poison row before it goes to `summary_affected_dlq` |
 | `summary.outbox.entity-type` | `cdr` | the entity the reaper trims |
 | `summary.enabledSummary` | — | the beans to run |
-| `summary.beans.<name>.window` / `service-group` / `table-suffix` | — | a call bean made from the profile alone (group 30: suffix `"30"`) |
+| `summary.beans.<name>.window` / `service-group` / `table-suffix` | — | a call bean made from the profile alone (group 30: suffix `"30"`; group 101, the WiFi session: suffix `"101"`) |
 | `summary.zone` | `Asia/Dhaka` | MySQL only: "this year" of the partition horizon |
 | `summary.endpoints.local-only` | `false` | a lab's guard: refuse a start that would reach, or listen on, anything but this box (its first name, `summary.endpoints.loopback-only`, is the same switch). Never set on a deployment |
 
-Threads: one per (schema, bean) — 6 for each tier with this profile. They sleep until a ping or the poll.
+Threads: one per (schema, bean) — 8 for each tier with this profile. They sleep until a ping or the poll.
 
 ## 7 · The lab
 
@@ -197,6 +201,7 @@ Everything on 127.0.0.1, in containers named `ss-*`; no password exists.
 | `tools/lab/secret-e2e.sh` | the password by its variable's name, against a role that needs one |
 | `tools/lab/upgrade-e2e.sh [an older commit]` | an upgrade of a deployment that has rows, with two packaged jars: the older version sums, this one starts on the same schemas, brings its tables up to date and leaves the rows as they were |
 | `tools/lab/ping-topic-e2e.sh` | a ping topic that does not exist (a broker of its own, auto-create off): what it costs, and that it is heard, with no restart, once made |
+| `tools/lab/wifi-101-e2e.sh [pg \| mysql \| both]` | the WiFi session (service group 101) through the outbox with the packaged jar, both engines: the sessions land in `sum_voice_day_101` / `sum_voice_hr_101` only (minutes and money two rows), the 30 tables and the ad tables unchanged by them, `sum_chargeable_*` carrying the 101 legs |
 | `tools/lab/this-box-e2e.sh` | the lab's key: an address of this box's own interface is this box (a real prime-context never listens on loopback); another box's refuses the start |
 
 `mvn verify` runs the integration tests against the three containers; a test whose lab is away is skipped,

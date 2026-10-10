@@ -9,7 +9,7 @@
 # For each engine, on this box only (tools/lab/pg-lab.sh: PostgreSQL 16 on 127.0.0.1:7643, MySQL 5.7.44 on 127.0.0.1:7633,
 # Kafka on 127.0.0.1:7692), with a schema / database of its own that holds a `cdr` table and billing-core's outbox —
 # every view written is ONE cdr row and ONE outbox row in the same transaction, so "the summaries equal the cdr rows"
-# is read literally: count(cdr) = sum(views) of sum_ad_day_30 = of sum_ad_hr_30, and all six beans at the last row.
+# is read literally: count(cdr) = sum(views) of sum_ad_day_30 = of sum_ad_hr_30, and all eight beans at the last row.
 #   1. the service serves it (one tenant; the poll is the profile's 5 s); the first rows are summed
 #   2. (a) the service's SESSIONS are ENDED by the server under traffic — pg_terminate_backend / KILL — twice; more traffic;
 #          every row summed within 30 s; the service was not restarted
@@ -74,7 +74,7 @@ SQL
 setup_mysql() {
   myv "CREATE DATABASE $SCHEMA" >/dev/null
   myv "CREATE TABLE $SCHEMA.cdr (id bigint AUTO_INCREMENT PRIMARY KEY)" >/dev/null
-  # the lab's partition horizon (the views are of 2026-10-02): six tables of 731 daily partitions each take minutes on a busy box
+  # the lab's partition horizon (the views are of 2026-10-02): eight tables of 731 daily partitions each take minutes on a busy box
   OPTIONS=(-Dsummary.tenants.mode=single -Dsummary.store.kind=mysql -Dsummary.store.username=root
            -Dsummary.ddl.partition-start=2026-09-01 -Dsummary.ddl.partition-days=60
            "-Dsummary.store.url=jdbc:mysql://127.0.0.1:7633/$SCHEMA?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true")
@@ -91,7 +91,7 @@ cdrRows()  { q "$1" "select count(*) from $SCHEMA.cdr"; }
 dayViews() { q "$1" "select coalesce(sum(views),0) from $SCHEMA.sum_ad_day_30"; }
 hrViews()  { q "$1" "select coalesce(sum(views),0) from $SCHEMA.sum_ad_hr_30"; }
 written()  { q "$1" "select coalesce(max(id),0) from $SCHEMA.summary_affected"; }
-caughtUp() { q "$1" "select count(*) from $SCHEMA.summary_offset where last_offset >= $2"; }   # how many of the six beans are at the last outbox row
+caughtUp() { q "$1" "select count(*) from $SCHEMA.summary_offset where last_offset >= $2"; }   # how many of the eight beans are at the last outbox row
 sessions() { if [ "$1" = pg ]; then pgv postgres "select count(*) from pg_stat_activity where usename = 'summary_service'"; else myv "select count(*) from information_schema.processlist where id <> connection_id() and db = '$SCHEMA'"; fi; }
 endSessions() {   # the server ends every session of the service — what a restart does to them; how many
   if [ "$1" = pg ]; then pgv postgres "select count(pg_terminate_backend(pid)) from pg_stat_activity where usename = 'summary_service' and pid <> pg_backend_pid()"
@@ -101,12 +101,12 @@ endSessions() {   # the server ends every session of the service — what a rest
 answers() { if [ "$1" = pg ]; then docker exec "$PG" pg_isready -U postgres >/dev/null 2>&1 && [ "$(pgv summary_service "select 1")" = "1" ]; else [ "$(myv "select 1")" = "1" ]; fi; }
 equal() {   # $1 engine: every summary equals the cdr rows and every bean is at the last outbox row
   local rows; rows=$(cdrRows "$1"); local last; last=$(written "$1")
-  [ "$(dayViews "$1")" = "$rows" ] && [ "$(hrViews "$1")" = "$rows" ] && [ "$(caughtUp "$1" "$last")" = "6" ]
+  [ "$(dayViews "$1")" = "$rows" ] && [ "$(hrViews "$1")" = "$rows" ] && [ "$(caughtUp "$1" "$last")" = "8" ]
 }
 waitEqual() {   # $1 engine, $2 seconds at most; prints how long it took; false when not within it
   local started; started=$(date +%s)
   for _ in $(seq 1 $(( $2 * 5 ))); do
-    if equal "$1"; then echo "$(( $(date +%s) - started )) s: cdr $(cdrRows "$1") = sum_ad_day_30 $(dayViews "$1") = sum_ad_hr_30 $(hrViews "$1"), 6 of 6 beans at row $(written "$1")"; return 0; fi
+    if equal "$1"; then echo "$(( $(date +%s) - started )) s: cdr $(cdrRows "$1") = sum_ad_day_30 $(dayViews "$1") = sum_ad_hr_30 $(hrViews "$1"), 8 of 8 beans at row $(written "$1")"; return 0; fi
     sleep 0.2
   done
   echo "NOT EQUAL after $2 s: cdr $(cdrRows "$1"), sum_ad_day_30 $(dayViews "$1"), sum_ad_hr_30 $(hrViews "$1"), beans at the last row: $(caughtUp "$1" "$(written "$1")") of 6"; return 1
@@ -115,7 +115,7 @@ errorLines() { grep -c " ERROR " "$1" || true; }
 start_service() {   # $1 engine, $2 log; waits for the start's verdict
   tools/lab/run-lab.sh btcl/lab "${OPTIONS[@]}" > "$2" 2>&1 &
   service_pid=$!
-  for _ in $(seq 1 480); do grep -q "is served: 6 of 6\|could NOT be served\|NOT STARTED\|REFUSING" "$2" && break; sleep 0.5; done
+  for _ in $(seq 1 480); do grep -q "is served: 8 of 8\|could NOT be served\|NOT STARTED\|REFUSING" "$2" && break; sleep 0.5; done
 }
 
 story() {
@@ -127,7 +127,7 @@ story() {
   say "$engine · 1 · the service serves $SCHEMA; the first rows are summed"
   "setup_$engine"
   start_service "$engine" "$log"
-  grep -q "is served: 6 of 6" "$log" || { echo "not served:"; grep -E "ERROR|REFUS|NOT STARTED" "$log" | tail -8 | cut -c1-260; return 1; }
+  grep -q "is served: 8 of 8" "$log" || { echo "not served:"; grep -E "ERROR|REFUS|NOT STARTED" "$log" | tail -8 | cut -c1-260; return 1; }
   grep "store: " "$log" | sed 's/.*store: /the store: /' | cut -c1-230
   if [ "$engine" = mysql ]; then for _ in $(seq 1 60); do [ -n "$(myv "show tables in $SCHEMA like 'summary_affected'")" ] && break; sleep 0.5; done; fi
   write_rows "$engine" 20
@@ -171,8 +171,8 @@ story() {
   [ "$errorsThen" = "$errorsNow" ] || verdict=1
   local workerErrors infos
   workerErrors=$(grep -c "ERROR.*OutboxWorker\]" "$log" || true); infos=$(grep -c "writes again —" "$log" || true)
-  echo "the workers (6): $workerErrors ERROR line(s) over the three troubles (at most one per worker per trouble = 18), $infos 'writes again' INFO line(s) (one per ERROR)"
-  [ "$workerErrors" -le 18 ] && [ "$infos" = "$workerErrors" ] || verdict=1
+  echo "the workers (8): $workerErrors ERROR line(s) over the three troubles (at most one per worker per trouble = 24), $infos 'writes again' INFO line(s) (one per ERROR)"
+  [ "$workerErrors" -le 24 ] && [ "$infos" = "$workerErrors" ] || verdict=1
   grep -E "OutboxWorker\]" "$log" | grep -E " ERROR | INFO .*writes again" | sed 's/^\([^ ]*\) .* \(ERROR\|INFO\) .*OutboxWorker\] (\([^)]*\)) \(.*\)$/\1 \2 (\3) \4/' | cut -c1-200 | head -6
   echo "   …"
   stop_service
@@ -185,8 +185,8 @@ story() {
   docker start "$container" >/dev/null
   for _ in $(seq 1 180); do answers "$engine" && break; sleep 0.5; done
   local back2; back2=$(date +%s); echo "the database answers again at $(date +%T)"
-  for _ in $(seq 1 240); do grep -q "is served: 6 of 6" "$log" && break; sleep 0.5; done
-  grep -q "is served: 6 of 6" "$log" && echo "served $(( $(date +%s) - back2 )) s after the database answered (the watcher's retry; pid $service_pid, never restarted)" || { echo "FAILED: not served within 120 s of the database's return"; verdict=1; }
+  for _ in $(seq 1 240); do grep -q "is served: 8 of 8" "$log" && break; sleep 0.5; done
+  grep -q "is served: 8 of 8" "$log" && echo "served $(( $(date +%s) - back2 )) s after the database answered (the watcher's retry; pid $service_pid, never restarted)" || { echo "FAILED: not served within 120 s of the database's return"; verdict=1; }
   if [ "$engine" = mysql ]; then for _ in $(seq 1 60); do [ -n "$(myv "show tables in $SCHEMA like 'summary_offset'")" ] && break; sleep 0.5; done; fi
   write_rows "$engine" 30
   waitEqual "$engine" 60 || verdict=1

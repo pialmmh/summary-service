@@ -47,8 +47,8 @@ columns() { ask summary_service "select string_agg(column_name || coalesce('(' |
 start_this_version() {   # $1 = the log
   tools/lab/run-lab.sh btcl/lab -Dsummary.outbox.poll-interval-seconds=600 > "$1" 2>&1 &
   service_pid=$!
-  for _ in $(seq 1 240); do [ "$(grep -c "is served: 6 of 6" "$1" 2>/dev/null || true)" -ge 3 ] && break; grep -q "NOT STARTED\|REFUSING" "$1" && break; sleep 0.5; done
-  [ "$(grep -c "is served: 6 of 6" "$1")" -ge 3 ] || { echo "this version did not serve the three tiers:"; grep -E "ERROR|WARN|REFUS|NOT STARTED" "$1" | cut -c1-260 | tail -15; exit 1; }
+  for _ in $(seq 1 240); do [ "$(grep -c "is served: 8 of 8" "$1" 2>/dev/null || true)" -ge 3 ] && break; grep -q "NOT STARTED\|REFUSING" "$1" && break; sleep 0.5; done
+  [ "$(grep -c "is served: 8 of 8" "$1")" -ge 3 ] || { echo "this version did not serve the three tiers:"; grep -E "ERROR|WARN|REFUS|NOT STARTED" "$1" | cut -c1-260 | tail -15; exit 1; }
   for _ in $(seq 1 120); do grep -q "ping listener is hearing" "$1" && break; sleep 0.5; done
 }
 
