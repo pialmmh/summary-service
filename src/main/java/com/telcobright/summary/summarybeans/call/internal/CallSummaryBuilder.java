@@ -24,6 +24,11 @@ import java.math.RoundingMode;
  * on {@code ChargingStatus}. The common part gives the rest: in-partner = the payer, incoming route = the
  * campaign's route, outgoing route = the zone, {@code connectedcalls} = shown, the durations = the seconds watched.
  *
+ * <p>Service group 101 (the domestic WiFi session, ARCH-0077-S) is pre-rated like 30 — the switch settled each tier
+ * from the subscriber's buckets and billing built ONE customer chargeable from that settlement — but it is a CALL in
+ * every other way: the voice's {@code ChargingStatus} early return (a session of 0 seconds is counted, not costed),
+ * the route kept whole (no rule/app key), SG10's package stamps when the row carries them, no supplier or tax.
+ *
  * <p>Legacy quirk kept: SG10 sets {@code tup_matchedprefixcustomer} from the CHARGEABLE's prefix inside the
  * customer-direction stamp and then immediately overwrites it with {@code cdr.MatchedPrefixCustomer} — so the
  * CDR field is the surviving source (work order §2). {@code AdditionalSystemCodes}/{@code AdditionalPartyNumber}
@@ -34,6 +39,8 @@ final class CallSummaryBuilder {
     private static final Logger LOG = Logger.getLogger(CallSummaryBuilder.class);
     /** The ad view's service group. */
     static final int SERVICE_GROUP_AD = 30;
+    /** The domestic WiFi session's service group (billing-core's {@code SgWifiDomestic}; stated, pre-rated, never detected). */
+    static final int SERVICE_GROUP_WIFI = 101;
 
     private CallSummaryBuilder() {
     }
@@ -124,9 +131,34 @@ final class CallSummaryBuilder {
             s.tup_customerrate = nz(chargeable.unitPriceOrCharge());
             s.tup_customercurrency = chargeable.idBilledUom();
             s.customercost = nz(chargeable.billedAmount());
+        } else if (chargeable.servicegroup() == SERVICE_GROUP_WIFI) {  // SG101 — the domestic WiFi session as a Call (ARCH-0077-S)
+            stampWifiSession(s, cdr, chargeable, charged);
         } else {
             throw new IllegalArgumentException("no summary mapping for service group " + chargeable.servicegroup());
         }
+    }
+
+    /**
+     * The 101 branch: the 30 branch's customer-direction stamp WITHOUT the ad's route key, behind the VOICE's early
+     * return. PRE-RATED: billing's one customer chargeable carries what the switch settled, in the unit the tier paid
+     * in — {@code TF_min} (the package minutes) or {@code BDT} (money) — so {@code tup_customercurrency} keys units and
+     * money apart and they are never summed into one row; the unit rides in as the row carries it, never converted.
+     * {@code ChargingStatus} is the voice rule here (duration &gt; 0, billing-core BC-0007): a session of 0 seconds is
+     * counted, not costed — nothing is stamped for it, so no row of 0 {@code TF_min} is ever opened. The route is kept
+     * whole (a session's incoming route is the site; the wire sends no outgoing route). SG10's package stamps are
+     * taken when the row carries them in the legacy fields. Nothing is bought and no tax is on a session: the supplier,
+     * tax and VAT columns stay empty.
+     */
+    private static void stampWifiSession(CallSummary s, Cdr cdr, Chargeable chargeable, boolean charged) {
+        if (!charged) {
+            return;                                      // the voice's early return: ChargingStatus != 1
+        }
+        s.tup_matchedprefixcustomer = cdr.matchedPrefixCustomer();
+        s.tup_customerrate = nz(chargeable.unitPriceOrCharge());
+        s.tup_customercurrency = chargeable.idBilledUom();
+        s.customercost = nz(chargeable.billedAmount());
+        s.longDecimalAmount2 = parseDecimalOrZero(cdr.additionalSystemCodes(), cdr);  // package amount, when the row carries it
+        s.intAmount1 = parseIntOrZero(cdr.additionalPartyNumber(), cdr);              // idpackage, when the row carries it
     }
 
     private static void replaceNullsWithDefault(CallSummary s) {

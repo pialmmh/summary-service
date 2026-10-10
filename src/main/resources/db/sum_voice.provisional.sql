@@ -3,10 +3,11 @@
 --
 -- Faithful to billing-core's AbstractCdrSummary column set + order (see CallSummary.INSERT_COLUMNS).
 -- Table name is DERIVED: sum_voice_<window>_<table-suffix>; the suffix (config per bean) selects one of the
--- PRE-PROVISIONED sets — sum_voice_{day,hr}_{01,02,03}. Since the 2026-07-02 directive the bean also
+-- PRE-PROVISIONED sets — sum_voice_{day,hr}_{01,02,03,101}. Since the 2026-07-02 directive the bean also
 -- SELF-PROVISIONS: at activation it runs CREATE TABLE IF NOT EXISTS with the FULL daily partition set inside
 -- the CREATE (see SumVoiceDdl; a no-op over billing's existing live sets). Suffixes: SG10 -> "03",
--- SG11 -> "02" (billing's live sets, dotnet A6).
+-- SG11 -> "02" (billing's live sets, dotnet A6); the ad view SG30 -> "30" (self-provisioned only, no copy here);
+-- the domestic WiFi session SG101 -> "101" (ARCH-0077-S: the session summed as a domestic call, the same shape).
 --
 -- Engine contract this schema must satisfy:
 --   * id BIGINT AUTO_INCREMENT PRIMARY KEY — the engine omits id on INSERT and targets UPDATE/DELETE by id
@@ -87,9 +88,14 @@ CREATE TABLE IF NOT EXISTS sum_voice_day_03 (
     -- described table (SumVoiceDdl) has never declared it.
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- the 3 pre-provisioned sets × {day, hr} — identical shape, different bucket + suffix (created up front, partitioned)
+-- the 4 pre-provisioned sets × {day, hr} — identical shape, different bucket + suffix (created up front, partitioned)
 CREATE TABLE IF NOT EXISTS sum_voice_hr_03  LIKE sum_voice_day_03;
 CREATE TABLE IF NOT EXISTS sum_voice_day_01 LIKE sum_voice_day_03;
 CREATE TABLE IF NOT EXISTS sum_voice_hr_01  LIKE sum_voice_day_03;
 CREATE TABLE IF NOT EXISTS sum_voice_day_02 LIKE sum_voice_day_03;
 CREATE TABLE IF NOT EXISTS sum_voice_hr_02  LIKE sum_voice_day_03;
+-- service group 101, the domestic WiFi session (ARCH-0077-S): the voice row summed under its own suffix. The same
+-- shape as every set — tup_customercurrency keys the package minutes (TF_min) apart from money (BDT), never one row.
+-- The service makes this pair itself at the bean's first use (SumVoiceDdl), on MySQL and on PostgreSQL alike.
+CREATE TABLE IF NOT EXISTS sum_voice_day_101 LIKE sum_voice_day_03;
+CREATE TABLE IF NOT EXISTS sum_voice_hr_101  LIKE sum_voice_day_03;

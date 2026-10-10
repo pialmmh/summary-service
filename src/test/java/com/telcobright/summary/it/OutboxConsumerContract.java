@@ -18,6 +18,7 @@ import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.CrashAtCommit;
+import com.telcobright.summary.testkit.WifiSessionTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -328,6 +329,92 @@ abstract class OutboxConsumerContract {
             System.clearProperty("summary.ddl.partition-start");
             System.clearProperty("summary.ddl.partition-days");
         }
+    }
+
+    // ---- ARCH-0077-S item 2: the pre-provisioned voice table set with suffix 101, on this engine ----
+
+    @Test
+    void the_101_table_set_is_made_on_this_engine_exactly_as_the_30_set_is_and_as_described() throws SQLException {
+        SummaryBean<CallSummary> daily30 = CallSummaries.forWindow("dailyCallSummarySg30", "daily", "30", 30, null);
+        SummaryBean<CallSummary> daily101 = WifiSessionTestSupport.daily101();
+        SummaryBean<CallSummary> hourly101 = WifiSessionTestSupport.hourly101();
+        provisionSmall(daily30);
+        provisionSmall(daily101);
+        provisionSmall(hourly101);
+
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            java.util.Map<String, Integer> set30 = look.store().columnWidths("sum_voice_day_30");
+            java.util.Map<String, Integer> day101 = look.store().columnWidths(WifiSessionTestSupport.DAY_TABLE);
+            java.util.Map<String, Integer> hour101 = look.store().columnWidths(WifiSessionTestSupport.HOUR_TABLE);
+
+            assertEquals(daily101.tableSpec().columnNames().size(), day101.size(), "id and the 47 data columns are in the real table");
+            assertEquals(set30, day101, "column for column, width for width: the 30 set's table under another suffix");
+            assertEquals(set30, hour101, "and the hour table the same");
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(daily101.tableSpec(), dialect(), day101),
+                    "as described: nothing for the next start to bring up to date");
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(hourly101.tableSpec(), dialect(), hour101));
+            look.commit();
+        } finally {
+            look.close();
+        }
+        assertEquals(0, count(WifiSessionTestSupport.DAY_TABLE), "made empty");
+        assertEquals(0, count(WifiSessionTestSupport.HOUR_TABLE));
+    }
+
+    // ---- ARCH-0077-S item 3: the sessions through the outbox land in the 101 tables ONLY, on this engine ----
+
+    @Test
+    void one_outbox_row_of_wifi_sessions_feeds_the_101_tables_and_the_chargeable_table_and_leaves_the_30_tables_alone() {
+        SummaryBean<CallSummary> daily30 = CallSummaries.forWindow("dailyCallSummarySg30", "daily", "30", 30, null);
+        SummaryBean<CallSummary> daily101 = WifiSessionTestSupport.daily101();
+        SummaryBean<CallSummary> hourly101 = WifiSessionTestSupport.hourly101();
+        SummaryBean<ChargeableSummary> chargeableDaily = DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build();
+        AdSummaryBean adDaily = AdTestSupport.dailyBean();
+        for (SummaryBean<?> each : List.of(daily30, daily101, hourly101, chargeableDaily, adDaily)) provisionSmall(each);
+        java.time.LocalDateTime t = WifiSessionTestSupport.at(2026, 10, 10, 9, 0);
+        // row 1: one ad view (group 30); row 2: two sessions from the bucket, one paid in money, one of zero seconds, and a view again
+        seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t))));
+        seedOutbox(2, OutboxCodec.encode(AdTestSupport.batchJson(List.of(WifiSessionTestSupport.session(t).json(),
+                WifiSessionTestSupport.session(t.plusMinutes(40)).json(), WifiSessionTestSupport.sessionPaidInMoney(t.plusMinutes(50)).json(),
+                WifiSessionTestSupport.sessionOfZeroSeconds(t.plusMinutes(55)).json(), AdTestSupport.leafView(t.plusMinutes(5)).json()))));
+
+        for (SummaryBean<?> each : List.of(daily30, daily101, hourly101, chargeableDaily, adDaily)) {
+            assertEquals(2, reader.drain(each), each.name() + " reads both rows from its own bookmark");
+        }
+
+        assertEquals(3, count(WifiSessionTestSupport.DAY_TABLE), "the minutes, the money, and the uncosted zero-second session: three rows");
+        assertEquals("2 | 2 | 60.000000", voiceRow(WifiSessionTestSupport.DAY_TABLE, "TF_min"), "calls | charged | cost: 30 + 30 minutes");
+        assertEquals("1 | 1 | 3.000000", voiceRow(WifiSessionTestSupport.DAY_TABLE, "BDT"));
+        assertEquals("1 | 0 | 0.000000", voiceRow(WifiSessionTestSupport.DAY_TABLE, ""), "counted, not charged, not costed");
+        assertEquals(4, queryLong("select sum(totalcalls) from " + WifiSessionTestSupport.HOUR_TABLE), "the hour table: the same four sessions");
+        assertEquals("2 | 2 | 60.000000", voiceRow(WifiSessionTestSupport.HOUR_TABLE, "TF_min"));
+
+        assertEquals(2, queryLong("select sum(totalcalls) from sum_voice_day_30"), "the 30 table: the two views and not one session");
+        assertEquals(0, queryLong("select count(*) from sum_voice_day_30 where tup_customercurrency = 'TF_min'"), "no minutes row opened there");
+        assertEquals(2, queryLong("select sum(views) from sum_ad_day_30"), "the ad table sees no session");
+        assertEquals(0, queryLong("select count(*) from sum_voice_day_03"), "the group-10 table: nothing");
+
+        assertEquals("3 | 60.00000000", chargeableRow(101, "TF_min"), "legs | amount (DECIMAL(18,8) there): the two bucket sessions and the zero-second one (0 TF_min)");
+        assertEquals("1 | 3.00000000", chargeableRow(101, "BDT"));
+        assertEquals("2 | 1.00000000", chargeableRow(30, "BDT"), "the views' legs beside them, as every group");
+
+        for (SummaryBean<?> each : List.of(daily30, daily101, hourly101, chargeableDaily, adDaily)) {
+            assertEquals(0, reader.drain(each), "re-drain is a no-op (exactly once per bean)");
+        }
+        assertEquals("2 | 2 | 60.000000", voiceRow(WifiSessionTestSupport.DAY_TABLE, "TF_min"));
+    }
+
+    /** {@code totalcalls | successfulcalls | customercost} of the one row of {@code table} in {@code unit}; null when there is not exactly one. */
+    private String voiceRow(String table, String unit) {
+        return queryLong("select count(*) from " + table + " where tup_customercurrency = '" + unit + "'") != 1 ? null
+                : queryText("select concat_ws(' | ', totalcalls, successfulcalls, customercost) from " + table + " where tup_customercurrency = '" + unit + "'");
+    }
+
+    /** {@code sum(totalcount) | sum(BilledAmount)} of the chargeable day rows of {@code group} in {@code unit}. */
+    private String chargeableRow(int group, String unit) {
+        return queryText("select concat_ws(' | ', sum(totalcount), sum(BilledAmount)) from sum_chargeable_day where tup_servicegroup = " + group
+                + " and tup_billeduom = '" + unit + "'");
     }
 
     // ---- S13: the ad summaries are keyed by CONTENT too ----

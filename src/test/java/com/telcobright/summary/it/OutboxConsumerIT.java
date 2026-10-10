@@ -16,8 +16,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * The outbox consumer's contract ({@link OutboxConsumerContract}) on MySQL — the tests this class always held, now
  * shared word for word with PostgreSQL; the fixture is the one it always had (a throwaway database, the outbox and
- * the voice tables made by hand as production has them). SELF-SKIPS if MySQL is unreachable; password via
- * {@code -Dsummary.it.mysql.password=…} (no credential in git). The lab: {@code tools/lab/pg-lab.sh mysql}, then
+ * the voice tables made by hand as production has them). SELF-SKIPS if MySQL is unreachable; the password by the NAME of
+ * a variable — {@code SUMMARY_IT_MYSQL_PASSWORD} in the environment (never on a command line, never in a file of this
+ * repository), or {@code -Dsummary.it.mysql.password=…} for a lab that has none. The lab: {@code tools/lab/pg-lab.sh mysql}, then
  * {@code -Dsummary.it.mysql.url=jdbc:mysql://127.0.0.1:7633/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true}.
  */
 class OutboxConsumerIT extends OutboxConsumerContract {
@@ -25,7 +26,7 @@ class OutboxConsumerIT extends OutboxConsumerContract {
     private static final String SERVER_URL = System.getProperty("summary.it.mysql.url",
             "jdbc:mysql://127.0.0.1:7633/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true");
     private static final String USER = System.getProperty("summary.it.mysql.user", "root");
-    private static final String PASSWORD = System.getProperty("summary.it.mysql.password", "");
+    private static final String PASSWORD = System.getProperty("summary.it.mysql.password", System.getenv().getOrDefault("SUMMARY_IT_MYSQL_PASSWORD", ""));
     /** The throwaway database; {@code -Dsummary.it.mysql.db=…} lets two runs share one server without sharing tables. */
     private static final String DB = System.getProperty("summary.it.mysql.db", "summary_it");
 
@@ -106,6 +107,8 @@ class OutboxConsumerIT extends OutboxConsumerContract {
                 + " data longtext not null, primary key(id), key ix_entity(entity_type,id)) engine=innodb default charset=utf8mb4");
         exec(conn, "drop table if exists sum_voice_day_30");
         exec(conn, "drop table if exists sum_voice_hr_30");
+        exec(conn, "drop table if exists sum_voice_day_101");
+        exec(conn, "drop table if exists sum_voice_hr_101");
         exec(conn, "drop table if exists sum_ad_day_30");
         exec(conn, "drop table if exists sum_ad_hr_30");
         exec(conn, "drop table if exists sum_chargeable_day");
