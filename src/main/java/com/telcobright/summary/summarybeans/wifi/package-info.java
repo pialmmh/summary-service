@@ -5,9 +5,11 @@
  * {@link com.telcobright.summary.summarybeans.wifi.WifiSummaries}):
  * <ul>
  *   <li>the SESSION per hour / day — {@code kind: wifi-session}: the {@code cdr} outbox's records of service group 101
- *       (the WiFi session is a Call), keyed by the record's own COLUMNS (site, zone, grant tier, package, unit, cause
- *       family), summed into {@code sum_wifi_hr_101} / {@code sum_wifi_day_101} with the sessions, the connected ones,
- *       the seconds, the bytes up and down, the cost — and the DERIVED average session duration;</li>
+ *       (the WiFi session is a Call), keyed by the record's own COLUMNS (the BRAS — {@code InMgwId}, SS-0007 — site,
+ *       zone, grant tier, package, unit, cause family), summed into {@code sum_wifi_hr_101} / {@code sum_wifi_day_101}
+ *       with the sessions, the connected ones, the seconds, the bytes up and down, the cost — and the DERIVED average
+ *       session duration. The rows summarised before SS-0007 keep {@code tup_gw = ''} (the column's default, given to
+ *       an older table at its first use);</li>
  *   <li>the volume per DESTINATION per hour / day — {@code kind: wifi-dst}: the {@code wifi_flow} outbox's rows (the
  *       gateway's flow windows billing-core ingested), keyed by gateway, site, zone, remote address, protocol and
  *       port, summed into {@code sum_wifi_dst_hr} / {@code sum_wifi_dst_day} with the bytes, the packets and the flows.
