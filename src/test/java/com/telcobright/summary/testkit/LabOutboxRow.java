@@ -20,10 +20,12 @@ import java.util.List;
  *   <li>{@code ad} (the default — one ad view, service group 30);</li>
  *   <li>{@code wifi-minutes} / {@code wifi-money} / {@code wifi-zero} — one domestic WiFi session of service group 101 as
  *       BC-0007 wrote it (ARCH-0077-S): 30 {@code TF_min} from the bucket, 3.00 BDT, 0 seconds;</li>
- *   <li>{@code wifi-bc0008 <start> <site> <zone> <tier> <category> <packageCode> <seconds> <bytesUp> <bytesDn> <unit> <amount> <cause> <validFlag>}
+ *   <li>{@code wifi-bc0008 <start> <site> <zone> <tier> <category> <packageCode> <seconds> <bytesUp> <bytesDn> <unit> <amount> <cause> <validFlag> [<gw>]}
  *       — one session as BC-0008 writes it, with the WiFi columns (SS-0006): {@code start} = {@code yyyy-MM-ddTHH:mm}
  *       (the tenant's wall clock), {@code unit} = {@code TF_min} (then {@code amount} = the minutes) | {@code BDT}
- *       ({@code amount} = the money); {@code seconds} 0 = a session of zero seconds (counted, not costed);</li>
+ *       ({@code amount} = the money); {@code seconds} 0 = a session of zero seconds (counted, not costed); {@code gw}
+ *       (SS-0007) = the BRAS id in {@code InMgwId}, {@code -} = the record names none (the key left out), absent =
+ *       {@code bras-2} as before;</li>
  *   <li>{@code wifi-flow <window_start> <rows>} — one {@code wifi_flow} outbox row of gateway {@code bras-2}, zone
  *       {@code dhaka-north}: {@code window_start} an ISO instant in UTC ({@code 2026-10-16T09:41:00Z}), {@code rows} =
  *       {@code site,remote,port,proto,packets_up,packets_dn,bytes_up,bytes_dn;…} (a MAC per row, {@code aa:bb:cc:dd:ee:0N}).</li>
@@ -52,10 +54,10 @@ public final class LabOutboxRow {
         };
     }
 
-    /** {@code wifi-bc0008 start site zone tier category packageCode seconds bytesUp bytesDn unit amount cause validFlag}. */
+    /** {@code wifi-bc0008 start site zone tier category packageCode seconds bytesUp bytesDn unit amount cause validFlag [gw]}. */
     private static Session bc0008Session(String[] a) {
-        if (a.length != 14) {
-            throw new IllegalArgumentException("wifi-bc0008 <start> <site> <zone> <tier> <category> <packageCode> <seconds> <bytesUp> <bytesDn> <unit> <amount> <cause> <validFlag>");
+        if (a.length != 14 && a.length != 15) {
+            throw new IllegalArgumentException("wifi-bc0008 <start> <site> <zone> <tier> <category> <packageCode> <seconds> <bytesUp> <bytesDn> <unit> <amount> <cause> <validFlag> [<gw> | -]");
         }
         Session s = WifiSessionTestSupport.measuredSession(LocalDateTime.parse(a[1]))
                 .site(a[2]).zone(a[3]).grantTier(a[4], Integer.parseInt(a[5])).packageCode(a[6])
@@ -68,6 +70,9 @@ public final class LabOutboxRow {
         }
         if ("0".equals(a[7])) {
             s.ofZeroSeconds();
+        }
+        if (a.length == 15) {
+            s.gateway("-".equals(a[14]) ? null : a[14]);   // the BRAS the record names (SS-0007), or none
         }
         return s;
     }

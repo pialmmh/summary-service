@@ -212,7 +212,7 @@ class WifiSessionSummaryBeanTest {
         SummaryTableSpec spec = dailySession().tableSpec();
 
         assertEquals("sum_wifi_day_101", spec.name());
-        assertEquals(List.of("id", "tup_switchid", "tup_inpartnerid", "tup_site", "tup_zone", "tup_granttier", "tup_category", "tup_packagecode",
+        assertEquals(List.of("id", "tup_switchid", "tup_inpartnerid", "tup_gw", "tup_site", "tup_zone", "tup_granttier", "tup_category", "tup_packagecode",
                 "tup_customercurrency", "tup_causefamily", "tup_starttime", "sessions", "sessions_connected", "total_duration_sec", "avg_session_sec",
                 "bytes_up", "bytes_dn", "customercost"), spec.columnNames(), "id, then the INSERT columns in their order");
         assertEquals("id," + WifiSessionSummary.INSERT_COLUMNS, String.join(",", spec.columnNames()));

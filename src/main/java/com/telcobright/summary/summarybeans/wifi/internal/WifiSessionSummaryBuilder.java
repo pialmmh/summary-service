@@ -14,7 +14,8 @@ import java.math.RoundingMode;
  * 101 branch reads, {@code CallSummaryBuilder.stampWifiSession}).
  *
  * <p><b>The key, every part a COLUMN of the record</b> (the WiFi architect's rule a; billing-core's dictionary
- * {@code WifiColumns.java:82-104}): {@code tup_site} = {@code InTrunkAdditionalInfo}, {@code tup_zone} =
+ * {@code WifiColumns.java:82-104}): {@code tup_gw} = {@code InMgwId} — the BRAS id, the meta {@code gw} (SS-0007, the
+ * owner's R4; {@code ''} when the record names none) — {@code tup_site} = {@code InTrunkAdditionalInfo}, {@code tup_zone} =
  * {@code OutTrunkAdditionalInfo}, {@code tup_granttier} = {@code MatchedPrefixY}, {@code tup_category} =
  * {@code Category}, {@code tup_packagecode} = {@code MatchedPrefixCustomer}; {@code tup_switchid} and
  * {@code tup_inpartnerid} as every call summary; {@code tup_customercurrency} = the chargeable's unit, stamped as
@@ -38,6 +39,8 @@ final class WifiSessionSummaryBuilder {
     // its source's full width — a zone and a site are 64 there too
     static final int SITE_WIDTH = 64;
     static final int ZONE_WIDTH = 64;
+    /** {@code tup_gw}: the BRAS id (the gateway id rule allows 32) — ONE number with the destination sums' {@code tup_gw}. */
+    static final int GW_WIDTH = WifiDestinationSummaryBuilder.GW_WIDTH;
     /** {@code tup_granttier}: one of the gateway's four words (free, paid, admin, test). */
     static final int GRANTTIER_WIDTH = 16;
     /** {@code tup_packagecode}: the package's code at its source (the rate prefix the base wrote). */
@@ -63,6 +66,7 @@ final class WifiSessionSummaryBuilder {
     private static void stampKeyFromTheColumns(WifiSessionSummary s, Cdr cdr) {
         s.tup_switchid = cdr.switchId();
         s.tup_inpartnerid = cdr.inPartnerId() == null ? 0 : cdr.inPartnerId();
+        s.tup_gw = clip(orEmpty(cdr.inMgwId()), GW_WIDTH);
         s.tup_site = clip(orEmpty(cdr.inTrunkAdditionalInfo()), SITE_WIDTH);
         s.tup_zone = clip(orEmpty(cdr.outTrunkAdditionalInfo()), ZONE_WIDTH);
         s.tup_granttier = clip(orEmpty(cdr.matchedPrefixY()), GRANTTIER_WIDTH);

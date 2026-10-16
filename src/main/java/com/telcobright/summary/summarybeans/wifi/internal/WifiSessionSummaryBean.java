@@ -138,6 +138,7 @@ public abstract class WifiSessionSummaryBean implements SummaryBean<WifiSessionS
         s.setId(rs.getLong("id"));
         s.tup_switchid = rs.getInt("tup_switchid");
         s.tup_inpartnerid = rs.getInt("tup_inpartnerid");
+        s.tup_gw = str(rs, "tup_gw");
         s.tup_site = str(rs, "tup_site");
         s.tup_zone = str(rs, "tup_zone");
         s.tup_granttier = str(rs, "tup_granttier");
