@@ -109,6 +109,8 @@ class OutboxConsumerIT extends OutboxConsumerContract {
         exec(conn, "drop table if exists sum_voice_hr_30");
         exec(conn, "drop table if exists sum_voice_day_101");
         exec(conn, "drop table if exists sum_voice_hr_101");
+        exec(conn, "drop table if exists sum_wifi_day_101");
+        exec(conn, "drop table if exists sum_wifi_hr_101");
         exec(conn, "drop table if exists sum_ad_day_30");
         exec(conn, "drop table if exists sum_ad_hr_30");
         exec(conn, "drop table if exists sum_chargeable_day");

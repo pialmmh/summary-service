@@ -16,8 +16,10 @@ import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.wifi.model.WifiSessionSummary;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.CrashAtCommit;
+import com.telcobright.summary.testkit.WifiBeansTestSupport;
 import com.telcobright.summary.testkit.WifiSessionTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -403,6 +405,65 @@ abstract class OutboxConsumerContract {
             assertEquals(0, reader.drain(each), "re-drain is a no-op (exactly once per bean)");
         }
         assertEquals("2 | 2 | 60.000000", voiceRow(WifiSessionTestSupport.DAY_TABLE, "TF_min"));
+    }
+
+    // ---- SS-0006 item 2: the WiFi session tables, made by the service on this engine, hold the known rows of a replayed hour ----
+
+    @Test
+    void a_replayed_hour_of_wifi_sessions_lands_the_known_rows_in_the_wifi_session_tables_the_service_made_on_this_engine() throws SQLException {
+        SummaryBean<WifiSessionSummary> daily = WifiBeansTestSupport.dailySession();
+        SummaryBean<WifiSessionSummary> hourly = WifiBeansTestSupport.hourlySession();
+        SummaryBean<CallSummary> voice101 = WifiSessionTestSupport.daily101();
+        for (SummaryBean<?> each : List.of(daily, hourly, voice101)) provisionSmall(each);
+
+        // the tables as the catalog has them: every described column, nothing for the next start to bring up to date
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            for (SummaryBean<WifiSessionSummary> bean : List.of(daily, hourly)) {
+                java.util.Map<String, Integer> made = look.store().columnWidths(bean.table());
+                assertEquals(bean.tableSpec().columnNames().stream().map(String::toLowerCase).sorted().toList(),
+                        made.keySet().stream().map(String::toLowerCase).sorted().toList(), bean.table() + ": the columns as described");
+                assertEquals(64, made.entrySet().stream().filter(c -> c.getKey().equalsIgnoreCase("tup_site")).findFirst().orElseThrow().getValue());
+                assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(bean.tableSpec(), dialect(), made), "as described");
+            }
+            look.commit();
+        } finally {
+            look.close();
+        }
+
+        // the known hour as two outbox rows (A, B | C, E, D, F, and a view and a voice call that are nobody's session here)
+        List<WifiSessionTestSupport.Session> hour = WifiBeansTestSupport.knownHour();
+        seedOutbox(1, OutboxCodec.encode(WifiSessionTestSupport.batchOf(hour.get(0), hour.get(1))));
+        seedOutbox(2, OutboxCodec.encode(AdTestSupport.batchJson(List.of(hour.get(2).json(), hour.get(3).json(), hour.get(4).json(), hour.get(5).json(),
+                AdTestSupport.leafView(WifiBeansTestSupport.THE_HOUR).json(), CdrTestSupport.entryJson(CdrTestSupport.sg10Entry(WifiBeansTestSupport.THE_HOUR))))));
+
+        for (SummaryBean<?> each : List.of(daily, hourly, voice101)) {
+            assertEquals(2, reader.drain(each), each.name() + " reads both rows from its own bookmark");
+        }
+
+        for (String table : List.of(WifiBeansTestSupport.SESSION_HOUR_TABLE, WifiBeansTestSupport.SESSION_DAY_TABLE)) {
+            assertEquals(4, count(table), table + ": the paid minutes row, the money row, the uncosted zero-second row, the free row");
+            assertEquals("3 | 3 | 2700 | 900.000000 | 1235567 | 12347678 | 45.000000", wifiRow(table, "mirpur-10", "TF_min", "other"), table + " A + B + E (E unmeasured, summed)");
+            assertEquals("1 | 1 | 900 | 900.000000 | 500 | 7000 | 3.000000", wifiRow(table, "mirpur-10", "BDT", "idle"), table + " C");
+            assertEquals("1 | 0 | 0 | 0.000000 | 0 | 0 | 0.000000", wifiRow(table, "mirpur-10", "", "other"), table + " D");
+            assertEquals("1 | 1 | 900 | 900.000000 | 100 | 200 | 0.000000", wifiRow(table, "uttara-7", "TF_min", "volume"), table + " F");
+            assertEquals(6, queryLong("select sum(sessions) from " + table), "every session of group 101 — the view and the voice call are not there");
+        }
+        assertEquals(1, queryLong("select count(distinct tup_starttime) from " + WifiBeansTestSupport.SESSION_HOUR_TABLE), "one hour");
+        assertEquals("2026-10-16 09:00:00", queryText("select tup_starttime from " + WifiBeansTestSupport.SESSION_HOUR_TABLE + " where tup_site = 'uttara-7'").substring(0, 19));
+        assertEquals(6, queryLong("select sum(totalcalls) from " + WifiSessionTestSupport.DAY_TABLE), "the 101 VOICE table counts the same six, as before");
+
+        for (SummaryBean<?> each : List.of(daily, hourly)) {
+            assertEquals(0, reader.drain(each), "re-drain is a no-op (exactly once per bean)");
+        }
+        assertEquals("3 | 3 | 2700 | 900.000000 | 1235567 | 12347678 | 45.000000", wifiRow(WifiBeansTestSupport.SESSION_DAY_TABLE, "mirpur-10", "TF_min", "other"));
+    }
+
+    /** {@code sessions | connected | total | avg | up | dn | cost} of the one row of {@code table} at a site, in a unit, of a family; null when not exactly one. */
+    private String wifiRow(String table, String site, String unit, String family) {
+        String where = " where tup_site = '" + site + "' and tup_customercurrency = '" + unit + "' and tup_causefamily = '" + family + "'";
+        return queryLong("select count(*) from " + table + where) != 1 ? null
+                : queryText("select concat_ws(' | ', sessions, sessions_connected, total_duration_sec, avg_session_sec, bytes_up, bytes_dn, customercost) from " + table + where);
     }
 
     /** {@code totalcalls | successfulcalls | customercost} of the one row of {@code table} in {@code unit}; null when there is not exactly one. */
