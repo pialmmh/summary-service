@@ -7,7 +7,6 @@ import com.telcobright.summary.outbox.internal.OutboxReaper;
 import com.telcobright.summary.ping.internal.PingListener;
 import com.telcobright.summary.registry.api.SummaryBeanRegistry;
 import com.telcobright.summary.runtime.internal.StoreDataSource;
-import com.telcobright.summary.summarybeans.call.CallSummaries;
 import com.telcobright.summary.tenancy.api.TenantWatcher;
 
 import io.quarkus.runtime.Quarkus;
@@ -39,7 +38,8 @@ import java.util.function.IntConsumer;
  * <p>A new summary bean = a new {@code @Singleton SummaryBean} class in its category package; no factory, no
  * registration code — list its {@link SummaryBean#name()} in {@code enabledSummary} to activate it. An enabled
  * name with NO catalog class but a {@code summary.beans.<name>.window} key is CONFIG-INSTANTIATED instead
- * (§12g) — an extra call-bean instance under its own name, e.g. the SG11 pair beside the SG10 catalog beans.
+ * (§12g, {@link ConfigInstantiatedBeans}) — an extra instance under its own name: a call bean (e.g. the SG11 pair
+ * beside the SG10 catalog beans), or, with {@code kind: wifi-session | wifi-dst}, a WiFi bean (SS-0006).
  */
 @ApplicationScoped
 public class SummaryBootstrap {
@@ -196,31 +196,18 @@ public class SummaryBootstrap {
             registry.register(bean);
             LOG.infof("bean registered: name=%s entity=%s window=%s table=%s", name, bean.entityType(), bean.window(), bean.table());
         } catch (RuntimeException e) {
-            LOG.errorf(e, "could not activate summary bean '%s'", name);
+            LOG.errorf(e, "could not activate summary bean '%s': %s", name, e.getMessage());   // the cause in the line itself: a refused kind says its words here
         }
     }
 
     /**
      * The config-instantiated path (§12g): an enabled name with no catalog class but a
-     * {@code summary.beans.<name>.window} key becomes an EXTRA instance of the call category under its own
-     * name — how a second service group (legacy covered SG10 AND SG11) gets its own worker/offset/table
-     * without a per-SG class. v1 has one category; a {@code category:} key will select among factories
-     * once a second category exists.
+     * {@code summary.beans.<name>.window} key becomes an EXTRA instance under its own name — a call bean, or a WiFi
+     * bean by its {@code kind} ({@link ConfigInstantiatedBeans}); an unknown kind throws in words and is said by the
+     * caller, which activates no bean under that name.
      */
     private SummaryBean<?> configInstantiated(String name) {
-        Config config = ConfigProvider.getConfig();
-        String window = config.getOptionalValue("summary.beans." + name + ".window", String.class).orElse(null);
-        if (window == null) {
-            return null;
-        }
-        Integer serviceGroup = config.getOptionalValue("summary.beans." + name + ".service-group", Integer.class).orElse(null);
-        if (serviceGroup == null) {
-            LOG.errorf("config-instantiated bean '%s' needs summary.beans.%s.service-group", name, name);
-            return null;
-        }
-        String tableSuffix = config.getOptionalValue("summary.beans." + name + ".table-suffix", String.class).orElse(null);
-        String context = config.getOptionalValue("summary.beans." + name + ".context", String.class).orElse(null);
-        return CallSummaries.forWindow(name, window, tableSuffix, serviceGroup, context);
+        return ConfigInstantiatedBeans.from(ConfigProvider.getConfig(), name);
     }
 
     private SummaryBean<?> findByName(String name) {

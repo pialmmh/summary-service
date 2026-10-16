@@ -169,7 +169,11 @@ A row is one KEY — every `tup_*` column — in one window; the measures are su
 - `config/tenants/<tenant>/<profile>/profile-<profile>.yml`: the store (`summary.store.*`: kind, url, username, password | password-ref), the tenants
   (`summary.tenants.*`: single | tree), the `summary.contexts` (config-manager) block, the `summary.outbox`
   settings, and the **`enabledSummary`** list + each bean's `table-suffix`/`service-group`/`context` (the window
-  is the class — or the `window:` key for config-instantiated instances). A profile answers `summary.*` keys by
+  is the class — or the `window:` key for config-instantiated instances). A config-instantiated instance is a
+  call bean unless its **`kind:`** says otherwise (SS-0006): `kind: wifi-session` makes the WiFi session bean of the
+  window (`sum_wifi_<window>_101` — group 101 and the suffix fixed by the kind; keys by the record's columns, the
+  derived `avg_session_sec`), `kind: wifi-dst` the volume-per-destination bean (`sum_wifi_dst_<window>`, the
+  `wifi_flow` entity); any other word refuses that bean at the start, in words. A profile answers `summary.*` keys by
   name and lists nothing (`TenantProfileConfigSource`): no tenant's value is baked into the jar at build time.
 - **The ping's topic carries the ROOT on a deployment**: `summary.outbox.ping-topic: cdr_summary_ping_<root>`, and
   the SAME name on billing-core's side (its `billing.summary.ping-topic`) — as the lane's other topics do
@@ -204,6 +208,9 @@ ping/         PingListener (Kafka cdr_summary_ping → wake the workers of the t
 config/       TenantProfileConfigSource (routesphere-like profile loader)
 summarybeans/ one package per category (call + chargeable today; sms/packetflow/session later)
   call/       HourlySummary · DailySummary · CallSummaries (config-instantiated extras, e.g. the SG11 pair)
+  wifi/       WifiSummaries · WifiBeanKind (kind: wifi-session | wifi-dst — SS-0006): the session per window
+              (sum_wifi_<window>_101, model/WifiSessionSummary) and the volume per destination (sum_wifi_dst_<window>,
+              model/WifiDestinationSummary, the wifi_flow entity); machinery in internal/
     internal/ CallSummaryBean (base) · CallSummaryBuilder · CdrBlobMapper · SumVoiceDdl
     model/    CallSummary (47 cols) · Cdr/Chargeable/CdrBlobEntry (blob v2, v1 tolerated — shared by both categories)
   chargeable/ HourlyChargeableSummary · DailyChargeableSummary   (EVERY leg, every SG; fixed tables)

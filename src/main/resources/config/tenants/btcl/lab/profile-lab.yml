@@ -3,7 +3,8 @@
 #
 # The root tenant is btcl. An ad view's record is a cdr row of SERVICE GROUP 30 that billing-core writes in
 # each tier's schema, with one summary_affected row per tier. This profile lists every bean that sums group 30 — and, since
-# ARCH-0077-S, the two call beans that sum group 101, the domestic WiFi session, under sum_voice_day_101 / sum_voice_hr_101.
+# ARCH-0077-S, the two call beans that sum group 101, the domestic WiFi session, and, since SS-0006, the four WiFi beans (the
+# session per hour/day with the derived average, the volume per destination), under sum_voice_day_101 / sum_voice_hr_101.
 # "lab" is the throwaway lab of tools/lab/pg-lab.sh (everything on 127.0.0.1, no password exists).
 # A deployment's profile is this file with its own addresses: docs/ad-as-call/postgres-ad-profile.md.
 # =====================================================================================
@@ -52,7 +53,15 @@ summary:
   # billing-core writes from the switch's settlement (ONE customer chargeable: the package minutes in TF_min, or money in BDT) ----
   #   the CALL category    : sum_voice_day_101 / sum_voice_hr_101 — the session as a domestic call: by payer, site, unit.
   #                          Config-instantiated like the 30 pair; minutes and money key apart (tup_customercurrency).
-  # All eight read the SAME outbox stream (entity cdr), each from its own bookmark.
+  # ---- the WiFi beans (SS-0006; the owner, 2026-10-16: "summary beans for WiFi per hour/day like a call, including the average
+  # session duration and the data volume per destination IP"): config-instantiated by their KIND (summary.beans.<name>.kind) ----
+  #   kind wifi-session    : sum_wifi_day_101 / sum_wifi_hr_101 — the session of group 101 by site, zone, grant tier, package, unit
+  #                          and cause family (every key a COLUMN of the record): sessions, connected, seconds, bytes up/down,
+  #                          cost, and the DERIVED average session duration. Entity cdr; the group and the suffix fixed by the kind.
+  #   kind wifi-dst        : sum_wifi_dst_day / sum_wifi_dst_hr — the volume per destination (gateway, site, zone, remote address,
+  #                          protocol, port): bytes, packets, flows. Entity wifi_flow — billing-core's flow ingest, in the SAME
+  #                          summary_affected table; a NEW entity starts at 0. The pair idles until that ingest is switched on.
+  # The ten beans of entity cdr read the SAME outbox stream, each from its own bookmark; the two of entity wifi_flow read theirs.
   enabledSummary:
     - dailyAdSummary                             # -> summarybeans/ad/DailyAdSummary.java   (sum_ad_day_30)
     - hourlyAdSummary                            # -> summarybeans/ad/HourlyAdSummary.java  (sum_ad_hr_30)
@@ -60,6 +69,10 @@ summary:
     - hourlyCallSummarySg30                      # config-instantiated                       (sum_voice_hr_30)
     - dailyCallSummarySg101                      # config-instantiated                       (sum_voice_day_101)
     - hourlyCallSummarySg101                     # config-instantiated                       (sum_voice_hr_101)
+    - dailyWifiSessionSummary                    # config-instantiated, kind wifi-session    (sum_wifi_day_101)
+    - hourlyWifiSessionSummary                   # config-instantiated, kind wifi-session    (sum_wifi_hr_101)
+    - dailyWifiDstSummary                        # config-instantiated, kind wifi-dst        (sum_wifi_dst_day)
+    - hourlyWifiDstSummary                       # config-instantiated, kind wifi-dst        (sum_wifi_dst_hr)
     - dailyChargeableSummary                     # -> summarybeans/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
     - hourlyChargeableSummary                    # -> summarybeans/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
   beans:
@@ -79,6 +92,18 @@ summary:
       window: hourly
       service-group: 101
       table-suffix: "101"                        # -> sum_voice_hr_101
+    dailyWifiSessionSummary:
+      window: daily                              # no catalog class -> config-instantiated, by its kind
+      kind: wifi-session                         # the WiFi session per day: group 101 and suffix 101 fixed by the kind -> sum_wifi_day_101
+    hourlyWifiSessionSummary:
+      window: hourly
+      kind: wifi-session                         # -> sum_wifi_hr_101
+    dailyWifiDstSummary:
+      window: daily
+      kind: wifi-dst                             # the volume per destination per day: entity wifi_flow -> sum_wifi_dst_day
+    hourlyWifiDstSummary:
+      window: hourly
+      kind: wifi-dst                             # -> sum_wifi_dst_hr
 
   # ---- the outbox ----
   outbox:

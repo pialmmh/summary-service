@@ -22,6 +22,14 @@ public final class WifiSummaries {
     private WifiSummaries() {
     }
 
+    /** The bean of {@code kind} for any window under a custom name — what the bootstrap makes of a {@code kind:} key. */
+    public static SummaryBean<?> forWindow(String name, WifiBeanKind kind, String window, String context) {
+        return switch (kind) {
+            case SESSION -> sessionForWindow(name, window, context);
+            case DESTINATION -> destinationForWindow(name, window, context);
+        };
+    }
+
     /** A WiFi SESSION bean ({@code kind: wifi-session}; entity {@code cdr}, group 101, {@code sum_wifi_<window>_101}) for any window under a custom name. */
     public static SummaryBean<WifiSessionSummary> sessionForWindow(String name, String window, String context) {
         WindowSize windowSize = WindowSize.parse(window);
