@@ -136,6 +136,36 @@ class PostgresOutboxConsumerIT extends OutboxConsumerContract {
     }
 
     @Test
+    void flow_rows_in_another_tenants_schema_make_no_row_in_this_tenants_destination_table() {
+        // the outbox is per tier schema (brief S6): a reseller's flow rows are drained for the reseller's schema, into ITS table
+        String other = PgLab.schema("othertier");
+        PgLab.provisionTier(other);
+        PgLab.billingTables(other);
+        try {
+            OutboxReader onOther = new OutboxReader(new JdbcUnitOfWorkFactory(PgLab.dataSource(PgLab.SUMMARY_SERVICE, other), SqlDialect.POSTGRESQL),
+                    new SummaryEngine(), 1000, 50, 8);
+            onOther.ensureInfraTables();
+            com.telcobright.summary.bean.spi.SummaryBean<com.telcobright.summary.summarybeans.wifi.model.WifiDestinationSummary> hourly = com.telcobright.summary.testkit.WifiFlowTestSupport.hourly();
+            reader.ensureProvisioned(hourly);
+            onOther.ensureProvisioned(hourly);
+            seedOutboxOf("wifi_flow", 1, OutboxCodec.encode(com.telcobright.summary.testkit.WifiFlowTestSupport.batchOf(com.telcobright.summary.testkit.WifiFlowTestSupport.window1())));
+            PgLab.run(PgLab.BILLING_CORE, other, "INSERT INTO summary_affected (entity_type, op, data) VALUES ('wifi_flow', 'add', '"
+                    + OutboxCodec.encode(com.telcobright.summary.testkit.WifiFlowTestSupport.batchOf(java.util.List.of(
+                            com.telcobright.summary.testkit.WifiFlowTestSupport.flow(com.telcobright.summary.testkit.WifiFlowTestSupport.W1).site("sylhet-2").bytes(7, 7).packets(7, 7)))) + "')");
+
+            assertEquals(1, reader.drain(hourly), "this tenant's one row");
+            assertEquals(1, onOther.drain(hourly), "the other tenant's one row, by its own bookmark");
+
+            assertEquals(2, count("sum_wifi_dst_hr"), "this tenant's table: window 1's two destinations (r1 and r2 share one)");
+            assertEquals(0, queryLong("select count(*) from sum_wifi_dst_hr where tup_site = 'sylhet-2'"), "and nothing of the other tenant's");
+            assertEquals(1, PgLab.queryLong(PgLab.SUMMARY_SERVICE, other, "select count(*) from sum_wifi_dst_hr"), "the other tenant's table: its one row");
+            assertEquals("sylhet-2", PgLab.queryText(PgLab.SUMMARY_SERVICE, other, "select tup_site from sum_wifi_dst_hr"));
+        } finally {
+            PgLab.dropTier(other);
+        }
+    }
+
+    @Test
     void summary_service_may_delete_from_the_outbox_and_from_nothing_else_of_billings() {
         // the ruled rights (brief N2): SELECT on what billing-core creates, DELETE on the outbox alone — given by its owner
         assertEquals(null, PgLab.refusal(PgLab.SUMMARY_SERVICE, TIER, "DELETE FROM summary_affected WHERE id < 0"), "the reaper's statement is allowed");

@@ -16,10 +16,12 @@ import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.wifi.model.WifiDestinationSummary;
 import com.telcobright.summary.summarybeans.wifi.model.WifiSessionSummary;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import com.telcobright.summary.testkit.CrashAtCommit;
 import com.telcobright.summary.testkit.WifiBeansTestSupport;
+import com.telcobright.summary.testkit.WifiFlowTestSupport;
 import com.telcobright.summary.testkit.WifiSessionTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -457,6 +459,68 @@ abstract class OutboxConsumerContract {
             assertEquals(0, reader.drain(each), "re-drain is a no-op (exactly once per bean)");
         }
         assertEquals("3 | 3 | 2700 | 900.000000 | 1235567 | 12347678 | 45.000000", wifiRow(WifiBeansTestSupport.SESSION_DAY_TABLE, "mirpur-10", "TF_min", "other"));
+    }
+
+    // ---- SS-0006 item 3: the wifi_flow entity -> the destination tables, made by the service on this engine ----
+
+    @Test
+    void a_replayed_hour_of_flow_windows_lands_the_known_destination_rows_and_a_wifi_flow_bean_starts_at_0_beside_cdr_bookmarks() throws SQLException {
+        SummaryBean<WifiDestinationSummary> daily = WifiFlowTestSupport.daily();
+        SummaryBean<WifiDestinationSummary> hourly = WifiFlowTestSupport.hourly();
+        provisionSmall(daily);
+        provisionSmall(hourly);
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            java.util.Map<String, Integer> made = look.store().columnWidths(hourly.table());
+            assertEquals(hourly.tableSpec().columnNames().stream().map(String::toLowerCase).sorted().toList(),
+                    made.keySet().stream().map(String::toLowerCase).sorted().toList(), "the columns as described");
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(hourly.tableSpec(), dialect(), made));
+            look.commit();
+        } finally {
+            look.close();
+        }
+
+        // the schema was served before: the call beans have bookmarks past two cdr rows ...
+        seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 10, 16, 9, 0)))));
+        seedOutbox(2, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 10, 16, 9, 5)))));
+        assertEquals(2, reader.drain(bean));
+        // ... and billing-core's flow ingest wrote the known hour as FOUR wifi_flow outbox rows: W1 split in two (the 5 000 split), W2, W3
+        List<WifiFlowTestSupport.Flow> w1 = WifiFlowTestSupport.window1();
+        seedOutboxOf("wifi_flow", 3, OutboxCodec.encode(WifiFlowTestSupport.batchOf(w1.subList(0, 2))));
+        seedOutboxOf("wifi_flow", 4, OutboxCodec.encode(WifiFlowTestSupport.batchOf(w1.subList(2, 3))));
+        seedOutboxOf("wifi_flow", 5, OutboxCodec.encode(WifiFlowTestSupport.batchOf(WifiFlowTestSupport.window2())));
+        seedOutboxOf("wifi_flow", 6, OutboxCodec.encode(WifiFlowTestSupport.batchOf(WifiFlowTestSupport.window3())));
+
+        // the seeding rule, on this engine: a NEW entity's beans start at 0 although the schema has cdr bookmarks
+        assertEquals(java.util.Map.of(WifiFlowTestSupport.DAILY_BEAN, 0L, WifiFlowTestSupport.HOURLY_BEAN, 0L), reader.seedBookmarks(null, List.of(daily, hourly)),
+                "no bookmark at all for wifi_flow -> 0: every flow row ever written is summed");
+
+        assertEquals(4, reader.drain(daily), "the four wifi_flow rows, from its own bookmark; the cdr rows are not its");
+        assertEquals(4, reader.drain(hourly));
+
+        for (String table : List.of(WifiFlowTestSupport.HOUR_TABLE, WifiFlowTestSupport.DAY_TABLE)) {
+            assertEquals(3, count(table), table);
+            assertEquals("4 | 19300 | 502400 | 161 | 421", dstRow(table, "mirpur-10", "142.250.74.78", 443, 6), table + " r1 + r2 + r4 + r6 (the split seen as one)");
+            assertEquals("1 | 300 | 700 | 5 | 5", dstRow(table, "mirpur-10", "1.1.1.1", 53, 17), table + " r3");
+            assertEquals("1 | 100 | 200 | 2 | 2", dstRow(table, "uttara-7", "1.1.1.1", 53, 17), table + " r5");
+            assertEquals(6, queryLong("select sum(flows) from " + table));
+        }
+        assertEquals("2026-10-16 15:00:00", queryText("select min(tup_starttime) from " + WifiFlowTestSupport.HOUR_TABLE).substring(0, 19), "09:41Z on Dhaka's clock");
+        assertEquals("2026-10-16 00:00:00", queryText("select min(tup_starttime) from " + WifiFlowTestSupport.DAY_TABLE).substring(0, 19));
+        assertEquals(6, offset(WifiFlowTestSupport.DAILY_BEAN));
+        assertEquals(2, offset("dailyCallSummary"), "the call bean's bookmark is its own: the flow rows did not move it");
+        assertEquals(0, count("summary_affected_dlq"), "nothing was dead-lettered");
+
+        assertEquals(0, reader.drain(daily), "re-drain is a no-op (exactly once per bean)");
+        assertEquals(0, reader.drain(hourly));
+        assertEquals("4 | 19300 | 502400 | 161 | 421", dstRow(WifiFlowTestSupport.DAY_TABLE, "mirpur-10", "142.250.74.78", 443, 6));
+    }
+
+    /** {@code flows | up | dn | packets up | packets dn} of the one row of {@code table} at a site to a remote endpoint; null when not exactly one. */
+    protected String dstRow(String table, String site, String remote, int port, int proto) {
+        String where = " where tup_site = '" + site + "' and tup_remote = '" + remote + "' and tup_port = " + port + " and tup_proto = " + proto;
+        return queryLong("select count(*) from " + table + where) != 1 ? null
+                : queryText("select concat_ws(' | ', flows, bytes_up, bytes_dn, packets_up, packets_dn) from " + table + where);
     }
 
     /** {@code sessions | connected | total | avg | up | dn | cost} of the one row of {@code table} at a site, in a unit, of a family; null when not exactly one. */
@@ -1005,11 +1069,21 @@ abstract class OutboxConsumerContract {
 
     /** Written as billing-core writes it: its own connection, the id it was given. */
     protected void seedOutbox(long id, String op, String data) {
-        String sql = "insert into summary_affected(id, entity_type, op, data) values(?, 'cdr', ?, ?)";
+        seedOutboxOf("cdr", id, op, data);
+    }
+
+    /** An {@code add} row of another entity ({@code wifi_flow}: billing-core's flow ingest, in the SAME table). */
+    protected void seedOutboxOf(String entityType, long id, String data) {
+        seedOutboxOf(entityType, id, "add", data);
+    }
+
+    protected void seedOutboxOf(String entityType, long id, String op, String data) {
+        String sql = "insert into summary_affected(id, entity_type, op, data) values(?, ?, ?, ?)";
         try (Connection c = billingConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, id);
-            ps.setString(2, op);
-            ps.setString(3, data);
+            ps.setString(2, entityType);
+            ps.setString(3, op);
+            ps.setString(4, data);
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("seed failed", e);
