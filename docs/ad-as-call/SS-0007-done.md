@@ -1,25 +1,26 @@
 from: SS        to: ARCH        kind: done        number: 0007
 date: 2026-10-17 (the times below are +06)
 branch: wifi-gw-key (from postgres-ad-call 3829e18 + the brief 98d097c)
-head: e42b1da (item 3); this note is the commit after it — pages only
-subject: SS-0007 — the WiFi session sums split by BRAS (the owner's R4): the shared Cdr reads InMgwId ('' when the blob carries none); sum_wifi_hr_101 / sum_wifi_day_101 key by tup_gw (InMgwId cut to 64, the destination sums' width); a table 3829e18 made gets the column from the service itself at its first use — the ALTER said in one WARN line per table, the rows already there read '', a second start changes nothing — proven with the two packaged jars on PostgreSQL 16 and MySQL 5.7; every rule broken once and seen red; the suites from a clean copy
+head: the item-5 commit that carries this version of the note (the first version: bd237a8); items 1–3 de72130 · 88da797 · e42b1da
+subject: SS-0007 — the WiFi session sums split by BRAS (the owner's R4): the shared Cdr reads InMgwId ('' when the blob carries none); sum_wifi_hr_101 / sum_wifi_day_101 key by tup_gw (InMgwId cut to 64, the destination sums' width); a table 3829e18 made gets the column from the service itself at its first use — the ALTER said in one WARN line per table, the rows already there read '', a second start changes nothing — proven with the two packaged jars on PostgreSQL 16 and MySQL 5.7; every rule broken once and seen red; the suites from a clean copy; item 5 (the architect's ask after F11): the way back after sessions with a BRAS exist — tools/lab/wifi-gw-wayback.sh, one transaction per table, proven with the two packaged jars on both engines
 
-# SS-0007 · done — items 0–4
+# SS-0007 · done — items 0–5
 
 ## 0 · What to relay
 
 | | |
 |---|---|
-| the branch | `wifi-gw-key`, pushed after each item: **de72130** item 1 · **88da797** item 2 · **e42b1da** item 3 · the commit after = this note. `postgres-ad-call` and `master` not touched; the merge is yours |
+| the branch | `wifi-gw-key`, pushed after each item: **de72130** item 1 · **88da797** item 2 · **e42b1da** item 3 · **bd237a8** item 4 (this note, first version) · item 5 = the commit that carries this version (the way back, its proof, this note's §9). `postgres-ad-call` and `master` not touched; the merge is yours |
 | item 0 | the baseline from a clean copy of 98d097c (= 3829e18 + the brief): unit **384 / 0 / 0 / 0**, ITs **82 / 0 / 0 / 3** (PostgreSQL 47, MySQL 31, the build check 1, Kafka 3 skipped), `wifi-beans-e2e.sh both` **86 ok / 0 FAIL** — SS-0006's numbers exactly (§1) |
 | item 1 | DONE (§2). The shared `Cdr` reads `InMgwId` as billing-core writes it, `''` when the blob carries none (one compact constructor); the two constructions (both in `testkit/CdrTestSupport`) updated; the call beans' keys untouched — pinned |
 | item 2 | DONE (§3). `sum_wifi_hr_101` / `sum_wifi_day_101` key by `tup_gw` = `InMgwId` trimmed and cut to 64 (ONE number with `sum_wifi_dst_*`'s `tup_gw`); the spec column `VARCHAR(64) NOT NULL DEFAULT ''`; INSERT_COLUMNS, the field, `tupleKey()`, the builder — and `mapRow`, `cloneWithFakeId`, `insertValues`, which the brief's list left out (§7 F2) |
 | the migration, both engines | the service's own, at the first use (`TableDdl.bringUpToDate`): one WARN line per table — PostgreSQL `ALTER TABLE sum_wifi_day_101 ADD COLUMN IF NOT EXISTS tup_gw VARCHAR(64) NOT NULL DEFAULT ''`, MySQL `ALTER TABLE sum_wifi_day_101 ADD COLUMN tup_gw VARCHAR(64) NOT NULL DEFAULT ''` (the same for `_hr_`); the rows 3829e18 summed read `''`, id for id and number for number; a record naming no BRAS goes into that `''` row; the second start says nothing and changes nothing — with 3829e18's PACKAGED jar first and this one after, on PostgreSQL 16 and MySQL 5.7 (§3.2) |
 | item 3 | DONE (§4). The deploy page's new §4a, its "after an upgrade" row and its lab table; the category's `package-info`; the README: the rows summarised before keep `tup_gw = ''`; the D1 replay |
+| item 5 | DONE (§9). `tools/lab/wifi-gw-wayback.sh` + `wifi-gw-wayback-postgres.sql` / `-mysql.sql`: per tier schema, the new jar stopped, per table in ONE transaction the rows of one OLD key summed into the lowest id (the average the bean's), the others deleted, `tup_gw = ''` everywhere; prints merged / deleted / bras cleared and the sign READY; a second run 0 / 0 / 0; no other table touched. Proven with the two packaged jars on both engines (`wifi-gw-wayback-e2e.sh`, 96 checks): 3829e18's jar RUNS on the collapsed tables (offsets 12 → 14, no `duplicate existing row`), the totals per old key kept, forward again clean. Devops's order in §9.2 |
 | the engine | `SummaryEngine`, `OutboxReader`, `TableDdl` and every SPI UNTOUCHED (`git diff 3829e18 e42b1da` has no file under `engine/`, `outbox/`, `bean/`); no pom change; the destination sums, billing-core, the voice tables and the profiles untouched (the profiles byte-identical to 3829e18's) |
-| the suites | from a clean copy of e42b1da (§5): unit **399 / 0 / 0 / 0** (384 + 15), ITs **86 / 0 / 0 / 3** (PostgreSQL 49, MySQL 33, the build check 1, Kafka 3 skipped), `wifi-beans-e2e.sh both` **86 ok / 0 FAIL** (as the baseline), `wifi-gw-upgrade-e2e.sh both` **80 ok / 0 FAIL** |
-| mutants | 11 hand breaks, every one red, restored sha256-equal, green again (§2.2, §3.3) |
-| to decide | §7: F6 the upgrade day split between `''` and the BRAS rows; F11 the way back to 3829e18's jar WEDGES the two session beans once a bucket holds a `''` row and a BRAS row of one key (probed: "duplicate existing row", offset STUCK); F7 the profiles' comment lines |
+| the suites | the item-5 tree from a clean copy (no file under `src/` changed): unit 399 / 0 / 0 / 0, ITs 86 / 0 / 0 / 3, `wifi-gw-wayback-e2e.sh both` **96 ok / 0 FAIL**, `wifi-gw-upgrade-e2e.sh both` 80 / 0, `wifi-beans-e2e.sh both` 86 / 0 (§5). From a clean copy of e42b1da (§5): unit **399 / 0 / 0 / 0** (384 + 15), ITs **86 / 0 / 0 / 3** (PostgreSQL 49, MySQL 33, the build check 1, Kafka 3 skipped), `wifi-beans-e2e.sh both` **86 ok / 0 FAIL** (as the baseline), `wifi-gw-upgrade-e2e.sh both` **80 ok / 0 FAIL** |
+| mutants | 15 hand breaks, every one red, restored sha256-equal, green again (§2.2, §3.3, §9.4) |
+| to decide | §7: F6 the upgrade day split between `''` and the BRAS rows; F11 the way back to 3829e18's jar WEDGES the two session beans once a bucket holds a `''` row and a BRAS row of one key (probed: "duplicate existing row", offset STUCK) — now rehearsed: item 5 (§9); F7 the profiles' comment lines |
 
 ## 1 · Item 0 — the baseline (SS-0006's way)
 
@@ -150,6 +151,13 @@ Then the two stories from the same copy, its own packaged jar; the older jar for
 | `tools/lab/wifi-beans-e2e.sh both` (SS-0006's story) | HOLDS, 86 ok, 0 FAIL, 0 ERROR lines | **HOLDS, 86 ok, 0 FAIL, 0 ERROR lines** (02:01:13–02:02:44) — unchanged |
 | `tools/lab/wifi-gw-upgrade-e2e.sh both` (new) | — | **HOLDS, 80 ok, 0 FAIL, 0 ERROR lines** (02:02:44–02:04:34) |
 
+**The tree of item 5** (bd237a8 + the four new files under `tools/lab/`; no file under `src/` changed) from a clean copy
+(`~/ss7-work/clean-item5`): `mvn -o verify` 02:37:22–02:42:21, BUILD SUCCESS — unit **399 · 0 · 0 · 0**, ITs **86 · 0 · 0 · 3**
+(`PostgresOutboxConsumerIT` 40, `PostgresTreeIT` 9, `OutboxConsumerIT` 31, `MySqlTreeIT` 2, `BuildBakesNoTenantIT` 1,
+`KafkaListenersIT` 3 skipped); then `wifi-gw-wayback-e2e.sh both` **HOLDS, 96 ok, 0 FAIL** (02:42:21–02:44:35),
+`wifi-gw-upgrade-e2e.sh both` **HOLDS, 80 ok, 0 FAIL** (02:44:35–02:47:14), `wifi-beans-e2e.sh both` **HOLDS, 86 ok, 0 FAIL**
+(02:47:14–02:49:11).
+
 Every red of this round is a mutant's, a pin of the old shape seen before its update (§3.1), or my own test's (§7 F8) —
 none a defect of the service, none flaky: nothing failed twice differently, so nothing was run five times.
 
@@ -176,7 +184,8 @@ none a defect of the service, none flaky: nothing failed twice differently, so n
   the rows wait in the outbox (the reaper keeps them while a bean has not passed them) — and **forward again, this jar on
   the same schema: 12 of 12 caught up, the stuck session drained into its bras-2 row (`2|bras-2|mirpur-10|2`), 0 changes
   said, 0 ERROR lines**. On the bed the records already name a BRAS (F6), so the first session after the install makes
-  such a bucket — the `*.jar.prev` way back is clean only before it (§7 F11).
+  such a bucket — the `*.jar.prev` way back is clean only before it (§7 F11). **Rehearsed since item 5:** stop the new jar,
+  `tools/lab/wifi-gw-wayback.sh` per tier schema (the sign: READY), start 3829e18's jar (§9.2).
 
 ## 7 · Findings — and what the brief got wrong
 
@@ -192,7 +201,7 @@ none a defect of the service, none flaky: nothing failed twice differently, so n
 | F8 | my own reds on the way: (a) M2.3's first run was red in my NEW IT's own construction of the 3829e18 table (it deleted the column's exact text from the new DDL; the mutant changed that text, so the "old" table was made with the column) — the IT now removes the column by pattern, whatever its default, and the re-run was red at the first use; (b) the mutant helper's first restore kept the old file time (`copy2`) and the compiler skipped the file — the first green check after M1.1 ran the mutant's class; fixed (content + a fresh time), every green re-run after it compiled the restored file | none |
 | F9 | "the D1 replay, if the owner orders it after the central gatekeeper, fills the split": the summary sums a replayed record under the BRAS its blob names in `InMgwId` — at any time; whether that is the SESSION's BRAS is the replayed record's meta (G14: today the process's `gw`), not this service's timing | none |
 | F10 | the column is LAST on a migrated table (ordinal 19) and after `tup_inpartnerid` on a new one | none: everything is by name |
-| F11 | **the way back** — 3829e18's jar started again on a table this version upgraded wedges the two WiFi session beans (offset STUCK, "duplicate existing row while populating cache") as soon as one bucket holds two rows of one OLD key — the `''` row and a BRAS row; probed on PostgreSQL (§6). The other ten beans drain; nothing is lost: this jar started again drains the stuck rows (probed: 12 of 12, 0 ERROR lines) | yours, for the window plan: the way back is forward (this jar again); or, if 3829e18 must run, a one-off step merging each bucket's BRAS rows into its `''` row first (it gives up the split). Devops should not rehearse the `jar.prev` road on a schema that already holds BRAS rows |
+| F11 | **the way back** — 3829e18's jar started again on a table this version upgraded wedges the two WiFi session beans (offset STUCK, "duplicate existing row while populating cache") as soon as one bucket holds two rows of one OLD key — the `''` row and a BRAS row; probed on PostgreSQL (§6). The other ten beans drain; nothing is lost: this jar started again drains the stuck rows (probed: 12 of 12, 0 ERROR lines) | DONE in item 5 (§9): the one-off step is `tools/lab/wifi-gw-wayback.sh`, proven on both engines; devops's order in §9.2. The split of the collapsed rows is given up, every total kept |
 
 ## 8 · The rules, kept
 
@@ -203,7 +212,8 @@ Java 21 (Corretto 21.0.9); Maven 3.9.10 OFFLINE with `-Dmaven.repo.local=$HOME/.
 `ss7-pg16-lab` (postgres:16, 127.0.0.1:7752, trust — no password exists), removed at the end; the local MySQL 5.7.44 at
 127.0.0.1:3306 as root with the password by the NAME of its variable — on no command line, in no file of the repository,
 in no log of mine (checked at the end), not in this note; its databases of this round (`ss7_summary_it`, and the stories'
-`lab_wifibeans`, `lab_wifigw`, dropped by their own scripts) dropped at the end; the probe's PostgreSQL schema `lab_wayback` too; the owner's `summary_it` not touched; the host PostgreSQL on 127.0.0.1:7643 (not mine)
+`lab_wifibeans`, `lab_wifigw`, `lab_wifiwayback`, dropped by their own scripts; item 5's hand-made `ss7_sqltest` and PostgreSQL `sqltest`)
+dropped at the end; the probe's PostgreSQL schema `lab_wayback` too; the owner's `summary_it` not touched; the host PostgreSQL on 127.0.0.1:7643 (not mine)
 never named. No Kafka started (`KafkaListenersIT` self-skipped; the shared `onlab-kafka` on 7592 never touched); nothing
 dialled off this box. The jar was never started bare: every start through `tools/lab/run-lab.sh btcl/lab` (the endpoints
 printed first, all loopback). `SummaryEngine` / `OutboxReader` / `TableDdl` untouched. Every commit after its run; one per
@@ -211,3 +221,70 @@ item; only `wifi-gw-key` pushed. `date` before every time written. The worktree 
 `postgres-ad-call` and `master` not touched; the `wifi` and `telcobright-billing-core` repositories read by `git show`
 only. Mutant originals in `~/ss7-work/mutants/`; the notes in `~/ss7-work/notes.md`; the logs in `~/ss7-work/logs/`.
 
+## 9 · Item 5 — the way back after sessions with a BRAS exist (the architect's ask after F11)
+
+### 9.1 · As built
+
+| where | what |
+|---|---|
+| `tools/lab/wifi-gw-wayback.sh postgresql\|mysql <tier schema>` | devops's tool, ONE tier schema per run, AFTER the new jar is stopped and BEFORE 3829e18's jar starts. It names its target first (`== the way back on postgresql <host>:<port>/<db>, tier schema <s>, as <role> ==`); reads, read only, whether the schema holds the two tables and their `tup_gw` (none: "nothing to do", exit 0; tables 3829e18 made and never upgraded: "nothing to do", exit 0; anything else: REFUSED, exit 3, nothing done); runs the engine's SQL file; prints per table `merged`, `deleted`, `bras cleared`; ends with the sign — **READY** (exit 0) or **NOT READY** (exit 1: something wrote a BRAS row after the collapse — the new jar still running). Connection: `WAYBACK_HOST` / `WAYBACK_PORT` / `WAYBACK_DB` / `WAYBACK_USER` (defaults 127.0.0.1, 5432 or 3306, `routesphere`, `summary_service` or root); a password by the NAME of its variable, `WAYBACK_PASSWORD_VAR=<NAME>` (psql reads it as `PGPASSWORD`, mysql as `MYSQL_PWD`; on no command line, in no output) |
+| `tools/lab/wifi-gw-wayback-postgres.sql` / `-mysql.sql` | per table (`sum_wifi_day_101`, then `sum_wifi_hr_101`), ONE transaction: (1) the groups of rows that share the OLD key (`tup_switchid, tup_inpartnerid, tup_site, tup_zone, tup_granttier, tup_category, tup_packagecode, tup_customercurrency, tup_causefamily, tup_starttime`) are counted and each summed into its LOWEST id — `sessions, sessions_connected, total_duration_sec, bytes_up, bytes_dn, customercost` — with `avg_session_sec` derived again as the bean derives it (`CASE WHEN connected = 0 THEN 0 ELSE round(total carried to 18 places / connected, 6) END`); (2) the other rows of each group deleted; (3) `tup_gw = ''` on every row — the column stays, so the new jar, started again, finds its table as described. Then, read only, the sign's check per table: old keys held by more than one row, rows with a BRAS. Nothing but the two tables is read or written. MySQL compares the key's texts byte for byte (`CAST(… AS BINARY)`): the tables' collation is case-insensitive, and the jar's keys are not |
+| the average | equal to the bean's `BigDecimal` HALF_UP at six places on both engines — 13 hard pairs against Java, exact ties among them (1/2 000 000 → 0.000001, 3/2 000 000 → 0.000002, 2 500 001/2 000 000 → 1.250001), all equal |
+| `tools/lab/wifi-gw-wayback-e2e.sh [pg\|mysql\|both]` | the proof with the two PACKAGED jars (§9.3) |
+
+On hand-made tables first (both engines, MySQL partitioned as the service makes it): merged 3, deleted 4, cleared 3, READY;
+the second run 0, 0, 0, READY; a site that differs only in case (`Mirpur-10`) stays a key of its own on both engines.
+
+### 9.2 · The way back, as devops reads it
+
+1. **Stop the new jar** (its unit) and see its process gone — nothing may write the two tables while the way back runs.
+2. **Per tier schema the service serves** (the root and every reseller schema: the `schema=… is served` lines of its last
+   start), on the box of the switch database, run
+   `WAYBACK_PORT=<the database's port> WAYBACK_PASSWORD_VAR=<the NAME of the variable that holds summary_service's password> tools/lab/wifi-gw-wayback.sh postgresql <schema>`
+   (the role is `summary_service`, the tables' owner; `WAYBACK_HOST` / `WAYBACK_DB` when they are not 127.0.0.1 /
+   `routesphere`; the script reads `wifi-gw-wayback-postgres.sql` from its own directory — the two travel together). It prints, per table, `merged <groups> / deleted <rows> / bras cleared <rows>`, then
+   **`READY: sum_wifi_day_101 and sum_wifi_hr_101 of <schema> hold no old key twice and no BRAS — 3829e18's jar may start on it`**
+   (exit 0). Run it again if in doubt: `0 / 0 / 0` and READY. `NOT READY` (exit 1) = a BRAS row was written after the
+   collapse: stop the new jar for real, run it again. "nothing to do" (exit 0) = a schema without the WiFi tables, or whose
+   tables 3829e18 made and the new jar never upgraded.
+3. **Start 3829e18's jar** (the `*.jar.prev`).
+4. **The sign that it runs:** `is served: 12 of 12` in its log; no `duplicate existing row` line, no `drain failed — offset
+   STUCK` for `dailyWifiSessionSummary` / `hourlyWifiSessionSummary`; within a poll or two the two beans' bookmarks reach the
+   outbox head: `select bean_name, last_offset from summary_offset where bean_name like '%WifiSession%'` against
+   `select max(id) from summary_affected where entity_type = 'cdr'`.
+
+What it costs: the BRAS split of the rows the new jar summed — they collapse into the old key, every total kept, the
+average the bean's. Forward again later: the new jar starts on the collapsed tables with no change said and no ERROR line;
+the collapsed rows stay under `''`, and new sessions split by BRAS from then on.
+
+### 9.3 · The proof — `SS_OLDER_APP=<3829e18 packaged> tools/lab/wifi-gw-wayback-e2e.sh both`
+
+From the clean copy of the item-5 tree, 02:42:21–02:44:35 (+06): **HOLDS on both, 96 checks ok, 0 FAIL**. Every endpoint
+127.0.0.1 (PostgreSQL 7752, MySQL 3306, the listener 7671, no broker); the way back run as devops runs it — the host's
+`psql` / `mysql` on 127.0.0.1, as `summary_service` on PostgreSQL. In the worktree, before the mutants: the same, 96 / 0.
+
+| step | PostgreSQL 16 and MySQL 5.7.44 (the same on both) |
+|---|---|
+| 1 · 3829e18's jar, 4 sessions | mirpur-10 and uttara-7 get their `''` rows |
+| 2 · this jar: the upgrade (2 ALTERs said), then 8 sessions in the SAME hour and day | 8 rows per table: mirpur-10 `''` (+ the one naming no BRAS) / bras-1 / bras-2; uttara-7 `''` / bras-2; banani-11 bras-2 then bras-1 (the group's lowest id names a BRAS); gulshan-2 bras-1 alone; 3 old keys held twice or more. Read: the totals per old key summed across `tup_gw`, and a digest of each of the 14 OTHER tables of the schema |
+| 3 · the way back, then again | per table **merged 3, deleted 4, bras cleared 2, READY**, exit 0; again **0, 0, 0, READY**. 4 rows per table, one per old key; **the totals per old key = those read in 2**; mirpur-10 `7\|7\|9300\|1328.571429\|4001200\|40012000\|155` (into the older row), banani-11 `2\|2\|1800\|900.000000\|500\|5000\|30` (its bras-2 row kept and cleared); every average the bean's; no BRAS; the 14 other tables digest-equal |
+| 4 · 3829e18's jar again, 2 more sessions | its two WiFi session beans RUN: offsets **12 → 14** (the outbox head), **0 `duplicate existing row`**, 0 ERROR lines; mirpur-10 `8\|8\|11100\|1387.500000\|…\|185`, banani-11 `3\|3\|2400\|800.000000\|…\|40` — merged into the collapsed rows; 4 rows; sum(sessions) 14 = the cdr rows |
+| 5 · forward again: this jar | **0 changes said**, 0 ERROR lines; a session on bras-2 opens its own row beside the collapsed `''` row (5 rows); sum(sessions) 15 = the cdr rows |
+
+### 9.4 · The reds (each a text swap in both tables' blocks of ONE engine's file; original saved first; restored sha256-equal)
+
+| mutant | red |
+|---|---|
+| M5.1 the delete step removed (`AND false` on the DELETE) — PostgreSQL, then MySQL | 34 FAIL each: the way back says **NOT READY** (3 old keys twice), exit 1, `deleted 0`; the totals double; **3829e18's jar sticks** — 10 of 12 beans, 2 `duplicate existing row`, the session beans' offsets stay 12; and forward again the NEW jar sticks too (every row now `''`, two of one key) |
+| M5.2 the average not derived again — PostgreSQL, then MySQL | 6 FAIL each: after the way back 3 rows per table off the bean's average (mirpur-10 `1275.000000` for `1328.571429`, banani-11 `1200` for `900`, uttara-7 `900` for `600`); after 3829e18's sessions uttara-7 is still off. READY is said (by design: the sign checks what 3829e18 needs to run — no old key twice, no BRAS — and the story checks the averages) |
+
+The four red runs, then the green ones from the clean copy (§9.3): the two SQL files back to `34cca4c3…` (PostgreSQL) and
+`43ddb96c…` (MySQL).
+
+### 9.5 · For report readers (F6)
+
+A report over the day (or the hour) of the upgrade, or of a forward-again, sums across `tup_gw`: the sessions summed before
+sit in the `''` row and the later ones in the BRAS rows of the same site and bucket. Per site:
+`select tup_site, sum(sessions), sum(sessions_connected), sum(total_duration_sec), round(sum(total_duration_sec)::numeric / nullif(sum(sessions_connected), 0), 6) from sum_wifi_day_101 where tup_starttime = '<day>' group by tup_site`
+(MySQL: `cast(sum(total_duration_sec) as decimal(24,6))`). A report per BRAS reads only what was summed with a BRAS: the
+earlier sessions of that day are under `''`, and after a way back the buckets it collapsed are `''` whole.
