@@ -108,7 +108,9 @@ public final class CdrTestSupport {
                 // anscost, and the two STRING-typed package fields the builder must parse
                 "1712C", bd("0.25"), bd("0.3"), "12.5", "77",
                 // the WiFi session's columns (SS-0006): a voice record carries none
-                null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null,
+                // the BRAS id (SS-0007): none on a voice record — the record reads ''
+                null);
     }
 
     private static Chargeable sg10CustomerLeg(LocalDateTime start, BigDecimal cost) {
@@ -129,7 +131,8 @@ public final class CdrTestSupport {
                 bd("60"), bd("60"), bd("60"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 start, null, 7, null, "1713", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null,
+                null);                        // no BRAS id (SS-0007)
         Chargeable customerLeg = new Chargeable(11, 4, 1, 7003L, null, null, start,
                 null, bd("2.0"), bd("1"),
                 bd("0.3"), null, null, null, null, null,

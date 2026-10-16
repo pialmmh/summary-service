@@ -162,6 +162,7 @@ public final class WifiSessionTestSupport {
         public Session endedWith(Integer radiusCause, Integer who) { this.causeCode = radiusCause; this.endedBy = who; return withWifiColumns(); }
         /** {@code ValidFlag}: 1 measured, 0 the unmeasured fault (A-0099); null = the column empty. */
         public Session measured(Integer flag) { this.measured = flag; return withWifiColumns(); }
+        /** The BRAS id — billing-core's {@code InMgwId} from the meta {@code gw}; null = the meta named none: the key left out, as billing-core's mapper leaves a null out. */
         public Session gateway(String id) { this.gateway = id; return withWifiColumns(); }
         public Session packageCode(String code) { this.prefix = code; return withWifiColumns(); }
 
@@ -221,7 +222,7 @@ public final class WifiSessionTestSupport {
 
         /** The columns BC-0008's dictionary fills ({@code WifiColumns.java:82-104}), by billing's names; a null left out as its mapper leaves it. */
         private void appendWifiColumns(StringBuilder cdr) {
-            cdr.append(",\"InMgwId\":").append(quoted(gateway));
+            if (gateway != null) cdr.append(",\"InMgwId\":").append(quoted(gateway));
             cdr.append(",\"InTrunkAdditionalInfo\":").append(quoted(siteColumn)).append(",\"OutTrunkAdditionalInfo\":").append(quoted(zone));
             if (grantTier != null) cdr.append(",\"MatchedPrefixY\":").append(quoted(grantTier));
             if (category != null) cdr.append(",\"Category\":").append(category);
