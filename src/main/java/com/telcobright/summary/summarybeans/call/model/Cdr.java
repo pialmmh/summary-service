@@ -20,6 +20,13 @@ import java.time.LocalDateTime;
  * in {@code ValidFlag} — and the package stamps of the ratified wire, {@code PackageAmount} / {@code IdPackageAccount}
  * (SS-0005's F2), and {@code HangupCause} (the session's end word, the cause family's source). A blob written before
  * these columns existed decodes them as null — nothing else of the mapper changes.
+ *
+ * <p>Since SS-0007 the model also reads {@code InMgwId}: the BRAS id — the meta {@code gw} billing-core's dictionary writes
+ * there ({@code WifiColumns.java:84}, a BC-0008 cell; the owner's R4 "counters and all logs must include bras id"), as
+ * billing-core writes it. Billing-core sets it only when the meta names a {@code gw} and its mapper leaves a null out
+ * ({@code SummaryOutboxWriter}: NON_NULL), so a blob without it is the ordinary case (a voice call, a view, a session of
+ * an older blob): {@link #inMgwId()} is then {@code ''} — never null — the empty BRAS the WiFi session sums key by
+ * ({@code tup_gw}). The call beans do not read it.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record Cdr(
@@ -66,6 +73,13 @@ public record Cdr(
         Integer releaseDirection,      // who ended it: 1 the network/plane, 2 the subscriber, 3 the system
         BigDecimal packageAmount,      // the units taken from the bucket (the ratified wire's column; SS-0005 F2)
         Long idPackageAccount,         // the bucket they were taken from
-        String hangupCause             // the session's end word (the cause family's source)
+        String hangupCause,            // the session's end word (the cause family's source)
+        // -- the BRAS id (SS-0007; the meta gw, BC-0008's WifiColumns.java:84): '' when the blob carries none --
+        String inMgwId                 // C# InMgwId
 ) {
+
+    /** The one normalised column: {@code InMgwId} absent (or null) on the blob reads as {@code ''}, the empty BRAS. */
+    public Cdr {
+        inMgwId = inMgwId == null ? "" : inMgwId;
+    }
 }

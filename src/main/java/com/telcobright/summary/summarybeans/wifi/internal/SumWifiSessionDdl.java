@@ -12,7 +12,11 @@ import com.telcobright.summary.summarybeans.wifi.model.WifiSessionSummary;
  * bucket, and on (site, bucket) — the owner's report "average session duration per site per day".
  *
  * <p>The table is net-new and this service's alone, so the description is KEPT UP TO DATE: a table made by an earlier
- * version gets what it lacks at its first use ({@code TableDdl.bringUpToDate}).
+ * version gets what it lacks at its first use ({@code TableDdl.bringUpToDate}). {@code tup_gw} (SS-0007, the BRAS) is
+ * such a column: a table 3829e18 made gets {@code VARCHAR(64) NOT NULL DEFAULT ''} at the new version's first use, and the
+ * rows it holds read {@code ''}. It has a default for that reason — a column without one cannot be given to rows that are
+ * there. No index names it, and this version adds none: a new index WOULD reach an older table on PostgreSQL (its
+ * {@code CREATE INDEX IF NOT EXISTS} runs at every first use) and not on MySQL (the indexes are inside the CREATE).
  */
 final class SumWifiSessionDdl {
 
@@ -25,6 +29,7 @@ final class SumWifiSessionDdl {
                 // every text's width is the builder's cut (WifiSessionSummaryBuilder): a value is never wider than its column
                 .integer("tup_switchid")
                 .integer("tup_inpartnerid")
+                .varchar("tup_gw", WifiSessionSummaryBuilder.GW_WIDTH)       // SS-0007: the BRAS — an older table gets it, default ''
                 .varchar("tup_site", WifiSessionSummaryBuilder.SITE_WIDTH)
                 .varchar("tup_zone", WifiSessionSummaryBuilder.ZONE_WIDTH)
                 .varchar("tup_granttier", WifiSessionSummaryBuilder.GRANTTIER_WIDTH)

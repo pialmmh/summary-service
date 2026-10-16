@@ -461,6 +461,98 @@ abstract class OutboxConsumerContract {
         assertEquals("3 | 3 | 2700 | 900.000000 | 1235567 | 12347678 | 45.000000", wifiRow(WifiBeansTestSupport.SESSION_DAY_TABLE, "mirpur-10", "TF_min", "other"));
     }
 
+    // ---- SS-0007 item 2: the WiFi session sums split by BRAS (tup_gw = the cdr's InMgwId), and the table 3829e18 made ----
+
+    /** The columns of sum_wifi_hr_101 / sum_wifi_day_101 as 3829e18 (SS-0006) made them: no tup_gw. */
+    private static final List<String> THE_3829E18_SESSION_COLUMNS = List.of("id", "tup_switchid", "tup_inpartnerid", "tup_site", "tup_zone",
+            "tup_granttier", "tup_category", "tup_packagecode", "tup_customercurrency", "tup_causefamily", "tup_starttime", "sessions",
+            "sessions_connected", "total_duration_sec", "avg_session_sec", "bytes_up", "bytes_dn", "customercost");
+
+    @Test
+    void two_sessions_of_one_site_on_two_bras_are_two_rows_and_a_reread_merges_into_its_own_bras_row() {
+        SummaryBean<WifiSessionSummary> daily = WifiBeansTestSupport.dailySession();
+        provisionSmall(daily);
+        seedOutbox(1, OutboxCodec.encode(WifiSessionTestSupport.batchOf(WifiBeansTestSupport.a().gateway("bras-1"), WifiBeansTestSupport.b().gateway("bras-2"))));
+        seedOutbox(2, OutboxCodec.encode(WifiSessionTestSupport.batchOf(WifiBeansTestSupport.b().gateway("bras-1"))));
+
+        assertEquals(2, reader.drain(daily), "row 2 reloads the rows row 1 wrote — each keyed by its BRAS");
+
+        String table = WifiBeansTestSupport.SESSION_DAY_TABLE;
+        assertEquals(2, count(table), "one site, two BRAS: two rows");
+        assertEquals("2 | 2 | 2400 | 1200.000000 | 1235567 | 12347678 | 40.000000", gwRow(table, "mirpur-10", "bras-1"), "A + the second B, merged into bras-1's row");
+        assertEquals("1 | 1 | 600 | 600.000000 | 1000 | 2000 | 10.000000", gwRow(table, "mirpur-10", "bras-2"));
+        assertEquals(0, reader.drain(daily), "re-drain is a no-op");
+    }
+
+    @Test
+    void a_wifi_session_table_made_by_3829e18_gets_tup_gw_at_its_first_use_its_rows_read_the_empty_bras_and_new_rows_carry_theirs() throws SQLException {
+        SummaryBean<WifiSessionSummary> daily = WifiBeansTestSupport.dailySession();
+        String olderTable = daily.table();
+        theSessionTableOf3829e18WithARow(daily);
+        long idOfTheOldRow = queryLong("select id from " + olderTable);
+
+        provisionSmall(daily);                                     // the service's first use of the schema after its upgrade
+
+        assertEquals(1, queryLong(columnCount(olderTable, "tup_gw")), "the column is there");
+        assertEquals(64, queryLong(columnWidth(olderTable, "tup_gw")), "64 wide, as a table made today");
+        assertEquals("", queryText("select tup_gw from " + olderTable + " where id = " + idOfTheOldRow), "the old row reads the empty BRAS");
+        assertEquals("3 | 3 | 2700 | 900.000000 | 1235567 | 12347678 | 45.000000", gwRow(olderTable, "mirpur-10", ""), "and nothing else of it changed");
+
+        // the stream goes on: two BRAS open a row each; a record that names no BRAS goes on in the old row
+        seedOutbox(1, OutboxCodec.encode(WifiSessionTestSupport.batchOf(WifiBeansTestSupport.a().gateway("bras-1"), WifiBeansTestSupport.b().gateway("bras-2"),
+                WifiBeansTestSupport.b().gateway(null))));
+        assertEquals(1, reader.drain(daily));
+        assertEquals(3, count(olderTable));
+        assertEquals("4 | 4 | 3300 | 825.000000 | 1236567 | 12349678 | 55.000000", gwRow(olderTable, "mirpur-10", ""), "3 old + the one with no BRAS");
+        assertEquals(idOfTheOldRow, queryLong("select id from " + olderTable + " where tup_gw = ''"), "in the old row itself");
+        assertEquals("1 | 1 | 1800 | 1800.000000 | 1234567 | 12345678 | 30.000000", gwRow(olderTable, "mirpur-10", "bras-1"));
+        assertEquals("1 | 1 | 600 | 600.000000 | 1000 | 2000 | 10.000000", gwRow(olderTable, "mirpur-10", "bras-2"));
+
+        // every later start: the table is as described — the step finds nothing to do, and does nothing
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(daily.tableSpec(), dialect(), look.store().columnWidths(olderTable)),
+                    "idempotent: the second time there is no statement");
+            look.commit();
+        } finally {
+            look.close();
+        }
+        provisionSmall(daily);
+        assertEquals(3, count(olderTable));
+        assertEquals("4 | 4 | 3300 | 825.000000 | 1236567 | 12349678 | 55.000000", gwRow(olderTable, "mirpur-10", ""));
+        assertEquals(0, reader.drain(daily), "nothing counted twice");
+    }
+
+    /**
+     * The WiFi session day table as 3829e18 (SS-0006) made it — no {@code tup_gw} — holding the row it summed for the known
+     * hour's A + B + E at mirpur-10 (3 sessions, 2 700 s, 45 TF_min).
+     */
+    private void theSessionTableOf3829e18WithARow(SummaryBean<WifiSessionSummary> sessionBean) throws SQLException {
+        try (Connection service = dbConnection()) {
+            for (String statement : withSmallHorizon(() -> sessionBean.tableDdl(dialect()))) {
+                exec(service, statement.replaceAll(",tup_gw [^,]*", ""));      // this version's table without the column, however it is described
+            }
+            exec(service, "insert into " + sessionBean.table() + " (tup_switchid,tup_inpartnerid,tup_site,tup_zone,tup_granttier,tup_category,tup_packagecode,"
+                    + "tup_customercurrency,tup_causefamily,tup_starttime,sessions,sessions_connected,total_duration_sec,avg_session_sec,bytes_up,bytes_dn,customercost)"
+                    + " values (0,7,'mirpur-10','dhaka-north','paid',2,'wifi-30','TF_min','other','2026-10-16 00:00:00',3,3,2700,900,1235567,12347678,45)");
+        }
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            assertEquals(THE_3829E18_SESSION_COLUMNS, look.store().columnWidths(sessionBean.table()).keySet().stream().map(String::toLowerCase).toList(),
+                    "the table 3829e18 made: its columns, in its order");
+            look.commit();
+        } finally {
+            look.close();
+        }
+    }
+
+    /** {@code sessions | connected | total | avg | up | dn | cost} of the one row of {@code table} at {@code site} on {@code gw}; null when there is not exactly one. */
+    private String gwRow(String table, String site, String gw) {
+        String where = " where tup_site = '" + site + "' and tup_gw = '" + gw + "'";
+        return queryLong("select count(*) from " + table + where) != 1 ? null
+                : queryText("select concat_ws(' | ', sessions, sessions_connected, total_duration_sec, avg_session_sec, bytes_up, bytes_dn, customercost) from " + table + where);
+    }
+
     // ---- SS-0006 item 3: the wifi_flow entity -> the destination tables, made by the service on this engine ----
 
     @Test

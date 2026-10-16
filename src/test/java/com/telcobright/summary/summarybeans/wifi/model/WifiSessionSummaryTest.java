@@ -100,8 +100,8 @@ class WifiSessionSummaryTest {
     }
 
     @Test
-    void tuple_key_is_the_ten_dimension_tokens_every_one_a_column_of_the_record() {
-        assertEquals(List.of("0", "7", "mirpur-10", "dhaka-north", "paid", "2", "wifi-30", "TF_min", "other", "2026-10-16 09:00:00"),
+    void tuple_key_is_the_eleven_dimension_tokens_every_one_a_column_of_the_record() {
+        assertEquals(List.of("0", "7", "", "mirpur-10", "dhaka-north", "paid", "2", "wifi-30", "TF_min", "other", "2026-10-16 09:00:00"),
                 row().tupleKey().tokens());
         assertEquals(row().tupleKey(), row().tupleKey(), "same dimensions -> same key");
         WifiSessionSummary money = row();
@@ -136,7 +136,7 @@ class WifiSessionSummaryTest {
         String values = a.insertValues();
 
         assertEquals(WifiSessionSummary.INSERT_COLUMNS.split(",").length, values.split(",").length, "one value per INSERT column");
-        assertEquals("(0,7,'mirpur-10','dhaka-north','paid',2,'wifi-30','TF_min','other','2026-10-16 09:00:00',1,1,1800,1800.000000,1234567,12345678,30)", values);
+        assertEquals("(0,7,'','mirpur-10','dhaka-north','paid',2,'wifi-30','TF_min','other','2026-10-16 09:00:00',1,1,1800,1800.000000,1234567,12345678,30)", values);
         assertEquals("sessions=1,sessions_connected=1,total_duration_sec=1800,avg_session_sec=1800.000000,bytes_up=1234567,bytes_dn=12345678,customercost=30",
                 a.updateAssignments(), "UPDATE assigns the sums and the derived average only");
         assertEquals("'2026-10-16 09:00:00'", a.bucketLiteral(), "partition-pruning literal");
