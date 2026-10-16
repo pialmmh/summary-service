@@ -252,6 +252,32 @@ class SummaryBootstrapTest {
         assertTrue(registry.beanNames().isEmpty(), "nothing was started");
     }
 
+    // ---- SS-0006 item 4: the kinds ----
+
+    @Test
+    void a_config_instantiated_bean_with_a_kind_is_a_wifi_bean_and_an_unknown_kind_refuses_that_bean_at_the_start_in_words() {
+        // over the unit test's profile: three enabled names, two WiFi kinds and one nobody knows
+        String[] keys = {"summary.enabledSummary", "dailyWifiSessionSummary,hourlyWifiDstSummary,badWifi",
+                "summary.beans.dailyWifiSessionSummary.window", "daily", "summary.beans.dailyWifiSessionSummary.kind", "wifi-session",
+                "summary.beans.hourlyWifiDstSummary.window", "hourly", "summary.beans.hourlyWifiDstSummary.kind", "wifi-dst",
+                "summary.beans.badWifi.window", "daily", "summary.beans.badWifi.kind", "wifi-nope"};
+        for (int i = 0; i < keys.length; i += 2) System.setProperty(keys[i], keys[i + 1]);
+        try (LogCapture said = LogCapture.of(SummaryBootstrap.class)) {
+            bootstrap(false).onStart(null);
+
+            assertEquals(java.util.Set.of("dailyWifiSessionSummary", "hourlyWifiDstSummary"), registry.beanNames(), "the two kinds registered; the unknown one is not");
+            assertEquals("sum_wifi_day_101", registry.beans().stream().filter(b -> b.name().equals("dailyWifiSessionSummary")).findFirst().orElseThrow().table());
+            assertEquals("wifi_flow", registry.beans().stream().filter(b -> b.name().equals("hourlyWifiDstSummary")).findFirst().orElseThrow().entityType());
+            assertTrue(said.records(java.util.logging.Level.SEVERE).stream().anyMatch(line -> line.startsWith("could not activate summary bean 'badWifi': ")
+                    && line.contains("summary.beans.badWifi.kind is 'wifi-nope' — it must be wifi-session or wifi-dst")), "refused in words: " + said.records(java.util.logging.Level.SEVERE));
+            assertTrue(said.lines().stream().anyMatch(line -> line.equals("bean registered: name=dailyWifiSessionSummary entity=cdr window=daily table=sum_wifi_day_101")), said.lines().toString());
+            assertTrue(said.lines().stream().anyMatch(line -> line.equals("bean registered: name=hourlyWifiDstSummary entity=wifi_flow window=hourly table=sum_wifi_dst_hr")));
+        } finally {
+            for (int i = 0; i < keys.length; i += 2) System.clearProperty(keys[i]);
+        }
+        assertEquals(List.of(), contextsFetched, "and nothing was dialled");
+    }
+
     @Test
     void with_autostart_off_the_beans_are_registered_and_nothing_is_dialled() {
         bootstrap(false).onStart(null);

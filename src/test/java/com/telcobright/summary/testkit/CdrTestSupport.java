@@ -106,7 +106,9 @@ public final class CdrTestSupport {
                 start, ansIdTerm, null, "1712", null, BigDecimal.ZERO, bd("0.8"), BigDecimal.ZERO,
                 // the 5 SG10 faithfulness fields (work order §2): prefix-customer from the CDR, vat=ZAmount,
                 // anscost, and the two STRING-typed package fields the builder must parse
-                "1712C", bd("0.25"), bd("0.3"), "12.5", "77");
+                "1712C", bd("0.25"), bd("0.3"), "12.5", "77",
+                // the WiFi session's columns (SS-0006): a voice record carries none
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static Chargeable sg10CustomerLeg(LocalDateTime start, BigDecimal cost) {
@@ -126,7 +128,8 @@ public final class CdrTestSupport {
                 start, 1, 1,
                 bd("60"), bd("60"), bd("60"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 start, null, 7, null, "1713", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                null, null, null, null, null);
+                null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null);
         Chargeable customerLeg = new Chargeable(11, 4, 1, 7003L, null, null, start,
                 null, bd("2.0"), bd("1"),
                 bd("0.3"), null, null, null, null, null,

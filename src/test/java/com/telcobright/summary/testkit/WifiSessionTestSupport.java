@@ -25,6 +25,14 @@ import java.util.List;
  * <p>The standing session is the contract page's sample: subscriber 8801711000002 (partner 7 of {@code btcl}) on
  * segment {@code W1} through {@code site-mirpur-10}, 30 minutes paid with 30 {@code TF_min} from bucket 5101 at a
  * 0.10 reference rate. The wire sends no out-partner, no supplier fields, no outgoing route and no prefix.
+ *
+ * <p>{@link #measuredSession} is the SAME session as billing-core's BC-0008 row writes it (the WiFi columns of
+ * {@code WifiColumns.java:82-104}, the lab story of the contract page's §2a): the site in {@code InTrunkAdditionalInfo},
+ * the zone in {@code OutTrunkAdditionalInfo}, the grant tier word in {@code MatchedPrefixY} and its number in
+ * {@code Category}, the bytes in {@code XAmount} / {@code YAmount}, the budget in {@code ZAmount}, the MAC in
+ * {@code TerminatingCallingNumber}, the device IP in {@code OriginatingIP}, the granted seconds in {@code Duration1},
+ * the RADIUS cause in {@code ReleaseCauseSystem}, who ended it in {@code ReleaseDirection}, measured in {@code ValidFlag},
+ * the expiry in {@code OtherDate}, the gateway in {@code InMgwId}, the package code in {@code MatchedPrefixCustomer}.
  */
 public final class WifiSessionTestSupport {
 
@@ -68,6 +76,16 @@ public final class WifiSessionTestSupport {
         return new Session(start).ofZeroSeconds();
     }
 
+    /**
+     * The standing session as BC-0008 writes it (billing-core's lab story: the gateway's record of 2026-10-16): site
+     * {@code mirpur-10}, zone {@code dhaka-north}, paid (2), 1 234 567 bytes up and 12 345 678 down, a budget of
+     * 5 000 000 000, 1 800 granted seconds, package code {@code wifi-30}, MAC {@code aa:bb:cc:dd:ee:01}, device IP
+     * {@code 10.44.0.7}, RADIUS cause 4 (idle) ended by the network (1), measured (1), the expiry 2026-10-11 00:00.
+     */
+    public static Session measuredSession(LocalDateTime start) {
+        return new Session(start).withWifiColumns();
+    }
+
     /** One tier's record of one session, as billing-core writes the entry. Every setter returns {@code this}. */
     public static final class Session {
         private final LocalDateTime start;
@@ -90,6 +108,23 @@ public final class WifiSessionTestSupport {
         private String prefix;                   // MatchedPrefixCustomer: a session has none
         private String legacyPackageAmount;      // AdditionalSystemCodes — SG10's package stamp, when a row carries it
         private String legacyPackageId;          // AdditionalPartyNumber — SG10's idpackage stamp, when a row carries it
+        // ---- the WiFi columns of BC-0008 (written only when wifiColumns is on) ----
+        private boolean wifiColumns;
+        private String siteColumn = "mirpur-10";   // InTrunkAdditionalInfo: the meta's site (BC-0007's IncomingRoute keeps "site-mirpur-10")
+        private String zone = "dhaka-north";
+        private String grantTier = "paid";
+        private Integer category = 2;
+        private Long bytesUp = 1_234_567L;
+        private Long bytesDn = 12_345_678L;
+        private Long volumeBudgetBytes = 5_000_000_000L;
+        private String grantedSeconds = "1800";
+        private String mac = "aa:bb:cc:dd:ee:01";
+        private String deviceIp = "10.44.0.7";
+        private Integer causeCode = 4;
+        private Integer endedBy = 1;
+        private Integer measured = 1;
+        private String gateway = "bras-2";
+        private LocalDateTime expiry = LocalDateTime.of(2026, 10, 11, 0, 0);
 
         private Session(LocalDateTime start) {
             this.start = start;
@@ -99,7 +134,8 @@ public final class WifiSessionTestSupport {
         public Session partner(Integer id) { this.partner = id; return this; }
         public Session segment(String name) { this.segment = name; return this; }
         public Session msisdn(String number) { this.msisdn = number; return this; }
-        public Session site(String name) { this.site = name; return this; }
+        /** The site: BC-0007's {@code IncomingRoute} and, with the WiFi columns on, BC-0008's {@code InTrunkAdditionalInfo} too. */
+        public Session site(String name) { this.site = name; this.siteColumn = name; return this; }
         /** The record's {@code OutgoingRoute}, when a producer sends one. */
         public Session route(String outgoingRoute) { this.route = outgoingRoute; return this; }
         public Session seconds(String seconds) { this.seconds = seconds; return this; }
@@ -111,6 +147,23 @@ public final class WifiSessionTestSupport {
         public Session prefix(String matched) { this.prefix = matched; return this; }
         /** The legacy package stamps SG10 reads: {@code AdditionalSystemCodes} (the amount) and {@code AdditionalPartyNumber} (the id). */
         public Session legacyPackageStamps(String amount, String idPackage) { this.legacyPackageAmount = amount; this.legacyPackageId = idPackage; return this; }
+
+        // ---- the WiFi columns (BC-0008): each setter switches them on; the defaults are measuredSession's ----
+        public Session withWifiColumns() { this.wifiColumns = true; if (prefix == null) prefix = "wifi-30"; return this; }
+        public Session zone(String name) { this.zone = name; return withWifiColumns(); }
+        /** The grant tier: its word ({@code MatchedPrefixY}) and its number ({@code Category}: free 1, paid 2, admin 3, test 4); a null number = the column empty. */
+        public Session grantTier(String word, Integer number) { this.grantTier = word; this.category = number; return withWifiColumns(); }
+        public Session bytes(long up, long down) { this.bytesUp = up; this.bytesDn = down; return withWifiColumns(); }
+        public Session volumeBudget(Long bytes) { this.volumeBudgetBytes = bytes; return withWifiColumns(); }
+        public Session grantedSeconds(String seconds) { this.grantedSeconds = seconds; return withWifiColumns(); }
+        public Session mac(String address) { this.mac = address; return withWifiColumns(); }
+        public Session deviceIp(String address) { this.deviceIp = address; return withWifiColumns(); }
+        /** The RADIUS cause the Stop carried and who ended it (1 the network/plane, 2 the subscriber, 3 the system). */
+        public Session endedWith(Integer radiusCause, Integer who) { this.causeCode = radiusCause; this.endedBy = who; return withWifiColumns(); }
+        /** {@code ValidFlag}: 1 measured, 0 the unmeasured fault (A-0099); null = the column empty. */
+        public Session measured(Integer flag) { this.measured = flag; return withWifiColumns(); }
+        public Session gateway(String id) { this.gateway = id; return withWifiColumns(); }
+        public Session packageCode(String code) { this.prefix = code; return withWifiColumns(); }
 
         /** The tier paid in money: the amount in BDT, nothing from a bucket. */
         public Session paidInMoney(String amount) {
@@ -136,8 +189,10 @@ public final class WifiSessionTestSupport {
             cdr.append(",\"IncomingRoute\":").append(quoted(site));
             if (route != null) cdr.append(",\"OutgoingRoute\":").append(quoted(route));
             cdr.append(",\"OriginatingCalledNumber\":").append(quoted(segment)).append(",\"TerminatingCalledNumber\":").append(quoted(segment));
-            cdr.append(",\"OriginatingCallingNumber\":").append(quoted(msisdn)).append(",\"TerminatingCallingNumber\":").append(quoted(msisdn));
-            cdr.append(",\"PrePaid\":1,\"DurationSec\":").append(seconds).append(",\"RoundedDuration\":").append(seconds).append(",\"Duration1\":").append(seconds);
+            cdr.append(",\"OriginatingCallingNumber\":").append(quoted(msisdn)).append(",\"TerminatingCallingNumber\":").append(quoted(wifiColumns ? mac : msisdn));
+            if (wifiColumns) cdr.append(",\"OriginatingIP\":").append(quoted(deviceIp));
+            cdr.append(",\"PrePaid\":1,\"DurationSec\":").append(seconds).append(",\"RoundedDuration\":").append(seconds)
+                    .append(",\"Duration1\":").append(wifiColumns ? grantedSeconds : seconds);
             cdr.append(",\"StartTime\":").append(date(start)).append(",\"EndTime\":").append(date(start.plusSeconds(Long.parseLong(seconds))));
             if (answered) cdr.append(",\"AnswerTime\":").append(date(start)).append(",\"ConnectTime\":").append(date(start));
             cdr.append(",\"ChargingStatus\":").append(chargingStatus);
@@ -150,6 +205,7 @@ public final class WifiSessionTestSupport {
             cdr.append(",\"PackageAmount\":").append(packageAmount);
             if (legacyPackageAmount != null) cdr.append(",\"AdditionalSystemCodes\":").append(quoted(legacyPackageAmount));
             if (legacyPackageId != null) cdr.append(",\"AdditionalPartyNumber\":").append(quoted(legacyPackageId));
+            if (wifiColumns) appendWifiColumns(cdr);
             cdr.append(",\"ResellerHierarchy\":\"btcl\",\"ChannelCallUuid\":").append(quoted(sessionId)).append("}");
 
             // SfPreRated: BilledAmount = the minutes when the tier paid in units (> 0), else the money; the unit as sent
@@ -161,6 +217,21 @@ public final class WifiSessionTestSupport {
                     + "\"BilledAmount\":" + billed + ",\"Quantity\":" + seconds + ",\"idQuantityUom\":\"TF_s\",\"unitPriceOrCharge\":" + rate
                     + (prefix == null ? "" : ",\"Prefix\":" + quoted(prefix)) + ",\"RateId\":0,\"idBillingrule\":0,\"description\":\"nc\"}";
             return "{\"Cdr\":" + cdr + ",\"Chargeables\":[" + chargeable + "]}";
+        }
+
+        /** The columns BC-0008's dictionary fills ({@code WifiColumns.java:82-104}), by billing's names; a null left out as its mapper leaves it. */
+        private void appendWifiColumns(StringBuilder cdr) {
+            cdr.append(",\"InMgwId\":").append(quoted(gateway));
+            cdr.append(",\"InTrunkAdditionalInfo\":").append(quoted(siteColumn)).append(",\"OutTrunkAdditionalInfo\":").append(quoted(zone));
+            if (grantTier != null) cdr.append(",\"MatchedPrefixY\":").append(quoted(grantTier));
+            if (category != null) cdr.append(",\"Category\":").append(category);
+            if (bytesUp != null) cdr.append(",\"XAmount\":").append(bytesUp);
+            if (bytesDn != null) cdr.append(",\"YAmount\":").append(bytesDn);
+            if (volumeBudgetBytes != null) cdr.append(",\"ZAmount\":").append(volumeBudgetBytes);
+            if (causeCode != null) cdr.append(",\"ReleaseCauseSystem\":").append(causeCode);
+            if (endedBy != null) cdr.append(",\"ReleaseDirection\":").append(endedBy);
+            if (measured != null) cdr.append(",\"ValidFlag\":").append(measured);
+            if (expiry != null) cdr.append(",\"OtherDate\":").append(date(expiry));
         }
 
         private static String date(LocalDateTime t) {

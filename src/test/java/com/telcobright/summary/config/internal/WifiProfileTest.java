@@ -1,6 +1,7 @@
 package com.telcobright.summary.config.internal;
 
 import com.telcobright.summary.bean.spi.SummaryBean;
+import com.telcobright.summary.registry.internal.ConfigInstantiatedBeans;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
 import io.smallrye.config.PropertiesConfigSource;
 import io.smallrye.config.SmallRyeConfigBuilder;
@@ -26,8 +27,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * call bean of group 30 (config-instantiated: a profile, no class) and the chargeable beans — and, since ARCH-0077-S
  * (item 3), the two call beans of service group 101, the domestic WiFi session, under suffix 101. The profile file is
  * read exactly as the service reads it ({@link ProfileYamlLoader}); the call entries are then built the way the
- * bootstrap builds a config-instantiated bean, so a wrong key in the file is red here and not at a start. The bed's
- * profile ({@code btcl/radius2}) lists the same beans, made the same way.
+ * bootstrap builds a config-instantiated bean, so a wrong key in the file is red here and not at a start. Since SS-0006
+ * (item 4) both profiles also list the four WiFi beans, made by their {@code kind} through the bootstrap's own road
+ * ({@link ConfigInstantiatedBeans}). The bed's profile ({@code btcl/radius2}) lists the same beans, made the same way.
  */
 class WifiProfileTest {
 
@@ -38,6 +40,11 @@ class WifiProfileTest {
             {"dailyCallSummarySg30", "sum_voice_day_30", "30"}, {"hourlyCallSummarySg30", "sum_voice_hr_30", "30"},
             {"dailyCallSummarySg101", "sum_voice_day_101", "101"}, {"hourlyCallSummarySg101", "sum_voice_hr_101", "101"}};
 
+    /** The config-instantiated WiFi beans both profiles carry (SS-0006): the name, its table, its kind, its entity. */
+    private static final String[][] WIFI_BEANS = {
+            {"dailyWifiSessionSummary", "sum_wifi_day_101", "wifi-session", "cdr"}, {"hourlyWifiSessionSummary", "sum_wifi_hr_101", "wifi-session", "cdr"},
+            {"dailyWifiDstSummary", "sum_wifi_dst_day", "wifi-dst", "wifi_flow"}, {"hourlyWifiDstSummary", "sum_wifi_dst_hr", "wifi-dst", "wifi_flow"}};
+
     @Test
     void the_wifi_tenants_profile_lists_every_bean_that_sums_service_group_30_and_the_two_call_beans_of_group_101() {
         List<String> enabled = Arrays.asList(PROFILE.get("summary.enabledSummary").split(","));
@@ -46,7 +53,35 @@ class WifiProfileTest {
         assertTrue(enabled.containsAll(List.of("dailyCallSummarySg30", "hourlyCallSummarySg30")), "the call category for group 30: " + enabled);
         assertTrue(enabled.containsAll(List.of("dailyCallSummarySg101", "hourlyCallSummarySg101")), "the call category for group 101, the WiFi session: " + enabled);
         assertTrue(enabled.containsAll(List.of("dailyChargeableSummary", "hourlyChargeableSummary")), "the chargeable category: " + enabled);
-        assertEquals(8, enabled.size(), "and nothing else: a bean of group 10 or 11 has no record to sum in this tenant");
+        assertTrue(enabled.containsAll(List.of("dailyWifiSessionSummary", "hourlyWifiSessionSummary", "dailyWifiDstSummary", "hourlyWifiDstSummary")),
+                "the WiFi category (SS-0006): the session per day / hour, the volume per destination per day / hour: " + enabled);
+        assertEquals(12, enabled.size(), "and nothing else: a bean of group 10 or 11 has no record to sum in this tenant");
+    }
+
+    @Test
+    void the_wifi_beans_are_made_from_the_profile_alone_by_their_kind_through_the_bootstraps_own_road() {
+        for (String[] bean : WIFI_BEANS) {
+            assertWifiBeanMadeFrom(PROFILE, bean);
+        }
+    }
+
+    private static void assertWifiBeanMadeFrom(Map<String, String> profile, String[] bean) {
+        String prefix = "summary.beans." + bean[0] + ".";
+        assertEquals(bean[2], profile.get(prefix + "kind"), bean[0] + " names its kind");
+        assertEquals(null, profile.get(prefix + "service-group"), bean[0] + ": the kind fixes the group, the profile does not say it");
+        assertEquals(null, profile.get(prefix + "table-suffix"), bean[0] + ": nor the suffix");
+
+        SummaryBean<?> built = ConfigInstantiatedBeans.from(configOf(profile), bean[0]);
+
+        assertEquals(bean[1], built.table(), bean[0]);
+        assertEquals(bean[3], built.entityType(), bean[0] + " reads " + bean[3]);
+        assertEquals(bean[0], built.name(), "its own name: its own bookmark and worker");
+        assertEquals(profile.get(prefix + "window"), built.window().toString());
+    }
+
+    /** The profile as the bootstrap reads it: a configuration whose only source is the profile's keys. */
+    private static Config configOf(Map<String, String> profile) {
+        return new SmallRyeConfigBuilder().withSources(new PropertiesConfigSource(profile, "the profile", 300)).build();
     }
 
     @Test
@@ -60,10 +95,16 @@ class WifiProfileTest {
     void the_beds_profile_lists_the_same_beans_and_makes_the_101_pair_the_same_way() {
         Map<String, String> bed = ProfileYamlLoader.loadProfile(new ProfileYamlLoader.ActiveTenant("btcl", "radius2"));
 
-        assertEquals(PROFILE.get("summary.enabledSummary"), bed.get("summary.enabledSummary"), "the same eight beans, in the same order");
+        assertEquals(PROFILE.get("summary.enabledSummary"), bed.get("summary.enabledSummary"), "the same twelve beans, in the same order");
         for (String[] bean : CALL_BEANS) {
             assertCallBeanMadeFrom(bed, bean);
             for (String key : new String[] {"window", "service-group", "table-suffix"}) {
+                assertEquals(PROFILE.get("summary.beans." + bean[0] + "." + key), bed.get("summary.beans." + bean[0] + "." + key), bean[0] + " " + key);
+            }
+        }
+        for (String[] bean : WIFI_BEANS) {
+            assertWifiBeanMadeFrom(bed, bean);
+            for (String key : new String[] {"window", "kind"}) {
                 assertEquals(PROFILE.get("summary.beans." + bean[0] + "." + key), bed.get("summary.beans." + bean[0] + "." + key), bean[0] + " " + key);
             }
         }

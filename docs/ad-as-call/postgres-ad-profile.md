@@ -40,6 +40,10 @@ summary:
     - hourlyCallSummarySg30                # sum_voice_hr_30
     - dailyCallSummarySg101                # sum_voice_day_101  (ARCH-0077-S: the domestic WiFi session, service group 101)
     - hourlyCallSummarySg101               # sum_voice_hr_101
+    - dailyWifiSessionSummary              # sum_wifi_day_101   (SS-0006: the WiFi session per day — keys by the record's columns, the derived average)
+    - hourlyWifiSessionSummary             # sum_wifi_hr_101
+    - dailyWifiDstSummary                  # sum_wifi_dst_day   (SS-0006: the volume per destination — the wifi_flow entity)
+    - hourlyWifiDstSummary                 # sum_wifi_dst_hr
     - dailyChargeableSummary               # sum_chargeable_day
     - hourlyChargeableSummary              # sum_chargeable_hr
   beans:
@@ -47,6 +51,10 @@ summary:
     hourlyCallSummarySg30:  { window: hourly, service-group: 30,  table-suffix: "30" }
     dailyCallSummarySg101:  { window: daily,  service-group: 101, table-suffix: "101" }
     hourlyCallSummarySg101: { window: hourly, service-group: 101, table-suffix: "101" }
+    dailyWifiSessionSummary:  { window: daily,  kind: wifi-session }   # the kind fixes group 101 and the suffix 101
+    hourlyWifiSessionSummary: { window: hourly, kind: wifi-session }
+    dailyWifiDstSummary:      { window: daily,  kind: wifi-dst }       # idles until billing-core's flow ingest is switched on
+    hourlyWifiDstSummary:     { window: hourly, kind: wifi-dst }
 ```
 
 The lab's copy of it, with the lab's addresses: `src/main/resources/config/tenants/btcl/lab/profile-lab.yml`.
@@ -118,10 +126,10 @@ up, says it (ERROR), and tries again: after `retry-seconds`, each try a little l
 | the role | `summary_service`, LOGIN, its password in secreteer |
 | in each tier schema | USAGE and CREATE (prime-context's provisioning gives them) |
 | on billing-core's tables | SELECT; DELETE on `summary_affected` only (billing-core grants it when it makes the table). The reaper deletes the outbox rows every bean has passed — nothing else |
-| it makes, at its first use of a schema | `summary_offset` (the bookmarks), `summary_affected_dlq` (poison rows), and one table per enabled bean: `sum_ad_day_30`, `sum_ad_hr_30`, `sum_voice_day_30`, `sum_voice_hr_30`, `sum_voice_day_101`, `sum_voice_hr_101`, `sum_chargeable_day`, `sum_chargeable_hr`. Plain tables, the table and its indexes in one transaction |
+| it makes, at its first use of a schema | `summary_offset` (the bookmarks), `summary_affected_dlq` (poison rows), and one table per enabled bean: `sum_ad_day_30`, `sum_ad_hr_30`, `sum_voice_day_30`, `sum_voice_hr_30`, `sum_voice_day_101`, `sum_voice_hr_101`, `sum_chargeable_day`, `sum_chargeable_hr`, and since SS-0006 `sum_wifi_day_101`, `sum_wifi_hr_101` (the WiFi session per day / hour), `sum_wifi_dst_day`, `sum_wifi_dst_hr` (the volume per destination). Plain tables, the table and its indexes in one transaction |
 | it never makes | `summary_affected`, `cdr`, `cdrerror`, `acc_chargeable`. Only billing-core makes them. A tier that has no `summary_affected` yet WAITS: one WARN names the schema and the table, and it is picked up when the table appears — no restart |
 | who reads its tables | `ad_sphere`, through prime-context's default privileges. The DDL of the ad pair: `src/main/resources/db/postgres/sum_ad.sql`; its columns: the README |
-| after an upgrade | an ad table made by an earlier version is brought up to the new description at its first use — a column it lacks is added (`tup_contentid`; the old rows read `''`), a text column that is narrower is widened (`tup_rulecode`, 20 → 64; what it holds stays). A WARN line says each change. A table that is as described gets no statement. The service owns its tables, so it needs no new right |
+| after an upgrade | an ad table made by an earlier version is brought up to the new description at its first use — a column it lacks is added (`tup_contentid`; the old rows read `''`), a text column that is narrower is widened (`tup_rulecode`, 20 → 64; what it holds stays). A WARN line says each change. A table that is as described gets no statement. The service owns its tables, so it needs no new right. The four WiFi tables are kept up to date the same way |
 | on its own connections | the tier's schema and `standard_conforming_strings = off` are set with `SET LOCAL`, inside each transaction. Nothing stays on a connection; no other session is touched |
 | Kafka | it only listens: `cdr_summary_ping_<root>` (billing-core) and `config_event_loader_<root>` (prime-context). It publishes nothing and makes no topic. **Both topics must exist** before billing-core starts: without the ping's topic billing-core's ingest waits 60 s per tier per batch, and this service runs on the poll alone, with about one WARN a second that names the topic; made later, it is heard with no restart. A broker that is away costs latency only: the poll and the refresh go on |
 | one process per root | a second process on the same tree would wait on the first one's bookmark locks; it is not a way to scale |
@@ -183,10 +191,11 @@ The keys of a profile:
 | `summary.outbox.entity-type` | `cdr` | the entity the reaper trims |
 | `summary.enabledSummary` | — | the beans to run |
 | `summary.beans.<name>.window` / `service-group` / `table-suffix` | — | a call bean made from the profile alone (group 30: suffix `"30"`; group 101, the WiFi session: suffix `"101"`) |
+| `summary.beans.<name>.kind` | absent = a call bean | `wifi-session` \| `wifi-dst` (SS-0006): a WiFi bean made from the profile alone, with `window`. `wifi-session`: the session per window into `sum_wifi_<window>_101` — entity `cdr`, group 101 and the suffix fixed by the kind (no `service-group`, no `table-suffix`). `wifi-dst`: the volume per destination into `sum_wifi_dst_<window>` — entity `wifi_flow`, billing-core's flow ingest (a new entity: its beans start at 0). Any other word: that bean is refused at the start, in words |
 | `summary.zone` | `Asia/Dhaka` | MySQL only: "this year" of the partition horizon |
 | `summary.endpoints.local-only` | `false` | a lab's guard: refuse a start that would reach, or listen on, anything but this box (its first name, `summary.endpoints.loopback-only`, is the same switch). Never set on a deployment |
 
-Threads: one per (schema, bean) — 8 for each tier with this profile. They sleep until a ping or the poll.
+Threads: one per (schema, bean) — 12 for each tier with this profile. They sleep until a ping or the poll.
 
 ## 7 · The lab
 
@@ -202,6 +211,7 @@ Everything on 127.0.0.1, in containers named `ss-*`; no password exists.
 | `tools/lab/upgrade-e2e.sh [an older commit]` | an upgrade of a deployment that has rows, with two packaged jars: the older version sums, this one starts on the same schemas, brings its tables up to date and leaves the rows as they were |
 | `tools/lab/ping-topic-e2e.sh` | a ping topic that does not exist (a broker of its own, auto-create off): what it costs, and that it is heard, with no restart, once made |
 | `tools/lab/wifi-101-e2e.sh [pg \| mysql \| both]` | the WiFi session (service group 101) through the outbox with the packaged jar, both engines: the sessions land in `sum_voice_day_101` / `sum_voice_hr_101` only (minutes and money two rows), the 30 tables and the ad tables unchanged by them, `sum_chargeable_*` carrying the 101 legs |
+| `tools/lab/wifi-beans-e2e.sh [pg \| mysql \| both]` | the WiFi beans' story (SS-0006) with the packaged jar, both engines: 12 sessions as BC-0008 writes them → `sum_wifi_hr_101` / `sum_wifi_day_101` as the known rows (keys by column, the derived average) and the 101 voice tables as before; 3 flow windows (one split in two outbox rows) → `sum_wifi_dst_hr` / `sum_wifi_dst_day`; the 30 and 101 voice tables unchanged; the owner's two reports (average session duration per site per day, top destinations per site per hour) equal to a separate query over the raw rows of the same hour |
 | `tools/lab/this-box-e2e.sh` | the lab's key: an address of this box's own interface is this box (a real prime-context never listens on loopback); another box's refuses the start |
 
 `mvn verify` runs the integration tests against the three containers; a test whose lab is away is skipped,

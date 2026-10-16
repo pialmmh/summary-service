@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The WiFi session (service group 101) through the outbox — ARCH-0077-S item 3, with the PACKAGED jar on the lab profile
-# (btcl/lab: the eight beans), on BOTH engines. The rule: a 101 record lands in sum_voice_day_101 / sum_voice_hr_101 ONLY —
+# (btcl/lab: the twelve beans), on BOTH engines. The rule: a 101 record lands in sum_voice_day_101 / sum_voice_hr_101 ONLY —
 # the 30 tables and the ad tables are unchanged by it — and sum_chargeable_* carries the 101 legs as it carries every
 # group; the package minutes (TF_min) and the money (BDT) are two rows, never one; a session of 0 seconds is counted, not
 # costed (the row with no unit).
@@ -62,7 +62,7 @@ SQL
 setup_mysql() {
   myv "CREATE DATABASE $SCHEMA" >/dev/null
   myv "CREATE TABLE $SCHEMA.cdr (id bigint AUTO_INCREMENT PRIMARY KEY, servicegroup int NOT NULL)" >/dev/null
-  # the lab's partition horizon (the rows are of October 2026): eight tables of 731 daily partitions each take minutes on a busy box
+  # the lab's partition horizon (the rows are of October 2026): twelve tables of 731 daily partitions each take minutes on a busy box
   OPTIONS=(-Dsummary.tenants.mode=single -Dsummary.store.kind=mysql "-Dsummary.store.username=$MY_USER"
            -Dsummary.ddl.partition-start=2026-09-01 -Dsummary.ddl.partition-days=60
            "-Dsummary.store.url=jdbc:mysql://$MY_HOST:$MY_PORT/$SCHEMA?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true")
@@ -78,14 +78,14 @@ write_rows() {   # $1 engine, $2 service group, $3 how many, $4 the record: ONE 
 }
 q() { if [ "$1" = pg ]; then pgv postgres "$2"; else myv "$2"; fi; }     # a read as the lab's superuser
 written()  { q "$1" "select coalesce(max(id),0) from $SCHEMA.summary_affected"; }
-caughtUp() { q "$1" "select count(*) from $SCHEMA.summary_offset where last_offset >= $2"; }   # how many of the eight beans are at the last outbox row
+caughtUp() { q "$1" "select count(*) from $SCHEMA.summary_offset where last_offset >= $2"; }   # how many of the twelve beans are at the last outbox row
 waitCaughtUp() {   # $1 engine, $2 seconds at most
   local last; last=$(written "$1"); local started; started=$(date +%s)
   for _ in $(seq 1 $(( $2 * 5 ))); do
-    if [ "$(caughtUp "$1" "$last")" = "8" ]; then echo "$(( $(date +%s) - started )) s: 8 of 8 beans at outbox row $last"; return 0; fi
+    if [ "$(caughtUp "$1" "$last")" = "12" ]; then echo "$(( $(date +%s) - started )) s: 12 of 12 beans at outbox row $last"; return 0; fi
     sleep 0.2
   done
-  echo "NOT CAUGHT UP after $2 s: $(caughtUp "$1" "$last") of 8 beans at row $last"; return 1
+  echo "NOT CAUGHT UP after $2 s: $(caughtUp "$1" "$last") of 12 beans at row $last"; return 1
 }
 rowsOf() {   # $1 engine, $2 a voice table: every row as one text (payer | unit | calls | cost), to see that nothing of it changed
   if [ "$1" = pg ]; then q pg "select coalesce(string_agg(concat_ws('|', tup_inpartnerid, tup_customercurrency, totalcalls, customercost), ';' order by id), '') from $SCHEMA.$2"
@@ -101,17 +101,17 @@ check() { if [ "$2" = "$3" ]; then echo "ok    $1 = $3"; else echo "FAIL  $1: ex
 start_service() {   # $1 engine, $2 log; waits for the start's verdict
   tools/lab/run-lab.sh btcl/lab "${OPTIONS[@]}" > "$2" 2>&1 &
   service_pid=$!
-  for _ in $(seq 1 480); do grep -q "is served: 8 of 8\|could NOT be served\|NOT STARTED\|REFUSING" "$2" && break; sleep 0.5; done
+  for _ in $(seq 1 480); do grep -q "is served: 12 of 12\|could NOT be served\|NOT STARTED\|REFUSING" "$2" && break; sleep 0.5; done
 }
 
 story() {
   local engine=$1
   local log="$WORK/wifi-101-$engine.log" verdict=0 day30 hr30 table
 
-  say "$engine · 1 · the service serves $SCHEMA with the lab profile's eight beans"
+  say "$engine · 1 · the service serves $SCHEMA with the lab profile's twelve beans"
   "setup_$engine"
   start_service "$engine" "$log"
-  grep -q "is served: 8 of 8" "$log" || { echo "not served:"; grep -E "ERROR|REFUS|NOT STARTED" "$log" | tail -8 | cut -c1-260; return 1; }
+  grep -q "is served: 12 of 12" "$log" || { echo "not served:"; grep -E "ERROR|REFUS|NOT STARTED" "$log" | tail -8 | cut -c1-260; return 1; }
   grep -E "^ENDPOINT |^SECRET " "$log" | cut -c1-200
   grep "bean registered" "$log" | grep -o "name=[A-Za-z0-9]* .*table=[a-z_0-9]*" | grep 101 | sed 's/^/   /'
   if [ "$engine" = mysql ]; then for _ in $(seq 1 60); do [ -n "$(myv "show tables in $SCHEMA like 'summary_affected'")" ] && break; sleep 0.5; done; fi
