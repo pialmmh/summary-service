@@ -1,4 +1,4 @@
-package com.telcobright.summary.summarybeans.chargeable.internal;
+package com.telcobright.summary.summarybeans.call.chargeable.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
@@ -8,7 +8,7 @@ import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
 import com.telcobright.summary.summarybeans.call.model.Chargeable;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;

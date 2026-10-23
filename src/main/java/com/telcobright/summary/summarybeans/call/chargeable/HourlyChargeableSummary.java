@@ -1,8 +1,8 @@
-package com.telcobright.summary.summarybeans.chargeable;
+package com.telcobright.summary.summarybeans.call.chargeable;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.WindowSize;
-import com.telcobright.summary.summarybeans.chargeable.internal.ChargeableSummaryBean;
+import com.telcobright.summary.summarybeans.call.chargeable.internal.ChargeableSummaryBean;
 
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;

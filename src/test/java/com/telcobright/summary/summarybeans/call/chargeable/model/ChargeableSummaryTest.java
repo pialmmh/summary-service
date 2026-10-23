@@ -1,4 +1,4 @@
-package com.telcobright.summary.summarybeans.chargeable.model;
+package com.telcobright.summary.summarybeans.call.chargeable.model;
 
 import org.junit.jupiter.api.Test;
 

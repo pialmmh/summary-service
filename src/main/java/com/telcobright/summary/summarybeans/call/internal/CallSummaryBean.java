@@ -1,6 +1,7 @@
 package com.telcobright.summary.summarybeans.call.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.telcobright.summary.bean.spi.ServiceGroupReader;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryMode;
 import com.telcobright.summary.bean.spi.SummaryTableSpec;
@@ -37,7 +38,7 @@ import java.util.List;
  * <p>The bean declares {@link #contextName()} so the registry loads that context, but the call build reads only
  * the blob — the MediationContext is not load-bearing here (per the pinned contract).
  */
-public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
+public abstract class CallSummaryBean implements SummaryBean<CallSummary>, ServiceGroupReader {
 
     private static final Logger LOG = Logger.getLogger(CallSummaryBean.class);
     private static final CallSummaryGenerator GENERATOR = new CallSummaryGenerator();   // stateless, shared
@@ -92,6 +93,12 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
     @Override
     public String contextName() {
         return context;
+    }
+
+    /** The service group whose records this bean keeps — and so its kind (SS-0008: of 10/11 the call's, of 30 the ad's, of 101 the WiFi's). */
+    @Override
+    public int serviceGroup() {
+        return serviceGroup;
     }
 
     /**

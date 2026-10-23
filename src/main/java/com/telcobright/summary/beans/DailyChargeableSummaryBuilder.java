@@ -2,8 +2,8 @@ package com.telcobright.summary.beans;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.telcobright.summary.bean.spi.SummaryBean;
-import com.telcobright.summary.summarybeans.chargeable.DailyChargeableSummary;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.DailyChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 
 /**
  * High-level entry point for the <b>daily</b> chargeable summary bean:

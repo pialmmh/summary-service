@@ -1,4 +1,4 @@
-package com.telcobright.summary.summarybeans.chargeable;
+package com.telcobright.summary.summarybeans.call.chargeable;
 
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.beans.DailyChargeableSummaryBuilder;
@@ -6,7 +6,7 @@ import com.telcobright.summary.engine.internal.SummaryCache;
 import com.telcobright.summary.engine.spi.MergeMode;
 import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport.View;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;

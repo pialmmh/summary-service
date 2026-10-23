@@ -2,8 +2,6 @@ package com.telcobright.summary.registry.internal;
 
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
-import com.telcobright.summary.summarybeans.wifi.WifiBeanKind;
-import com.telcobright.summary.summarybeans.wifi.WifiSummaries;
 import org.eclipse.microprofile.config.Config;
 import org.jboss.logging.Logger;
 
@@ -15,10 +13,11 @@ import org.jboss.logging.Logger;
  *   <li>absent — a CALL bean, exactly as before this round ({@code service-group} required, {@code table-suffix},
  *       {@code context}; how a second service group — legacy covered SG10 AND SG11 — gets its own worker without a
  *       per-SG class);</li>
- *   <li>{@code wifi-session} | {@code wifi-dst} — a WiFi bean ({@link WifiSummaries}); {@code wifi-session} fixes the
- *       service group 101 and the table suffix 101 itself, {@code wifi-dst} has neither;</li>
- *   <li>any other word — refused, in words that name the two kinds ({@link WifiBeanKind#parse}); the bootstrap says it
- *       and activates no bean under that name.</li>
+ *   <li>a SHAPE word — the bean of the kind whose shape it is ({@link KnownKinds#shaped}, SS-0008): {@code wifi-session} |
+ *       {@code wifi-dst}, the WiFi kind's ({@code WifiSummaries}); {@code wifi-session} fixes the service group 101 and the
+ *       table suffix 101 itself, {@code wifi-dst} has neither;</li>
+ *   <li>any other word — refused, in words that name every shape; the bootstrap says it and activates no bean under that
+ *       name.</li>
  * </ul>
  */
 public final class ConfigInstantiatedBeans {
@@ -37,7 +36,7 @@ public final class ConfigInstantiatedBeans {
         String kind = key(config, name, "kind");
         String context = key(config, name, "context");
         if (kind != null) {
-            return WifiSummaries.forWindow(name, WifiBeanKind.parse(name, kind), window, context);
+            return KnownKinds.shaped(name, kind, window, context);   // the shape's kind makes it (today the WiFi kind's two)
         }
         return callBean(config, name, window, context);
     }

@@ -19,5 +19,9 @@
  * is the call category's {@code CdrBlobMapper} (case-insensitive, lenient) and the session's input is the call
  * category's {@code RatedCall}. The tables are the service's own on both engines ({@code SummaryTableSpec},
  * partitioned by day on MySQL, kept up to date).
+ *
+ * <p>SS-0008: this package is the WIFI kind ({@link com.telcobright.summary.summarybeans.wifi.WifiKind}): service group 101,
+ * the entities {@code cdr} and {@code wifi_flow}, the two shapes above (its fine-tuning key {@code summary.beans.<name>.kind}),
+ * and the session as a call ({@code sum_voice_*_101}, a call-shaped bean of group 101).
  */
 package com.telcobright.summary.summarybeans.wifi;

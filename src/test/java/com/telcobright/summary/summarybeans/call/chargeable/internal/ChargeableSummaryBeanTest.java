@@ -1,10 +1,10 @@
-package com.telcobright.summary.summarybeans.chargeable.internal;
+package com.telcobright.summary.summarybeans.call.chargeable.internal;
 
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.beans.DailyChargeableSummaryBuilder;
 import com.telcobright.summary.beans.HourlyChargeableSummaryBuilder;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 import com.telcobright.summary.testkit.CdrTestSupport;
 import org.junit.jupiter.api.Test;
 

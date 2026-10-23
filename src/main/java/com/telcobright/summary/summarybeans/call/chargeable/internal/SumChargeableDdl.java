@@ -1,7 +1,7 @@
-package com.telcobright.summary.summarybeans.chargeable.internal;
+package com.telcobright.summary.summarybeans.call.chargeable.internal;
 
 import com.telcobright.summary.bean.spi.SummaryTableSpec;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 
 /**
  * The {@code sum_chargeable_*} table the chargeable beans SELF-PROVISION with at activation (user directive

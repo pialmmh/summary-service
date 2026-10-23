@@ -15,7 +15,7 @@ import com.telcobright.summary.summarybeans.call.CallSummaries;
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 import com.telcobright.summary.summarybeans.wifi.model.WifiDestinationSummary;
 import com.telcobright.summary.summarybeans.wifi.model.WifiSessionSummary;
 import com.telcobright.summary.testkit.CdrTestSupport;
