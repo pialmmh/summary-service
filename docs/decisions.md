@@ -11,6 +11,15 @@ The rulings this service is built on. Items marked **RATIFIED** come from the de
 > OUTBOX + per-bean MySQL offset + Kafka-as-ping, per `summary-service-outbox-design.md` (user + architect +
 > dotnet ratified). The engine (§1–3) is unchanged — it reads the outbox blob now. §4 (Kafka-offset
 > idempotency) and §11 (recompute-from-cdr correction) are SUPERSEDED by §13.
+>
+> **The kinds (2026-10-24) — see §17.** One bean set per kind (call · ad · wifi), each one package; switched on per tenant
+> by `summary.kinds` (none = the call alone); a bean of a kind not enabled refuses the start; the rows of a kind not
+> enabled are summed by no bean and counted (`KIND_NOT_ENABLED`). The engine, exactly-once and the blob are unchanged.
+
+> **An ad is a Call (2026-10-04) — see §16.** The store is MySQL OR PostgreSQL per profile (supersedes §6); one
+> process serves every tenant schema of its root's tree; a schema seen for the first time starts at offset 0
+> (narrows §13's head-init); a password may come from the unit's environment by its variable's NAME (adds to
+> §8); the ad beans read the `cdr` stream. The engine (§1–3) and exactly-once (§13) are unchanged.
 
 ## 1. load-merge-write is the core — RATIFIED
 Not bare `INSERT … ON DUPLICATE KEY UPDATE`. The cache → merge → segmented-write path handles increment
@@ -373,3 +382,258 @@ the framework-closure proof: `LedgerSummary` entity (key idAccount + transaction
 - new WINDOW of a category → one subclass; new INSTANCE (another SG) → yml only (§12g);
 - fold modes: INCREMENTAL live (all outbox polls), SUBTRACT via `op` (corrections), REPLACE prototype (§14);
 - exactly-once, head-init, poison DLQ, reaper watermark, self-provisioning — all category-agnostic.
+
+## 16. An ad is a Call — PostgreSQL, the tenant tree, the ad beans on the `cdr` stream (2026-10-04)
+The brief: ad-sphere `docs/ad-as-call/handoff/HANDOFF-summary-service.md` (S1–S9), the design: routesphere
+`docs/architecture/ad-is-a-call.md`, the architect's rulings: `ANSWER-summary-service-SS-0001.md`. Built on the
+branch `postgres-ad-call`; the notes of the work are `docs/ad-as-call/SS-0001-update.md` and `SS-0002-done.md`.
+The engine's rules did not move: load the windows once (§2), merge, segmented write, the summaries and the
+bookmark in ONE transaction (§3, §13), exactly once per bean.
+
+### 16a. The store is chosen per profile, at run time — SUPERSEDES §6 ("MySQL only")
+`summary.store.kind: mysql | postgresql` (+ `.url`, `.username`, `.password | .password-ref`, pool sizes). One
+jar serves either engine: the Quarkus datasource extension is gone (its `db-kind` is fixed when the jar is
+BUILT), the store has its own Agroal pool, made from the profile at the first use (`StoreDataSource`). A `kind`
+that contradicts the URL, an unknown kind, or workers that are to start with no store at all REFUSE the start
+(`StoreDataSource.checkAtStart`); a store that does not ANSWER is tried again and never fails a start.
+
+Everything an engine differs in lives at the store's edge, keyed on `SqlDialect`: a table's DDL, the bookmark's
+upsert and head-init, how a tenant's schema is entered, how the session reads a string literal. The engine, the
+cache, the entities and the beans are one code. The proof is one contract run word for word on both engines:
+`OutboxConsumerContract` → `OutboxConsumerIT` (MySQL) and `PostgresOutboxConsumerIT`.
+
+### 16b. The ad beans read the `cdr` stream (brief S1–S3)
+An ad view is a `cdr` row of service group 30 per tier, written by billing-core with one outbox row. The ad
+beans (`dailyAdSummary`, `hourlyAdSummary`) have `entityType = cdr`, keep the entries whose `Cdr.ServiceGroup`
+is 30, and read the view's facts from the JSON in `Cdr.AdditionalMetaData`. The `ad_cdr` entity, its models and
+its writer's shape are gone. The tables keep their columns (ad-sphere's reader needs only the schema's name);
+`tup_tenant` is ALWAYS the schema's own name (the drain passes the tier to the bean — `buildBatch(json, tier)`);
+`tup_app` is 64 wide, the width of the app's name at its source.
+
+**The key holds the CONTENT too (brief S13, 2026-10-04).** A campaign holds several contents, and the ad
+manager's per-content reports had no source but the raw `cdr` rows (the content id inside a JSON text: a scan
+with no index). `tup_contentid VARCHAR(64) NOT NULL DEFAULT ''` = the record's `AdditionalMetaData.contentId`
+(64 = `ad_content.id` at its source; a number is read as its digits; `''` when the record carries none — a
+refused view, a house ad). One row per (the key as before, content); every measure is as it was, and the rows of
+one campaign summed over its contents are what its one row was. The column is the table's LAST (README).
+
+**An existing table is brought up to its description by the service itself (`TableDdl.bringUpToDate`).** A table
+description may be marked `keptUpToDate()` — the ad tables are: net-new, this service's alone. At a table's first
+use the catalog is read (`SummaryStore.columnWidths`) and a column the table lacks is added with its default, so
+the rows that are there read `''`: history is not rebuilt. A table that is as described gets no statement and no
+lock — the step is safe at every start. A table that is NOT marked is never looked at, whatever it lacks: the
+voice deployment's `sum_voice_*` / `sum_chargeable_*` are legacy tables another system also writes (§15a), and a
+surprise `ALTER` on them is exactly what must not happen. A missing column that has no default (`id`, the
+bucket) is not added: such a table is not this service's, and the provisioning refuses it in words.
+
+**A value is never wider than its column (brief S14, 2026-10-04).** Every text of the ad key has ONE width —
+`AdSummaryBuilder.*_WIDTH`, used by the builder's cut AND by the table's description — and it is the source's
+full width: zone, site, app, content id 64; **`tup_rulecode` 64, it was 20**: a rule's code is 20, but ad-sphere
+writes the ZONE as the called number for a tenant with no rule table. An existing table is widened by the same
+step that adds a column (`ALTER COLUMN … TYPE VARCHAR(64)` / `MODIFY COLUMN …`); a value that is there stays.
+What happened BEFORE, with the 20-wide column: nothing failed — the builder cut the zone to its first 20
+characters before the key was taken, so the row was stored and merged correctly (`tup_zone`, 64, is in the key
+too: no two zones merged); the rule code column just held 20 characters of the zone. The general rule, which
+all three categories follow: a text of the key is cut to its column by the service, so the database never
+refuses a row over a width. (Were a column narrower than the cut — it cannot be after the step above — the
+INSERT would fail at the SQL layer: that drain step rolls back and is retried — the worker backs off up to 60 s,
+with an ERROR and a rising count each try; the bean of that tier stops at that outbox row; the other beans go on;
+it is NEVER dead-lettered — §13c: an SQL failure may be transient, so it is not poison — and that tier's outbox
+is not trimmed past the row until the bean passes it.)
+
+### 16c. Money and units are two measures — RULED (architect, decide 3)
+`chargedamount` = the customer chargeables whose unit is `BDT`; `chargedunits` = the ones in any other unit (a
+package's). Never added. A leg that names no unit is not taken for money. On MySQL the column is added by the
+same table description (a table made before it keeps 17 columns: `ALTER TABLE … ADD COLUMN chargedunits` once,
+or drop it — the old `ad_cdr` writer is retired).
+
+### 16d. The call bean takes service group 30 from a profile — RULED (decide 2)
+`service-group: 30`, `table-suffix: "30"` on a config-instantiated call bean (§12g) gives `sum_voice_*_30`. It
+needed a branch: the builder threw on any group but 10 and 11 (every batch with a view would have been
+dead-lettered). Group 30 is pre-rated, customer direction only, and has NO `ChargingStatus` early return: a view
+admitted and never shown is charged, and its charge must be in the call summary as it is in the ad and the
+chargeable summaries. The chargeable beans needed no change.
+
+### 16e. PostgreSQL tables are PLAIN — RULED (decide 1)
+One table description (`SummaryTableSpec`), two renderers (`TableDdl`). MySQL: byte for byte what it was — RANGE
+partitions by day, the full set inside the one CREATE. PostgreSQL: a plain table and its indexes, made in one
+transaction (all or nothing). No partitioned variant exists, on purpose: a partitioned parent is invisible to
+ad-sphere's reader (pgjdbc reports it as `PARTITIONED TABLE`), and the full daily set costs about 19 s and 2,900
+relations per table per tier, empty. A summary table is small: one row per key per day or hour.
+
+### 16f. In a tenant schema ONLY billing-core makes the CDR road's tables — RULED
+On PostgreSQL the role that makes a table owns it. summary-service never creates `summary_affected` there (nor
+`cdr`, `cdrerror`, `acc_chargeable`): `OutboxInfraDdl` makes `summary_offset` and `summary_affected_dlq` only.
+A schema whose `summary_affected` is not there yet WAITS — one WARN names the schema and the table; it is looked
+at again on the normal cycle and picked up with no restart. It is not an error, and the table is never made "to
+be helpful". Its rights there: SELECT on billing-core's tables, DELETE on `summary_affected` only (the reaper).
+MySQL keeps its dev copy of the outbox (`CREATE TABLE IF NOT EXISTS` — no owner concept there, no fault).
+
+### 16g. Every tenant of the tree in one process (brief S6)
+`summary.tenants.mode: tree` + `root` + `prime-context.base-url`: the schemas are the `dbName` of every node of
+`POST /get-specific-tenant-root` (parsed as a stream — the tree's contexts are large and are skipped). A worker
+and a bookmark per (schema, bean); the tables of a schema are made at its first use. `TenantWatcher` reads the
+tree at the start, at every ring of the doorbell (Kafka `config_event_loader_<root>`), and on a timer; a reseller
+made at run time is served with no restart; a schema the tree lost is stopped and its bookmarks stay. A tree that
+cannot be read, or names no schema, changes nothing that is served. A schema that cannot be served does not hold
+up the others and is tried again. `mode: single` (the default) is the old deployment: one schema, the
+connection's own. One process per root: a second one would only wait on the first one's bookmark locks.
+
+A unit of work is begun ON a schema. PostgreSQL: `SET LOCAL search_path` inside the transaction — nothing stays
+on a pooled connection. MySQL: `setCatalog`, and a connection left in another database goes home.
+
+### 16h. A schema seen for the first time starts at offset 0 (brief S7) — NARROWS §13's head-init
+Decided ONCE per schema, for all its beans, in one transaction, before any worker of it starts
+(`OutboxReader.seedBookmarks`): a schema with no bookmark at all was never served — every bean starts at 0, so
+what billing-core wrote before the service came is summed. On a schema already served, a bean without a bookmark
+starts at the outbox HEAD (the late-enabled bean of §13 — it sums from now, never from the residue). A bookmark
+that exists is never moved. Consequence for an operator: do not delete ALL the bookmarks of a schema (it would
+look new and be summed again from 0); to retire one bean delete that bean's row.
+
+### 16i. The ping wakes the tenant it names (brief S8)
+`cdr_summary_ping` carries `{tenant, entity, rows}`; `tenant` is the schema. Its workers of that entity wake; a
+payload that cannot be read, or names no tenant, wakes every worker as before; a one-tenant deployment wakes on
+every ping. The poll stays as the fallback, so a broker that is away costs latency only. The listeners fix their
+position and look once the moment they can hear (what landed before is not missed).
+
+**On a deployment the topic carries the root (brief S12; the rehearsal's finding 2): `cdr_summary_ping_<root>`**
+— a profile value (`summary.outbox.ping-topic`), the SAME name on billing-core's side
+(`billing.summary.ping-topic`), as the lane's other topics (`cdr_<root>`, `cdr_dlq_<root>`,
+`config_event_loader_<root>`): on one broker with two operators a shared topic would bring every operator's pings
+to every summary-service (a ping wakes the tier it names — two trees may hold a tier of the same name, and a
+one-tenant deployment wakes on every ping).
+The topic must EXIST (a deployment's broker makes none by itself). Seen: without it billing-core's ingest waits
+60 s per tier per batch; this service stays up on the poll alone, with about one WARN a second from the Kafka
+client that names the topic, and hears it with no restart once it is made (`tools/lab/ping-topic-e2e.sh`). No
+code changed: the key's default stays `cdr_summary_ping` (the voice deployment's).
+
+### 16j. The password by the NAME of its environment variable (brief S9) — ADDS to §8
+`summary.store.password-ref: env:NAME`: the value is in the unit's environment only (secreteer's
+`/etc/secreteer/<tenant>/<app>.env` → `EnvironmentFile=`). A named variable that is not set, or is empty,
+refuses the start in words that name the variable, before anything is dialled. The two forms together are
+refused; a reference that is not `env:NAME` is refused WITHOUT being shown; a password in the URL is refused in
+every form (`UrlSecrets`: a parameter, `user:password@`), and is hidden wherever a configured value is printed.
+The inline form of §8 stays for the deployments that have it.
+
+### 16k. A profile lists nothing, and a start names its tenant
+Quarkus bakes every key a config source LISTS at build time as a run-time default. The profile source listed
+the build tenant's keys — so a start told to serve another tenant still held the first one's addresses, and a
+lab start dialled another tenant's config-manager once (2026-10-04; refused, nothing exchanged; reported).
+Now `TenantProfileConfigSource` lists NOTHING and answers `summary.*` keys by name only
+(`BuildBakesNoTenantIT` reads the packaged jar). A start names its tenant (`SUMMARY_ACTIVE_TENANT=<tenant>/
+<profile>` or `-Dsummary.active-tenant=`). With `summary.autostart` off a start dials nothing at all (the beans'
+contexts are loaded only when the workers start).
+
+**A deployment's configuration is OUTSIDE the jar (brief S10; the rehearsal's finding 6).** ONE key names the
+directory that holds `config/tenants/<tenant>/<profile>/profile-<profile>.yml`: `-Dsummary.config.dir` or
+`SUMMARY_CONFIG_DIR` (not named: the working directory) — as billing-core's `billing.config.dir` and seed's
+`seed.config.dir`. A file found there wins, whole; else the jar's own is read. The directory's own
+`config/tenants.yml` may say which tenant the deployment serves (the house rule: a file says it; `-D` and the
+environment are a start's override); a deployment's registry that enables nothing serves nothing — the jar's is
+not asked behind its back. The start's FIRST line says which tenant, what named it, and which file was read
+(`PROFILE …`; a fallback to the jar reads `THE JAR'S OWN …`). What a person wrote wrong refuses the start in
+words, and nothing falls back to the jar behind it: a named directory that is none, a tenant with no profile
+file anywhere, a file that cannot be parsed. The loader never throws into the configuration system (the logging
+is not up there): the profile source carries the fault (`summary.profile.fault`) and the bootstrap refuses.
+
+### 16l. A start says what it will dial, before it dials — the lab's rule
+`StartEndpoints`: after the profile's line (§16k), the database URL, the brokers, each configuration source's
+base URL and the listener are said, one line each, before anything is dialled — a refused start has them in its
+log too. `summary.endpoints.print-only=true` prints them and exits (0 = every host is this box, 3 = not, 4 = the
+configuration refuses the start).
+
+`summary.endpoints.local-only=true` is the LAB's key (the lab profile carries it itself): a start that would
+reach, or listen on, anything but THIS BOX is refused, in words, before anything is dialled. **This box (brief
+S11; the rehearsal's finding 7)** = the word `localhost`, a loopback address, or an address that one of this
+box's own interfaces holds — a real prime-context never listens on loopback (its bind guard), so a lab gives it
+an address of this box (a bridge, a namespace's own address). As billing-core's `billing.lab.local-only`. A host
+NAME is never looked up — the lookup itself would leave the box — so a name is not this box; an address is
+parsed, never resolved (four numbers up to 255, or an IPv6 text in brackets, which the JDK parses or refuses
+without a lookup); the any-address (`0.0.0.0`) is not this box: a listener on every interface is reachable from
+other boxes. A value with no host that can be read is never taken for this box. The key's first name,
+`summary.endpoints.loopback-only`, is the same switch: a kit that sets it keeps its guard. In a lab a service is
+started only through `tools/lab/run-lab.sh`, which reads the hosts itself (it asks the kernel for this box's
+addresses, not the service) and then starts with the key.
+
+### 16m. One string means the same on both engines
+The entities render their own SQL literals the MySQL way (a backslash is doubled). The PostgreSQL unit of work
+sets `standard_conforming_strings = off` with `SET LOCAL`, inside its own transaction: the same text is read the
+same on both engines, and no other session, role or database setting is touched.
+
+### 16n. Left as it is, on purpose
+- `tup_rulecode` is 20 wide while a zone (which the switch puts there when no rule matched) may be 64: no rows
+  merge by it — `tup_zone` (64) is in the key too.
+- A window is cut on the `cdr`'s own wall clock; no zone is converted. Only MySQL's partition horizon asks a
+  clock ("this year"), in the tenant's zone (`summary.zone`, default Asia/Dhaka).
+- One thread per (schema, bean), asleep until a ping or the poll. A deployment with very many tiers may want a
+  shared scheduler; not built (no tier count asks for it today).
+- `tenants.yml` still flags `tcbl/dev` as enabled (the pre-existing default of the voice deployment). A start
+  that names no tenant falls on it; with autostart off it dials nothing. Recommended: no tenant enabled by
+  default (in the done note's findings — the architect's call).
+
+## 17. The kinds — one bean set per kind, switched on per tenant (SS-0008, 2026-10-24)
+The owner's R13 (routesphere `docs/architecture/routesphere-seed-flow-requirements.md`, 2026-10-23: "billing and summary get
+new logic beans close to the current call processing, extended to the new services … switched on per tenant by config
+(kinds: call, ad, wifi)") — S17 of SS-0003 §5, which waited for his word. Built on the branch `kinds` (from
+`postgres-ad-call`); the note of the work is `docs/ad-as-call/SS-0008-done.md`. The engine (§1–3), exactly-once (§13), the
+outbox blob (billing-core's `summary_affected` shape, the contract with BC-0009) and every bean's sums are unchanged.
+
+### 17a. The contract — `bean/spi/SummaryKind`
+A kind declares: its WORD in `summary.kinds`; the SERVICE GROUPS whose `cdr` rows are its; the outbox ENTITIES its beans
+read; its BEAN SET — the catalog window classes (CDI singletons, by name), the shapes it config-instantiates from
+`summary.beans.<name>.kind`, and the beans it owns. Each bean carries its own generator, builder and table (the SPI of §12).
+A call-shaped bean (`sum_voice_*`, `ServiceGroupReader`) is the kind of the group it reads: the call's code is the model,
+`sum_voice_*_30` is the ad's view of a view as a call, `sum_voice_*_101` the WiFi's. The known kinds are listed ONCE,
+`registry/internal/KnownKinds` (call, ad, wifi — in that order); the questions asked of them: which kind a service group is
+(the kind naming it, else the call — every group was summed before kinds), which kind a bean is, which kind makes a shape.
+
+| kind | groups | entities | its beans (one package each) |
+|---|---|---|---|
+| `call` | 10, 11 and every group no kind names | `cdr` | `summarybeans/call`: the voice window classes and `CallSummaries` extras (`sum_voice_*_<suffix>` of 10/11); `call/chargeable`: the chargeable roll-up (`sum_chargeable_*`) |
+| `ad` | 30 | `cdr` | `summarybeans/ad`: `DailyAdSummary` / `HourlyAdSummary` (`sum_ad_*_30`); a call-shaped bean of 30 (`sum_voice_*_30`) |
+| `wifi` | 101 | `cdr`, `wifi_flow` | `summarybeans/wifi`: the shapes `wifi-session` (`sum_wifi_*_101`) and `wifi-dst` (`sum_wifi_dst_*`); a call-shaped bean of 101 (`sum_voice_*_101`) |
+
+The existing beans were MOVED, not rewritten: the chargeable package went under the call kind (`summarybeans/chargeable` →
+`summarybeans/call/chargeable`, the package lines only); the ad and WiFi beans were already in their kinds' packages.
+
+### 17b. Activation — `summary.kinds` in the tenant profile; none named = `call`
+`summary.kinds: [call, ad, wifi]` (case and blanks ignored, a repeat is one kind). None named = the call alone: what the
+service did before kinds existed, the voice deployment's profile (tcbl) unchanged. A word that is no kind refuses the
+start, in words naming the kinds. The start says the kinds in one line (`KINDS call, ad, wifi (summary.kinds) — call = service
+groups 10, 11 and every group no kind names; ad = service group 30; wifi = service group 101`), print-only too.
+
+### 17c. A bean of a kind the tenant did not enable REFUSES the start — it is not skipped
+Every bean `summary.enabledSummary` names must be of an enabled kind. One that is not refuses the start, naming each such
+bean and its kind, before any bean is registered. Why not skip it: a bean left out does not hold the outbox (the reaper
+trims past the registered beans' bookmarks), so the rows it should have summed would be deleted and its summaries lost for
+good once it came back. A refused start loses nothing: billing-core keeps writing, the bookmarks wait. **For a deployment
+whose profile is outside the jar (the bed): the profile gains `kinds: [call, ad, wifi]` BEFORE this jar starts on it.**
+
+### 17d. The rows of a kind not enabled — summed by no bean, counted once, said once per tenant, kind and day
+A `cdr` record whose service group belongs to a kind the tenant did not enable is summed by no bean (its kind's beans are not
+there; the call-shaped beans filter by their own group as before; the chargeable roll-up is told the enabled groups —
+17e). It is counted by `registry/internal/KindGate` and said: ONE WARN per tenant (tier schema), kind and day,
+`KIND_NOT_ENABLED <kind> <n> rows — tenant <tier>, day <day>: …` at the first such record of the day; the day's total in an
+INFO (`… <n> rows in all …`) when the day turns and at stop. The outbox row is consumed as every other. Counted ONCE per
+outbox row: only the drains of one bean per tier count — the first `cdr` bean the profile enables — and only after their
+commit (`outbox/spi/RowCensus`, heard by `OutboxReader`); that bean's drain is exactly once per row, across restarts too
+(a rolled-back step is not heard; a quarantined row is not counted). A record's kind is its customer chargeable's
+`servicegroup` (the call beans' rule), else the record's `Cdr.ServiceGroup`, else 0 (the call's). The day is the tenant's
+(`summary.zone`). The count lives in the process (a test reads it); the WARN and the INFO are its record.
+
+### 17e. The chargeable roll-up reads the enabled kinds' groups
+The one bean whose input crosses the kinds (`bean/spi/CrossKindReader`): the start tells it the enabled kinds' groups and it
+sums no leg of a record of another group (by the record's customer leg, as 17d). Untold — a test or an embedder — it reads
+every group, as before. With every kind enabled (the bed's profile) it is exactly as before; for a voice tenant it is as
+before for every group but 30 and 101, which a voice tenant never receives.
+
+### 17f. Left as it is, on purpose
+- `CallSummaryBuilder` keeps its per-group branches (10, 11, 30, 101): the call-shaped view of each kind is the call's code.
+  Moving them into the kinds would be a rewrite of the pinned sums, not a move.
+- The blob model stays in `summarybeans/call/model` (`Cdr`, `Chargeable`, `CdrBlobEntry`, `CdrBlobMapper`) and the ad and
+  WiFi kinds read it from there: one pinned contract, one decoder.
+- `summary.beans.<name>.kind` (a bean's SHAPE, the WiFi kind's fine-tuning) and `summary.kinds` (the tenant's kinds) share a
+  word; renaming the older key would break every deployed profile.
+- The reaper trims the `cdr` entity only (`summary.outbox.entity-type`), as before: `wifi_flow` rows are never trimmed, with or
+  without the wifi kind (a finding of this round, not changed by it).
+- A kind is all or nothing per tenant; the beans inside it are still chosen one by one in `enabledSummary`.

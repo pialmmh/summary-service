@@ -8,14 +8,16 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** In-memory {@link OutboxStore} — seedable outbox rows + per-bean offsets, for the reader/reaper tests. */
 public final class FakeOutboxStore implements OutboxStore {
 
-    private final List<OutboxRow> rows = new ArrayList<>();
-    private final Map<String, Long> offsets = new HashMap<>();
+    private final List<OutboxRow> rows = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final Map<String, Long> offsets = new java.util.concurrent.ConcurrentHashMap<>();
     private boolean failReads = false;
 
     public void seed(long id, String data) {
@@ -44,8 +46,37 @@ public final class FakeOutboxStore implements OutboxStore {
                 k -> rows.stream().mapToLong(OutboxRow::id).max().orElse(0L));
     }
 
+    /** billing-core has made its outbox in this schema (the default); false = a tier it has not served yet. */
+    public boolean outboxPresent = true;
+
+    @Override
+    public boolean outboxExists() {
+        return outboxPresent;
+    }
+
+    @Override
+    public Set<String> bookmarkedBeans(String entityType) {
+        Set<String> beans = new LinkedHashSet<>();
+        for (String key : offsets.keySet()) {
+            if (key.startsWith(entityType + "|")) beans.add(key.substring(entityType.length() + 1));
+        }
+        return beans;
+    }
+
+    @Override
+    public void seedOffsetIfAbsent(String entityType, String beanName, long offset) {
+        offsets.putIfAbsent(key(entityType, beanName), offset);
+    }
+
+    public boolean hasBookmark(String entityType, String beanName) {
+        return offsets.containsKey(key(entityType, beanName));
+    }
+
     @Override
     public List<OutboxRow> readAfter(String entityType, long afterId, int limit) {
+        if (!outboxPresent) {
+            throw new SummaryStoreException("relation \"summary_affected\" does not exist (test)", null);
+        }
         return rows.stream()
                 .filter(r -> r.id() > afterId)
                 .sorted(Comparator.comparingLong(OutboxRow::id))

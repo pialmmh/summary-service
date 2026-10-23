@@ -1,63 +1,108 @@
 package com.telcobright.summary.summarybeans.ad.internal;
 
 import com.telcobright.summary.bean.spi.WindowSize;
-import com.telcobright.summary.summarybeans.ad.model.AdCdr;
-import com.telcobright.summary.summarybeans.ad.model.AdLeg;
+import com.telcobright.summary.summarybeans.ad.model.AdCallCdr;
 import com.telcobright.summary.summarybeans.ad.model.AdSummary;
+import com.telcobright.summary.summarybeans.ad.model.AdView;
+import com.telcobright.summary.summarybeans.ad.model.AdViewFacts;
+import com.telcobright.summary.summarybeans.call.model.Chargeable;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 /**
- * Builds one {@link AdSummary} row from ONE tier of ONE ad call (design §2.9): the tier's tenant and partner
- * are the row's, the call's campaign / rule / zone / site / app / media / outcome the rest of the key; the
- * bucket is the call's {@code StartTime} truncated to the bean's window. A call nothing admitted (no leg) is one
- * row on the ENTRY tenant with the advertiser when one was known, else partner 0. Key strings are clipped to
- * their column widths so a fresh build keys identically to its reloaded row.
+ * Builds one {@link AdSummary} row from ONE ad view as ONE tier recorded it (ad-is-a-call §4.1, §5; brief S1).
  *
- * <p>The measures: {@code views} 1 always; {@code shown} when the ad reached the screen; {@code completed}
- * when the call cleared normally after being shown; {@code failed} when it did not clear normally;
- * {@code watchedsec} = the billsec; {@code chargedamount} = the tier's debit; {@code credited} when the free session
- * followed the view (the blob's {@code Credited}, ARCH-0001 ruling 5.5).
+ * <p>The key: the tier (the schema's own name — one pair of tables per tier schema, so {@code tup_tenant} is
+ * always it), the payer ({@code InPartnerId}), the campaign, the content shown ({@code contentId} of the meta data;
+ * empty when the record carries none), the rule's code ({@code OriginatingCalledNumber}),
+ * the zone, the site, the app, the media kind ({@code Codec}), the outcome ({@code done} when {@code HangupCause}
+ * is {@code NORMAL_CLEARING}, else {@code failed}), and the bucket: the record's {@code StartTime} — the tenant's
+ * wall clock — cut to the bean's window. Key strings are cut to their column widths so a fresh build keys
+ * identically to its reloaded row.
+ *
+ * <p>The measures: {@code views} 1 always; {@code shown} when the record has an answer time; {@code completed}
+ * and {@code credited} as the view's facts say; {@code failed} when the cause is not a normal clearing;
+ * {@code watchedsec} = {@code DurationSec}, to the whole second (half up — the column is a whole number).
+ *
+ * <p>The charge is the customer chargeable's billed amount, and it is MONEY or UNITS by the leg's own unit
+ * ({@code idBilledUom}): a leg in {@code BDT} counts into {@code chargedamount}; a leg in any other unit — the
+ * unit of a package the tier paid from — counts into {@code chargedunits}. The two are never added. A leg that
+ * names no unit is not taken for money. An entry without a chargeable counts the view with no charge.
  */
 final class AdSummaryBuilder {
 
-    static final String OUTCOME_UNKNOWN = "";
+    static final String OUTCOME_DONE = "done";
+    static final String OUTCOME_FAILED = "failed";
+    // ---- the widths of the key's texts: ONE number each, used by the cut below AND by the table (SumAdDdl) ----
+    // A value is never wider than its column: each text is cut to its width before the key is taken, and each width
+    // is its source's full width — so a value the switch can send is stored whole.
+
+    /** {@code tup_tenant}: a schema's name (PostgreSQL: 63 at most; MySQL: 64). */
+    static final int TENANT_WIDTH = 100;
+    /**
+     * {@code tup_rulecode}: the record's called number. A rule's code is 20 — but a tenant with NO rule table has
+     * its ZONE there (ad-sphere's {@code AdCallFlow}), and a zone is 64. It was 20: such a zone was stored as its
+     * first 20 characters (brief S14).
+     */
+    static final int RULECODE_WIDTH = 64;
+    static final int ZONE_WIDTH = 64;
+    static final int SITE_WIDTH = 64;
+    /**
+     * {@code tup_app}: 64, the width of the app's name at its source (ad-sphere's {@code ad_caller.app}, its start
+     * road refuses a longer one). It was 32: two apps sharing their first 32 characters merged into one row.
+     */
+    static final int APP_WIDTH = 64;
+    /** {@code tup_mediakind}: the record's codec — the switch's word for the media (video, image, …). */
+    static final int MEDIAKIND_WIDTH = 16;
+    /** {@code tup_outcome}: one of this service's own two words, {@code done} and {@code failed}. */
+    static final int OUTCOME_WIDTH = 32;
+    /** {@code tup_contentid}: 64, the width of a content's id at its source (ad-sphere's {@code ad_content.id}). */
+    static final int CONTENT_WIDTH = 64;
+    /** The unit of money on a chargeable; every other unit is a package's. */
+    static final String MONEY_UOM = "BDT";
 
     private AdSummaryBuilder() {
     }
 
-    static AdSummary build(AdCdr cdr, AdLeg leg, WindowSize window) {
+    static AdSummary build(AdView view, WindowSize window) {
+        AdCallCdr cdr = view.cdr();
+        AdViewFacts facts = view.facts();
+        Chargeable charge = view.customerLeg();
+        boolean done = cdr.done();
+
         AdSummary s = new AdSummary();
-        boolean tier = leg != null;
-        s.tup_tenant = clip(orEmpty(tier && leg.tenant() != null ? leg.tenant() : cdr.tenant()), 100);
-        s.tup_partnerid = tier && leg.partnerId() != null ? leg.partnerId() : nz(cdr.inPartnerId());
-        s.tup_campaignid = nz(cdr.campaignId());
-        s.tup_rulecode = clip(orEmpty(cdr.ruleCode()), 20);
-        s.tup_zone = clip(orEmpty(cdr.zone()), 64);
-        s.tup_site = clip(orEmpty(cdr.site()), 64);
-        s.tup_app = clip(orEmpty(cdr.app()), 32);
-        s.tup_mediakind = clip(orEmpty(cdr.mediaKind()), 16);
-        s.tup_outcome = clip(orEmpty(cdr.outcome()), 32);
+        s.tup_tenant = clip(orEmpty(view.tier()), TENANT_WIDTH);
+        s.tup_partnerid = cdr.inPartnerId() == null ? 0 : cdr.inPartnerId();
+        s.tup_campaignid = facts.campaignId();
+        s.tup_contentid = clip(orEmpty(facts.contentId()), CONTENT_WIDTH);
+        s.tup_rulecode = clip(orEmpty(cdr.originatingCalledNumber()), RULECODE_WIDTH);
+        s.tup_zone = clip(orEmpty(facts.zone()), ZONE_WIDTH);
+        s.tup_site = clip(orEmpty(facts.site()), SITE_WIDTH);
+        s.tup_app = clip(orEmpty(facts.app()), APP_WIDTH);
+        s.tup_mediakind = clip(orEmpty(cdr.codec()), MEDIAKIND_WIDTH);
+        s.tup_outcome = done ? OUTCOME_DONE : OUTCOME_FAILED;
         s.tup_starttime = window.bucketStart(cdr.startTime());
 
-        boolean shown = cdr.wasShown();
-        boolean done = cdr.done();
         s.views = 1;
-        s.shown = shown ? 1 : 0;
-        s.completed = done && shown ? 1 : 0;
-        s.credited = cdr.wasCredited() ? 1 : 0;
+        s.shown = cdr.wasShown() ? 1 : 0;
+        s.completed = facts.completed() ? 1 : 0;
+        s.credited = facts.credited() ? 1 : 0;
         s.failed = done ? 0 : 1;
-        s.watchedsec = nz(cdr.durationSec());
-        s.chargedamount = tier ? nzd(leg.billedAmount()) : BigDecimal.ZERO;
+        s.watchedsec = wholeSeconds(cdr.durationSec());
+        BigDecimal billed = charge == null || charge.billedAmount() == null ? BigDecimal.ZERO : charge.billedAmount();
+        boolean inMoney = charge != null && isMoney(charge.idBilledUom());
+        s.chargedamount = inMoney ? billed : BigDecimal.ZERO;
+        s.chargedunits = inMoney ? BigDecimal.ZERO : billed;
         return s;
     }
 
-    private static int nz(Integer v) {
-        return v == null ? 0 : v;
+    private static boolean isMoney(String uom) {
+        return uom != null && MONEY_UOM.equalsIgnoreCase(uom.trim());
     }
 
-    private static BigDecimal nzd(BigDecimal v) {
-        return v == null ? BigDecimal.ZERO : v;
+    private static long wholeSeconds(BigDecimal durationSec) {
+        return durationSec == null ? 0 : durationSec.setScale(0, RoundingMode.HALF_UP).longValue();
     }
 
     private static String orEmpty(String v) {

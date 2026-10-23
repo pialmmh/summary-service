@@ -12,7 +12,8 @@
     <!--
       summary-service — a standalone Quarkus service that generates time-windowed counters/summaries
       for any event stream (CDRs today, any log/entity later). It OWNS summarisation; producers hand
-      batches off via a MySQL transactional OUTBOX (Kafka carries only a wakeup ping). See docs/.
+      batches off via a transactional OUTBOX in the tenant's own schema — MySQL or PostgreSQL, per profile
+      (Kafka carries only a wakeup ping). See docs/.
     -->
 
     <properties>
@@ -53,14 +54,23 @@
             <artifactId>quarkus-kafka-client</artifactId>
         </dependency>
 
-        <!-- MySQL only, via Agroal datasource; the batch owns ONE java.sql.Connection transaction -->
+        <!--
+          The store's engine is chosen per PROFILE at run time (summary.store.kind: mysql | postgresql), so both
+          drivers are here as plain libraries and the pool is built by the service itself (StoreDataSource, Agroal).
+          The Quarkus datasource extensions are NOT used: they fix quarkus.datasource.db-kind when the jar is
+          BUILT, which would make one jar per engine. The batch owns ONE java.sql.Connection transaction.
+        -->
         <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-jdbc-mysql</artifactId>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-agroal</artifactId>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.agroal</groupId>
+            <artifactId>agroal-pool</artifactId>
         </dependency>
 
         <!-- outbox blob JSON ({Cdr,Customer}) decode; JavaTime for StartTime/ConnectTime -->

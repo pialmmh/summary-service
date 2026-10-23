@@ -1,8 +1,10 @@
 package com.telcobright.summary.summarybeans.call.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.telcobright.summary.bean.spi.ServiceGroupReader;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryMode;
+import com.telcobright.summary.bean.spi.SummaryTableSpec;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
@@ -36,7 +38,7 @@ import java.util.List;
  * <p>The bean declares {@link #contextName()} so the registry loads that context, but the call build reads only
  * the blob — the MediationContext is not load-bearing here (per the pinned contract).
  */
-public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
+public abstract class CallSummaryBean implements SummaryBean<CallSummary>, ServiceGroupReader {
 
     private static final Logger LOG = Logger.getLogger(CallSummaryBean.class);
     private static final CallSummaryGenerator GENERATOR = new CallSummaryGenerator();   // stateless, shared
@@ -93,6 +95,12 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
         return context;
     }
 
+    /** The service group whose records this bean keeps — and so its kind (SS-0008: of 10/11 the call's, of 30 the ad's, of 101 the WiFi's). */
+    @Override
+    public int serviceGroup() {
+        return serviceGroup;
+    }
+
     /**
      * The target table — DERIVED as {@code sum_voice_<window token>_<table-suffix>} (e.g.
      * {@code sum_voice_day_3}). The suffix selects one of the pre-provisioned table sets (config maps each
@@ -114,10 +122,10 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
         return "sum_voice_" + window().tableToken() + "_" + tableSuffix;
     }
 
-    /** Self-provisioning DDL: the canonical sum_voice shape with the full daily partition set in the CREATE. */
+    /** The table, described once for every engine; MySQL partitions it by day, the full set inside the CREATE. */
     @Override
-    public String tableDdl() {
-        return SumVoiceDdl.createTableIfNotExists(table());
+    public SummaryTableSpec tableSpec() {
+        return SumVoiceDdl.table(table());
     }
 
     @Override
@@ -131,7 +139,7 @@ public abstract class CallSummaryBean implements SummaryBean<CallSummary> {
     }
 
     @Override
-    public List<CallSummary> buildBatch(byte[] decompressedRowJson) {
+    public List<CallSummary> buildBatch(byte[] decompressedRowJson, String tier) {
         List<CdrBlobEntry> entries = decode(decompressedRowJson);
         List<RatedCall> kept = new ArrayList<>(entries.size());
         int skippedMalformed = 0;

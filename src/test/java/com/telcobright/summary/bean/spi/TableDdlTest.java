@@ -1,0 +1,337 @@
+package com.telcobright.summary.bean.spi;
+
+import com.telcobright.summary.beans.DailyChargeableSummaryBuilder;
+import com.telcobright.summary.outbox.internal.OutboxInfraDdl;
+import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
+import com.telcobright.summary.summarybeans.call.CallSummaries;
+import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * Brief S5, the DDL: ONE description of a table ({@link SummaryTableSpec}), rendered per engine ({@link TableDdl}).
+ * MySQL's rendering is what the beans always ran (partitioned by day, the full set inside the one CREATE);
+ * PostgreSQL's is a plain table and its indexes — the identity, the timestamp without a zone, the text column —
+ * with the same columns, widths and key.
+ */
+class TableDdlTest {
+
+    @BeforeEach
+    void aSmallHorizon() {
+        System.setProperty("summary.ddl.partition-start", "2026-06-01");
+        System.setProperty("summary.ddl.partition-days", "3");
+    }
+
+    @AfterEach
+    void clear() {
+        System.clearProperty("summary.ddl.partition-start");
+        System.clearProperty("summary.ddl.partition-days");
+    }
+
+    private static SummaryTableSpec adDay() {
+        return AdTestSupport.dailyBean().tableSpec();
+    }
+
+    @Test
+    void an_index_on_a_prefix_names_the_characters_on_mysql_and_the_whole_column_on_postgresql() {
+        SummaryTableSpec wide = SummaryTableSpec.table("sum_probe")
+                .identity("id")
+                .varchar("tup_outgoingroute", 1000)
+                .primaryKey("id")
+                .indexOnPrefix("ix_outgoingroute", 255, "tup_outgoingroute")
+                .build();
+
+        // MySQL: a 1000-wide utf8mb4 column cannot be indexed whole (InnoDB's key is 3072 bytes = 768 such
+        // characters), so the index takes the route's first characters.
+        assertTrue(TableDdl.mysql(wide).contains("KEY ix_outgoingroute (tup_outgoingroute(255))"),
+                "MySQL takes the first characters: " + TableDdl.mysql(wide));
+
+        // PostgreSQL has no prefix index: the column is named whole.
+        assertTrue(TableDdl.createIfAbsent(wide, SqlDialect.POSTGRESQL).stream()
+                        .anyMatch(sql -> sql.equals("CREATE INDEX IF NOT EXISTS sum_probe_ix_outgoingroute ON sum_probe (tup_outgoingroute)")),
+                "PostgreSQL names the whole column: " + TableDdl.createIfAbsent(wide, SqlDialect.POSTGRESQL));
+
+        // An index declared without a prefix is unchanged on both engines.
+        SummaryTableSpec plain = SummaryTableSpec.table("sum_probe")
+                .identity("id")
+                .varchar("tup_outgoingroute", 1000)
+                .primaryKey("id")
+                .index("ix_outgoingroute", "tup_outgoingroute")
+                .build();
+        assertTrue(TableDdl.mysql(plain).contains("KEY ix_outgoingroute (tup_outgoingroute)"), TableDdl.mysql(plain));
+    }
+
+    @Test
+    void mysql_is_one_create_with_the_full_partition_set_inside_it() {
+        String ddl = TableDdl.mysql(adDay());
+
+        assertEquals(List.of(ddl), TableDdl.createIfAbsent(adDay(), SqlDialect.MYSQL), "ONE statement: never create bare, then ALTER");
+        assertTrue(ddl.startsWith("CREATE TABLE IF NOT EXISTS sum_ad_day_30 (id BIGINT NOT NULL AUTO_INCREMENT,tup_tenant VARCHAR(100) NOT NULL DEFAULT '',"), ddl);
+        assertTrue(ddl.contains(",tup_starttime DATETIME NOT NULL,views BIGINT NOT NULL DEFAULT 0,"));
+        assertTrue(ddl.contains(",chargedamount DECIMAL(18,6) NOT NULL DEFAULT 0,chargedunits DECIMAL(18,6) NOT NULL DEFAULT 0,"
+                + "tup_contentid VARCHAR(64) NOT NULL DEFAULT '',PRIMARY KEY (id, tup_starttime),"
+                + "KEY ix_starttime (tup_starttime),KEY ix_tenant_partner (tup_tenant, tup_partnerid, tup_starttime)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4\n"
+                + "PARTITION BY RANGE COLUMNS(tup_starttime) (\n  PARTITION p20260601 VALUES LESS THAN ('2026-06-02 00:00:00'),"));
+        assertTrue(ddl.endsWith("  PARTITION p20260603 VALUES LESS THAN ('2026-06-04 00:00:00'),\n  PARTITION pMAX VALUES LESS THAN (MAXVALUE)\n)"), ddl);
+        assertEquals(ddl, AdTestSupport.dailyBean().tableDdl(), "the bean's own MySQL form is this rendering");
+    }
+
+    @Test
+    void postgresql_is_a_plain_table_and_one_statement_per_index() {
+        List<String> ddl = TableDdl.postgres(adDay());
+
+        assertEquals(3, ddl.size(), "the table, then its two indexes");
+        assertEquals("CREATE TABLE IF NOT EXISTS sum_ad_day_30 (id BIGINT GENERATED BY DEFAULT AS IDENTITY,tup_tenant VARCHAR(100) NOT NULL DEFAULT '',"
+                + "tup_partnerid INTEGER NOT NULL DEFAULT 0,tup_campaignid INTEGER NOT NULL DEFAULT 0,tup_rulecode VARCHAR(64) NOT NULL DEFAULT '',"
+                + "tup_zone VARCHAR(64) NOT NULL DEFAULT '',tup_site VARCHAR(64) NOT NULL DEFAULT '',tup_app VARCHAR(64) NOT NULL DEFAULT '',"
+                + "tup_mediakind VARCHAR(16) NOT NULL DEFAULT '',tup_outcome VARCHAR(32) NOT NULL DEFAULT '',tup_starttime TIMESTAMP NOT NULL,"
+                + "views BIGINT NOT NULL DEFAULT 0,shown BIGINT NOT NULL DEFAULT 0,completed BIGINT NOT NULL DEFAULT 0,credited BIGINT NOT NULL DEFAULT 0,"
+                + "failed BIGINT NOT NULL DEFAULT 0,watchedsec BIGINT NOT NULL DEFAULT 0,chargedamount NUMERIC(18,6) NOT NULL DEFAULT 0,"
+                + "chargedunits NUMERIC(18,6) NOT NULL DEFAULT 0,tup_contentid VARCHAR(64) NOT NULL DEFAULT '',PRIMARY KEY (id, tup_starttime))", ddl.get(0));
+        assertEquals("CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_starttime ON sum_ad_day_30 (tup_starttime)", ddl.get(1));
+        assertEquals("CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_tenant_partner ON sum_ad_day_30 (tup_tenant, tup_partnerid, tup_starttime)", ddl.get(2));
+        assertEquals(ddl, TableDdl.createIfAbsent(adDay(), SqlDialect.POSTGRESQL));
+        assertEquals(ddl, AdTestSupport.dailyBean().tableDdl(SqlDialect.POSTGRESQL), "what the bean hands the store on PostgreSQL");
+    }
+
+    @Test
+    void postgresql_has_no_partition_no_engine_clause_and_no_mysql_only_word() {
+        for (SummaryBean<?> bean : List.of(AdTestSupport.dailyBean(), AdTestSupport.hourlyBean(), CallSummaries.forWindow("x", "daily", "30", 30, null),
+                DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build())) {
+            for (String statement : bean.tableDdl(SqlDialect.POSTGRESQL)) {
+                for (String mysqlOnly : List.of("PARTITION", "ENGINE=", "AUTO_INCREMENT", "DATETIME", "TINYINT", "LONGTEXT", " INT ", "DECIMAL(", "KEY ix_")) {
+                    assertFalse(statement.contains(mysqlOnly), bean.table() + ": " + mysqlOnly + " in " + statement);
+                }
+            }
+        }
+    }
+
+    @Test
+    void every_engine_gets_the_same_columns_in_the_same_order() {
+        for (SummaryBean<?> bean : List.of(AdTestSupport.dailyBean(), CallSummaries.forWindow("x", "hourly", "30", 30, null),
+                DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build())) {
+            List<String> columns = bean.tableSpec().columnNames();
+            assertEquals("id", columns.get(0));
+            assertEquals(List.of(bean.insertColumnsCsv().split(",")), columns.subList(1, columns.size()),
+                    bean.table() + ": the table's columns ARE the bean's insert columns, after the id");
+            String mysql = bean.tableDdl();
+            String postgres = bean.tableDdl(SqlDialect.POSTGRESQL).get(0);
+            int inMysql = 0, inPostgres = 0;
+            for (String column : columns) {
+                inMysql = mysql.indexOf(column + " ", inMysql);
+                inPostgres = postgres.indexOf(column + " ", inPostgres);
+                assertTrue(inMysql > 0 && inPostgres > 0, column + " is declared, in order, on both engines");
+            }
+        }
+    }
+
+    @Test
+    void the_types_keep_their_meaning_across_the_engines() {
+        String voice = CallSummaries.forWindow("x", "daily", "30", 30, null).tableDdl(SqlDialect.POSTGRESQL).get(0);
+        String chargeable = DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build().tableDdl(SqlDialect.POSTGRESQL).get(0);
+
+        assertTrue(voice.contains("tup_customerrate NUMERIC(18,6) NOT NULL DEFAULT 0"), "DECIMAL(18,6) -> NUMERIC(18,6): the key's 6 places are the same");
+        assertTrue(voice.contains("tup_starttime TIMESTAMP NOT NULL"), "DATETIME -> TIMESTAMP without a zone: the tenant's wall clock, as written");
+        assertFalse(voice.contains("TIMESTAMPTZ") || voice.contains("WITH TIME ZONE"), "a bucket never carries a zone");
+        assertTrue(voice.contains("intAmount1 INTEGER NOT NULL DEFAULT 0"), "INT -> INTEGER");
+        assertTrue(chargeable.contains("tup_assigneddirection SMALLINT NOT NULL DEFAULT 0"), "TINYINT -> SMALLINT");
+        assertTrue(chargeable.contains("BilledAmount NUMERIC(20,8) NOT NULL DEFAULT 0"));
+    }
+
+    @Test
+    void the_infra_tables_on_mysql_are_the_three_it_always_made() {
+        List<String> ddl = OutboxInfraDdl.createStatements(SqlDialect.MYSQL);
+
+        assertEquals(3, ddl.size());
+        assertTrue(ddl.get(0).startsWith("CREATE TABLE IF NOT EXISTS summary_affected (id BIGINT NOT NULL AUTO_INCREMENT,"), "the dev copy of billing's outbox");
+        assertEquals("CREATE TABLE IF NOT EXISTS summary_offset (entity_type VARCHAR(32) NOT NULL,bean_name VARCHAR(64) NOT NULL,"
+                + "last_offset BIGINT NOT NULL DEFAULT 0,PRIMARY KEY (entity_type, bean_name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", ddl.get(1));
+        assertEquals("CREATE TABLE IF NOT EXISTS summary_affected_dlq (id BIGINT NOT NULL AUTO_INCREMENT,entity_type VARCHAR(32) NOT NULL,"
+                + "bean_name VARCHAR(64) NOT NULL,outbox_id BIGINT NOT NULL,data LONGTEXT NOT NULL,error VARCHAR(512) NOT NULL,"
+                + "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY (id),KEY ix_bean (entity_type, bean_name, outbox_id)) "
+                + "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", ddl.get(2));
+        assertEquals(ddl, OutboxInfraDdl.createStatements(), "the form without an engine is MySQL's");
+    }
+
+    @Test
+    void the_infra_tables_on_postgresql_are_the_services_two_and_never_billings_outbox() {
+        List<String> ddl = OutboxInfraDdl.createStatements(SqlDialect.POSTGRESQL);
+
+        assertEquals(List.of(
+                "CREATE TABLE IF NOT EXISTS summary_offset (entity_type VARCHAR(32) NOT NULL,bean_name VARCHAR(64) NOT NULL,"
+                        + "last_offset BIGINT NOT NULL DEFAULT 0,PRIMARY KEY (entity_type, bean_name))",
+                "CREATE TABLE IF NOT EXISTS summary_affected_dlq (id BIGINT GENERATED BY DEFAULT AS IDENTITY,entity_type VARCHAR(32) NOT NULL,"
+                        + "bean_name VARCHAR(64) NOT NULL,outbox_id BIGINT NOT NULL,data TEXT NOT NULL,error VARCHAR(512) NOT NULL,"
+                        + "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY (id))",
+                "CREATE INDEX IF NOT EXISTS summary_affected_dlq_ix_bean ON summary_affected_dlq (entity_type, bean_name, outbox_id)"), ddl);
+        assertTrue(ddl.stream().noneMatch(s -> s.contains("summary_affected (")), "whoever creates the outbox there owns it: it is billing-core's");
+    }
+
+    @Test
+    void nothing_the_service_runs_or_ships_for_postgresql_creates_billing_cores_tables() throws java.io.IOException {
+        // In a tenant schema ONLY billing-core makes the CDR road's tables (the role that makes a table owns it there):
+        // not the infra DDL, not a bean's DDL, not a script under db/postgres.
+        List<String> everything = new java.util.ArrayList<>(OutboxInfraDdl.createStatements(SqlDialect.POSTGRESQL));
+        for (SummaryBean<?> bean : List.of(AdTestSupport.dailyBean(), AdTestSupport.hourlyBean(), CallSummaries.forWindow("x", "daily", "30", 30, null),
+                CallSummaries.forWindow("y", "hourly", "30", 30, null), DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build(),
+                com.telcobright.summary.beans.HourlyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build())) {
+            everything.addAll(bean.tableDdl(SqlDialect.POSTGRESQL));
+        }
+        try (java.util.stream.Stream<java.nio.file.Path> scripts = java.nio.file.Files.walk(java.nio.file.Path.of("src", "main", "resources", "db", "postgres"))) {
+            for (java.nio.file.Path script : scripts.filter(p -> p.toString().endsWith(".sql")).toList()) {
+                everything.add(java.nio.file.Files.readString(script).replaceAll("--[^\n]*", ""));
+            }
+        }
+
+        java.util.regex.Pattern makesOneOfBillings = java.util.regex.Pattern.compile(
+                "(?i)create\\s+table\\s+(if\\s+not\\s+exists\\s+)?(\\w+\\.)?(summary_affected|cdr|cdrerror|acc_chargeable)\\b(?!_)");
+        for (String sql : everything) {
+            assertFalse(makesOneOfBillings.matcher(sql).find(), "billing-core's table is made here: " + sql);
+        }
+        assertTrue(everything.stream().anyMatch(sql -> sql.contains("summary_affected_dlq")), "the dead-letter table IS the service's own (the pattern does not take it for the outbox)");
+    }
+
+    // ---- an EXISTING table is brought up to its description (S13: the column a table made earlier lacks) ----
+
+    /** The columns a table has, as the catalog answers: name → the width of a text column, or -1. */
+    private static Map<String, Integer> columnsAsDescribed(SummaryTableSpec table) {
+        Map<String, Integer> columns = new HashMap<>();
+        for (SummaryTableSpec.Column column : table.columns()) {
+            columns.put(column.name(), column.type() == SummaryTableSpec.Type.VARCHAR ? column.width() : -1);
+        }
+        return columns;
+    }
+
+    private static Map<String, Integer> without(Map<String, Integer> columns, String... gone) {
+        Map<String, Integer> fewer = new HashMap<>(columns);
+        for (String column : gone) fewer.remove(column);
+        return fewer;
+    }
+
+    @Test
+    void a_column_an_older_table_lacks_is_added_with_its_default_on_both_engines() {
+        Map<String, Integer> madeBeforeTheContent = without(columnsAsDescribed(adDay()), "tup_contentid");
+
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, madeBeforeTheContent),
+                "the rows that are there read '' as their content: history is not rebuilt");
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, madeBeforeTheContent));
+    }
+
+    // ---- S14: a text column an older table holds NARROWER is widened by the same step ----
+
+    @Test
+    void a_text_column_that_is_narrower_than_described_is_widened_on_both_engines() {
+        Map<String, Integer> withTheOldRuleCode = new HashMap<>(columnsAsDescribed(adDay()));
+        withTheOldRuleCode.put("tup_rulecode", 20);
+
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 ALTER COLUMN tup_rulecode TYPE VARCHAR(64)"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, withTheOldRuleCode), "a value that is there stays as it is");
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_rulecode VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, withTheOldRuleCode), "MySQL restates the whole column: still NOT NULL, still default ''");
+    }
+
+    @Test
+    void the_table_of_the_first_version_gets_both_changes_in_the_columns_order_and_then_none() {
+        // 938ab19's table: tup_rulecode 20 wide, no tup_contentid
+        Map<String, Integer> first = without(columnsAsDescribed(adDay()), "tup_contentid");
+        first.put("tup_rulecode", 20);
+
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 ALTER COLUMN tup_rulecode TYPE VARCHAR(64)",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, first));
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_rulecode VARCHAR(64) NOT NULL DEFAULT ''",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, first));
+        assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, columnsAsDescribed(adDay())), "after them: nothing");
+    }
+
+    @Test
+    void an_older_ad_table_of_any_earlier_shape_is_brought_up_by_the_same_rule() {
+        // stream X's first MySQL table (ec2546e): 17 columns — no chargedunits, no tup_contentid — tup_app 32 and tup_rulecode 20 wide
+        Map<String, Integer> streamXs = without(columnsAsDescribed(adDay()), "chargedunits", "tup_contentid");
+        streamXs.put("tup_app", 32);
+        streamXs.put("tup_rulecode", 20);
+
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_rulecode VARCHAR(64) NOT NULL DEFAULT ''",
+                        "ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_app VARCHAR(64) NOT NULL DEFAULT ''",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN chargedunits DECIMAL(18,6) NOT NULL DEFAULT 0",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, streamXs), "every described column it lacks, every text column that is narrower — in the columns' order");
+    }
+
+    @Test
+    void only_a_text_column_is_widened_and_only_when_the_catalog_gives_its_width() {
+        Map<String, Integer> oddCatalog = new HashMap<>(columnsAsDescribed(adDay()));
+        oddCatalog.put("tup_zone", -1);               // a text column whose width the catalog does not give (an unlimited text): not narrower
+        oddCatalog.put("tup_partnerid", 5);           // a number that reports a width: never "widened"
+        oddCatalog.put("chargedamount", 5);           // nor a decimal, whose described "width" is its precision (18)
+
+        assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, oddCatalog));
+    }
+
+    @Test
+    void a_table_that_is_as_described_gets_no_statement_so_the_step_changes_nothing_the_second_time() {
+        for (SqlDialect engine : SqlDialect.values()) {
+            assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), engine, columnsAsDescribed(adDay())), engine + ": idempotent");
+        }
+        // the catalog's own spelling of a name does not matter (MySQL keeps a column's case as it was written)
+        Map<String, Integer> upperCase = new HashMap<>();
+        columnsAsDescribed(adDay()).forEach((name, width) -> upperCase.put(name.toUpperCase(), width));
+        assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, upperCase));
+        // and nothing is ever taken away: a column the description does not know, a text column that is wider
+        Map<String, Integer> more = new HashMap<>(columnsAsDescribed(adDay()));
+        more.put("a_column_of_somebody_else", 10);
+        more.put("tup_zone", 200);
+        assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, more), "never narrowed, never dropped");
+    }
+
+    @Test
+    void a_table_another_system_also_writes_is_never_altered_whatever_it_lacks() {
+        // the voice deployment's summary tables are legacy tables: the service made them only when they were absent
+        SummaryTableSpec voice = CallSummaries.forWindow("x", "daily", "03", 10, null).tableSpec();
+        SummaryTableSpec chargeable = DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build().tableSpec();
+
+        for (SummaryTableSpec legacyShared : List.of(voice, chargeable)) {
+            assertFalse(legacyShared.keptUpToDate(), legacyShared.name());
+            Map<String, Integer> aLegacyShape = Map.of("id", -1, "tup_starttime", -1, "tup_incomingroute", 8);
+            for (SqlDialect engine : SqlDialect.values()) {
+                assertEquals(List.of(), TableDdl.bringUpToDate(legacyShared, engine, aLegacyShape), legacyShared.name() + " on " + engine);
+            }
+        }
+        assertTrue(adDay().keptUpToDate(), "the ad tables are net-new and the service's alone");
+        assertTrue(AdTestSupport.hourlyBean().tableSpec().keptUpToDate());
+    }
+
+    @Test
+    void a_missing_column_that_has_no_default_is_not_added_the_table_is_not_ours() {
+        // a table of the same name that has no id or no bucket was not made by this service: rows cannot be given one
+        for (String column : new String[] {"id", "tup_starttime"}) {
+            IllegalStateException refused = assertThrows(IllegalStateException.class,
+                    () -> TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, without(columnsAsDescribed(adDay()), column)));
+            assertTrue(refused.getMessage().startsWith("table sum_ad_day_30 has no column " + column + ", and that column has no default"), refused.getMessage());
+        }
+    }
+
+    @Test
+    void a_table_that_cannot_be_compared_with_is_left_as_it_is() {
+        assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, Map.of()), "no such table in the catalog: nothing to bring up");
+    }
+
+    @Test
+    void a_table_without_columns_or_a_key_is_refused() {
+        assertThrows(IllegalStateException.class, () -> SummaryTableSpec.table("t").build());
+        assertThrows(IllegalStateException.class, () -> SummaryTableSpec.table("t").identity("id").build());
+    }
+}

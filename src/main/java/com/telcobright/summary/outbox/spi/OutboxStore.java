@@ -2,6 +2,7 @@ package com.telcobright.summary.outbox.spi;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 /**
  * The outbox + per-bean bookmark DAO over the batch's transaction-bound connection. A bean's drain reads its
@@ -20,6 +21,19 @@ public interface OutboxStore {
      * reaper hasn't deleted yet (a partial backfill would masquerade as complete windows). No-op if a row exists.
      */
     void initOffsetAtHead(String entityType, String beanName);
+
+    /**
+     * Is the outbox table ({@code summary_affected}) in this schema? It is billing-core's: on PostgreSQL the
+     * summary side never creates it, so a tier schema billing-core has not served yet has none — nothing to
+     * drain and nothing to reap there, and that is not a failure.
+     */
+    boolean outboxExists();
+
+    /** The beans that have a bookmark for this entity in this schema. Empty = the schema was never served. */
+    Set<String> bookmarkedBeans(String entityType);
+
+    /** Give this bean the bookmark {@code offset} unless it has one (never moves an existing bookmark). */
+    void seedOffsetIfAbsent(String entityType, String beanName, long offset);
 
     /** Up to {@code limit} outbox rows after {@code afterId}, ascending by id. */
     List<OutboxRow> readAfter(String entityType, long afterId, int limit);

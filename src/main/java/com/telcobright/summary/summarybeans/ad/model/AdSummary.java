@@ -11,16 +11,22 @@ import java.time.LocalDateTime;
  * One {@code sum_ad_*} row — the AD summary entity (design AD-AS-CALL §2.9, 2026-09-29; net-new, no legacy
  * counterpart). One row per TIER of an ad call (the chargeable pattern): the key is the tier's tenant (its
  * database: a reseller's summary is the rows where {@code tup_tenant} = its database) and partner, the campaign,
+ * the CONTENT shown (a campaign holds several; {@code ''} when the record carries none),
  * the rule code, the zone, the site, the app, the media kind and the outcome, plus the window bucket
  * ({@code tup_starttime} = the call's start truncated to the window). Measures all {@code +=}; {@code multiply}
- * scales ALL of them (net-new stays clean). {@code chargedamount} is the tier's debit in BDT (DECIMAL(18,6)).
+ * scales ALL of them (net-new stays clean).
+ *
+ * <p>What a tier was charged is TWO measures, never added to each other (the architect's ruling on SS-0001, decide
+ * 3): {@code chargedamount} is MONEY — the tier's charge in BDT; {@code chargedunits} is what a tier paid in the
+ * units of a package (seconds, views). Both DECIMAL(18,6). A row can carry both: views of one key paid in money by
+ * one account and in units by another.
  */
 public final class AdSummary implements SummaryEntity<AdSummary> {
 
     /** INSERT column list (CSV, in {@link #insertValues()} order, WITHOUT id). */
     public static final String INSERT_COLUMNS =
             "tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
-                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount";
+                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits,tup_contentid";
 
     public static final String BUCKET_COLUMN = "tup_starttime";
 
@@ -37,6 +43,12 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
     public String tup_mediakind = "";
     public String tup_outcome = "";
     public LocalDateTime tup_starttime;
+    /**
+     * The content shown — {@code AdditionalMetaData.contentId}; {@code ''} when the record carries none. A key
+     * dimension like the others. Its COLUMN is the table's last: a table that got it later (by ALTER, which can
+     * only append on PostgreSQL) is then the same table as one made with it.
+     */
+    public String tup_contentid = "";
 
     // -- measures (all +=; multiply scales ALL) --
     public long views;
@@ -45,7 +57,10 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
     public long credited;
     public long failed;
     public long watchedsec;
+    /** Money: the charges whose unit is BDT. */
     public BigDecimal chargedamount = BigDecimal.ZERO;
+    /** Units: the charges paid from a package, in the package's own unit. Never added to the money. */
+    public BigDecimal chargedunits = BigDecimal.ZERO;
 
     @Override
     public Long id() {
@@ -57,13 +72,14 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         this.id = id;
     }
 
-    /** The 10-token dimension + bucket tuple, as canonical tokens. */
+    /** The 11-token dimension + bucket tuple, as canonical tokens. */
     @Override
     public SummaryKey tupleKey() {
         return SummaryKey.of(
                 tup_tenant,
                 Integer.toString(tup_partnerid),
                 Integer.toString(tup_campaignid),
+                tup_contentid,
                 tup_rulecode,
                 tup_zone,
                 tup_site,
@@ -82,6 +98,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         failed += o.failed;
         watchedsec += o.watchedsec;
         chargedamount = chargedamount.add(o.chargedamount);
+        chargedunits = chargedunits.add(o.chargedunits);
     }
 
     /** Scales EVERY measure, {@code views} included (the SUBTRACT path negates a copy). */
@@ -94,6 +111,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         failed *= factor;
         watchedsec *= factor;
         chargedamount = chargedamount.multiply(BigDecimal.valueOf(factor));
+        chargedunits = chargedunits.multiply(BigDecimal.valueOf(factor));
     }
 
     @Override
@@ -109,6 +127,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         c.tup_mediakind = tup_mediakind;
         c.tup_outcome = tup_outcome;
         c.tup_starttime = tup_starttime;
+        c.tup_contentid = tup_contentid;
         c.views = views;
         c.shown = shown;
         c.completed = completed;
@@ -116,6 +135,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         c.failed = failed;
         c.watchedsec = watchedsec;
         c.chargedamount = chargedamount;
+        c.chargedunits = chargedunits;
         return c;
     }
 
@@ -138,6 +158,8 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
                 + "," + SqlLiterals.num(failed)
                 + "," + SqlLiterals.num(watchedsec)
                 + "," + SqlLiterals.num(chargedamount)
+                + "," + SqlLiterals.num(chargedunits)
+                + "," + SqlLiterals.str(tup_contentid)
                 + ")";
     }
 
@@ -149,7 +171,8 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
                 + ",credited=" + SqlLiterals.num(credited)
                 + ",failed=" + SqlLiterals.num(failed)
                 + ",watchedsec=" + SqlLiterals.num(watchedsec)
-                + ",chargedamount=" + SqlLiterals.num(chargedamount);
+                + ",chargedamount=" + SqlLiterals.num(chargedamount)
+                + ",chargedunits=" + SqlLiterals.num(chargedunits);
     }
 
     /** The date-partition key for this row: {@code tup_starttime}. */

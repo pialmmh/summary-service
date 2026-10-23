@@ -3,10 +3,11 @@
 --
 -- Faithful to billing-core's AbstractCdrSummary column set + order (see CallSummary.INSERT_COLUMNS).
 -- Table name is DERIVED: sum_voice_<window>_<table-suffix>; the suffix (config per bean) selects one of the
--- PRE-PROVISIONED sets — sum_voice_{day,hr}_{01,02,03}. Since the 2026-07-02 directive the bean also
+-- PRE-PROVISIONED sets — sum_voice_{day,hr}_{01,02,03,101}. Since the 2026-07-02 directive the bean also
 -- SELF-PROVISIONS: at activation it runs CREATE TABLE IF NOT EXISTS with the FULL daily partition set inside
 -- the CREATE (see SumVoiceDdl; a no-op over billing's existing live sets). Suffixes: SG10 -> "03",
--- SG11 -> "02" (billing's live sets, dotnet A6).
+-- SG11 -> "02" (billing's live sets, dotnet A6); the ad view SG30 -> "30" (self-provisioned only, no copy here);
+-- the domestic WiFi session SG101 -> "101" (ARCH-0077-S: the session summed as a domestic call, the same shape).
 --
 -- Engine contract this schema must satisfy:
 --   * id BIGINT AUTO_INCREMENT PRIMARY KEY — the engine omits id on INSERT and targets UPDATE/DELETE by id
@@ -29,8 +30,8 @@ CREATE TABLE IF NOT EXISTS sum_voice_day_03 (
     tup_switchid                INT           NOT NULL DEFAULT 0,
     tup_inpartnerid             INT           NOT NULL DEFAULT 0,
     tup_outpartnerid            INT           NOT NULL DEFAULT 0,
-    tup_incomingroute           VARCHAR(64)   NOT NULL DEFAULT '',
-    tup_outgoingroute           VARCHAR(64)   NOT NULL DEFAULT '',
+    tup_incomingroute           VARCHAR(1000)   NOT NULL DEFAULT '',
+    tup_outgoingroute           VARCHAR(1000)   NOT NULL DEFAULT '',
     tup_customerrate            DECIMAL(18,6) NOT NULL DEFAULT 0,
     tup_supplierrate            DECIMAL(18,6) NOT NULL DEFAULT 0,
     tup_incomingip              VARCHAR(64)   NOT NULL DEFAULT '',
@@ -75,17 +76,26 @@ CREATE TABLE IF NOT EXISTS sum_voice_day_03 (
     decimalAmount3              DECIMAL(18,6) NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
     KEY ix_starttime (tup_starttime),
-    UNIQUE KEY uq_tuple (
-        tup_switchid, tup_inpartnerid, tup_outpartnerid, tup_incomingroute, tup_outgoingroute,
-        tup_customerrate, tup_supplierrate, tup_incomingip, tup_outgoingip, tup_countryorareacode,
-        tup_matchedprefixcustomer, tup_matchedprefixsupplier, tup_sourceId, tup_destinationId,
-        tup_tax1currency, tup_tax2currency, tup_vatcurrency, tup_starttime,
-        tup_customercurrency, tup_suppliercurrency)
+    -- the owner 2026-10-07: both route columns are indexed. A 1000-wide utf8mb4 column cannot be indexed whole
+    -- (InnoDB's key is 3072 bytes = 768 such characters), so each index takes the route's first 255 characters —
+    -- every route we write fits inside that, and a longer pair that shares those characters only shares an index
+    -- entry: the engine still reads the row to tell them apart.
+    KEY ix_incomingroute (tup_incomingroute(255)),
+    KEY ix_outgoingroute (tup_outgoingroute(255))
+    -- uq_tuple (the 20-column GetTupleKey safety net) is GONE: with the routes 1000 wide the tuple passes InnoDB's
+    -- 3072-byte key by far, and this file's own contract above says to drop it if the key length is a problem. The
+    -- engine never needed it — it de-dups in memory and targets UPDATE/DELETE by id — and the service's own
+    -- described table (SumVoiceDdl) has never declared it.
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- the 3 pre-provisioned sets × {day, hr} — identical shape, different bucket + suffix (created up front, partitioned)
+-- the 4 pre-provisioned sets × {day, hr} — identical shape, different bucket + suffix (created up front, partitioned)
 CREATE TABLE IF NOT EXISTS sum_voice_hr_03  LIKE sum_voice_day_03;
 CREATE TABLE IF NOT EXISTS sum_voice_day_01 LIKE sum_voice_day_03;
 CREATE TABLE IF NOT EXISTS sum_voice_hr_01  LIKE sum_voice_day_03;
 CREATE TABLE IF NOT EXISTS sum_voice_day_02 LIKE sum_voice_day_03;
 CREATE TABLE IF NOT EXISTS sum_voice_hr_02  LIKE sum_voice_day_03;
+-- service group 101, the domestic WiFi session (ARCH-0077-S): the voice row summed under its own suffix. The same
+-- shape as every set — tup_customercurrency keys the package minutes (TF_min) apart from money (BDT), never one row.
+-- The service makes this pair itself at the bean's first use (SumVoiceDdl), on MySQL and on PostgreSQL alike.
+CREATE TABLE IF NOT EXISTS sum_voice_day_101 LIKE sum_voice_day_03;
+CREATE TABLE IF NOT EXISTS sum_voice_hr_101  LIKE sum_voice_day_03;

@@ -3,6 +3,7 @@ package com.telcobright.summary.engine.spi;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The database seam the engine writes through. Production is JDBC over the ONE transaction-bound MySQL
@@ -21,4 +22,11 @@ public interface SummaryStore {
 
     /** Execute one INSERT/UPDATE/DELETE statement (or a {@code ;}-joined segment); returns affected rows. */
     int executeNonQuery(String sql);
+
+    /**
+     * The columns {@code table} has NOW, in the schema this store works in: the column's name → the width of a text
+     * column in characters, or -1 for any other type. Empty when there is no such table. Read from the database's
+     * own catalog; it changes nothing.
+     */
+    Map<String, Integer> columnWidths(String table);
 }

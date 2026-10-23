@@ -18,6 +18,7 @@ class AdSummaryTest {
         s.tup_tenant = "res_44";
         s.tup_partnerid = 61;
         s.tup_campaignid = 5;
+        s.tup_contentid = "lux-30";
         s.tup_rulecode = "1001";
         s.tup_zone = "dhaka-01";
         s.tup_site = "";
@@ -31,6 +32,7 @@ class AdSummaryTest {
         s.failed = 0;
         s.watchedsec = 15;
         s.chargedamount = new BigDecimal("0.50");
+        s.chargedunits = new BigDecimal("3");
         return s;
     }
 
@@ -45,6 +47,7 @@ class AdSummaryTest {
         assertEquals(0, a.failed);
         assertEquals(30, a.watchedsec);
         assertEquals(new BigDecimal("1.00"), a.chargedamount);
+        assertEquals(new BigDecimal("6"), a.chargedunits, "units add to units, never to the money");
         assertEquals("res_44", a.tup_tenant, "dimensions never merge");
         assertEquals(61, a.tup_partnerid);
     }
@@ -58,12 +61,19 @@ class AdSummaryTest {
         assertEquals(-1, a.shown);
         assertEquals(-15, a.watchedsec);
         assertEquals(new BigDecimal("-0.50"), a.chargedamount);
+        assertEquals(new BigDecimal("-3"), a.chargedunits);
     }
 
     @Test
-    void tuple_key_is_the_ten_dimension_tokens_tenant_first() {
-        assertEquals(java.util.List.of("res_44", "61", "5", "1001", "dhaka-01", "", "wifi", "video", "done", "2026-09-29 00:00:00"),
+    void tuple_key_is_the_eleven_dimension_tokens_tenant_first_the_content_after_its_campaign() {
+        assertEquals(java.util.List.of("res_44", "61", "5", "lux-30", "1001", "dhaka-01", "", "wifi", "video", "done", "2026-09-29 00:00:00"),
                 row().tupleKey().tokens());
+        AdSummary anotherContent = row();
+        anotherContent.tup_contentid = "lux-15";
+        assertTrue(!row().tupleKey().equals(anotherContent.tupleKey()), "another content of the same campaign is another row");
+        AdSummary noContent = row();
+        noContent.tup_contentid = "";
+        assertTrue(!row().tupleKey().equals(noContent.tupleKey()), "and so is a view that carries no content");
         assertEquals(row().tupleKey(), row().tupleKey(), "same dimensions -> same key");
         AdSummary other = row();
         other.tup_tenant = "btcl";
@@ -80,8 +90,10 @@ class AdSummaryTest {
         assertNull(c.id(), "a clone is a fresh INSERT candidate");
         assertNotSame(a, c);
         assertEquals(a.tupleKey(), c.tupleKey());
+        assertEquals("lux-30", c.tup_contentid);
         assertEquals(a.views, c.views);
         assertEquals(a.chargedamount, c.chargedamount);
+        assertEquals(a.chargedunits, c.chargedunits);
     }
 
     @Test
@@ -90,9 +102,9 @@ class AdSummaryTest {
         String values = a.insertValues();
 
         assertEquals(AdSummary.INSERT_COLUMNS.split(",").length, values.split(",").length, "one value per INSERT column");
-        assertTrue(values.startsWith("('res_44',61,5,'1001','dhaka-01','','wifi','video','done','2026-09-29 00:00:00',1,1,1,0,0,15,0.50)"),
-                "dimension order matches the column list: " + values);
-        assertEquals("views=1,shown=1,completed=1,credited=0,failed=0,watchedsec=15,chargedamount=0.50", a.updateAssignments(),
+        assertEquals("('res_44',61,5,'1001','dhaka-01','','wifi','video','done','2026-09-29 00:00:00',1,1,1,0,0,15,0.50,3,'lux-30')", values,
+                "the values in the column list's order — the content last, as its column is the table's last");
+        assertEquals("views=1,shown=1,completed=1,credited=0,failed=0,watchedsec=15,chargedamount=0.50,chargedunits=3", a.updateAssignments(),
                 "UPDATE assigns measures only");
         assertEquals("'2026-09-29 00:00:00'", a.bucketLiteral(), "partition-pruning literal");
     }

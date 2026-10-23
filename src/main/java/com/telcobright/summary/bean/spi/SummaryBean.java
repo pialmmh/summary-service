@@ -43,14 +43,29 @@ public interface SummaryBean<T extends SummaryEntity<T>> {
     String table();
 
     /**
-     * The full {@code CREATE TABLE IF NOT EXISTS} DDL for {@link #table()} — the bean SELF-PROVISIONS its
-     * table at activation (user directive 2026-07-02). Partitioned tables carry their FULL partition set
-     * inside this CREATE (house rule: never create bare then ALTER). Null = no self-provisioning (the table
-     * is managed elsewhere). The service's MySQL user needs CREATE (and ALTER for future partition ranges)
-     * on the tenant schema — the only remaining ops item.
+     * The table this bean rolls into, described ONCE for every engine — the bean SELF-PROVISIONS it at activation
+     * (user directive 2026-07-02): the store's edge renders the description for the engine it runs on and creates
+     * the table when it is absent. Null = no self-provisioning (the table is managed elsewhere). The service's
+     * database user needs CREATE on the tenant schema — the only remaining ops item.
      */
-    default String tableDdl() {
+    default SummaryTableSpec tableSpec() {
         return null;
+    }
+
+    /**
+     * The statements that make {@link #table()} on {@code dialect} when it is absent, in order; empty = no
+     * self-provisioning. MySQL: one {@code CREATE TABLE IF NOT EXISTS} carrying the FULL partition set (house
+     * rule: never create bare then ALTER). PostgreSQL: the plain table and its indexes.
+     */
+    default List<String> tableDdl(SqlDialect dialect) {
+        SummaryTableSpec spec = tableSpec();
+        return spec == null ? List.of() : TableDdl.createIfAbsent(spec, dialect);
+    }
+
+    /** The MySQL form as ONE statement (what this method always returned); null = no self-provisioning. */
+    default String tableDdl() {
+        SummaryTableSpec spec = tableSpec();
+        return spec == null ? null : TableDdl.mysql(spec);
     }
 
     /** The INSERT column list (CSV, in value order, WITHOUT id — AUTO_INCREMENT assigns it). */
@@ -64,10 +79,17 @@ public interface SummaryBean<T extends SummaryEntity<T>> {
 
     /**
      * Build the summary entities for ONE decompressed outbox row — its batch of records (the JSON array of
-     * {@code {Cdr, Customer}}). Records not for this bean (e.g. a different service group) are skipped; each
-     * kept record becomes one bucketed entity.
+     * {@code {Cdr, Chargeables}}) — read from the outbox of the tenant schema {@code tier} (the schema's own
+     * name: {@code btcl}, {@code res_44}). Records not for this bean (e.g. a different service group) are
+     * skipped; each kept record becomes one bucketed entity. A bean whose rows carry the tier (the ad summary's
+     * {@code tup_tenant}) takes it from here — the blob does not name it.
      */
-    List<T> buildBatch(byte[] decompressedRowJson);
+    List<T> buildBatch(byte[] decompressedRowJson, String tier);
+
+    /** The same for a bean that does not need the tier (tests and embedders; the drain always names it). */
+    default List<T> buildBatch(byte[] decompressedRowJson) {
+        return buildBatch(decompressedRowJson, null);
+    }
 
     /** The window bucket of an entity ({@code tup_starttime}); the distinct set is what the load query fetches. */
     LocalDateTime bucketOf(T entity);
