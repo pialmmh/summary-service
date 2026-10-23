@@ -10,6 +10,7 @@ import com.telcobright.summary.engine.spi.MissingWindowException;
 import com.telcobright.summary.outbox.internal.OutboxCodec;
 import com.telcobright.summary.outbox.internal.OutboxInfraDdl;
 import com.telcobright.summary.outbox.spi.OutboxRow;
+import com.telcobright.summary.outbox.spi.RowCensus;
 import com.telcobright.summary.runtime.spi.UnitOfWork;
 import com.telcobright.summary.runtime.spi.UnitOfWorkFactory;
 
@@ -18,6 +19,7 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -41,6 +43,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@code quarantine-after} consecutive failures on the same head row, the row is copied to
  * {@code summary_affected_dlq} (per bean) and the offset advances past it — in one transaction, loudly logged.
  * SQL-layer failures are NEVER quarantined: they may be transient (or a config fault), and retrying loses nothing.
+ *
+ * <p>A {@link RowCensus} hears the rows a step committed (SS-0008: the kinds' {@code KIND_NOT_ENABLED} count) — only for
+ * the bean it counts with, only after the commit; a step that rolls back, and a quarantined row, are never heard.
  */
 @ApplicationScoped
 public class OutboxReader {
@@ -52,6 +57,7 @@ public class OutboxReader {
     private final int segmentSize;
     private final int maxRowsPerTx;
     private final int quarantineAfter;
+    private final RowCensus census;
     /** (schema, bean) → {failing head row id, consecutive decode/build failures on it}. In-memory by design. */
     private final Map<String, long[]> poisonStreaks = new ConcurrentHashMap<>();
     /** The schemas whose infra tables this process has ensured. */
@@ -65,12 +71,19 @@ public class OutboxReader {
     public OutboxReader(UnitOfWorkFactory unitOfWorkFactory, SummaryEngine engine,
                         @ConfigProperty(name = "summary.outbox.segment-size", defaultValue = "1000") int segmentSize,
                         @ConfigProperty(name = "summary.outbox.max-rows-per-tx", defaultValue = "1") int maxRowsPerTx,
-                        @ConfigProperty(name = "summary.outbox.quarantine-after", defaultValue = "8") int quarantineAfter) {
+                        @ConfigProperty(name = "summary.outbox.quarantine-after", defaultValue = "8") int quarantineAfter,
+                        RowCensus census) {
         this.unitOfWorkFactory = unitOfWorkFactory;
         this.engine = engine;
         this.segmentSize = segmentSize;
         this.maxRowsPerTx = maxRowsPerTx;
         this.quarantineAfter = quarantineAfter;
+        this.census = census;
+    }
+
+    /** A reader with no census (tests, embedders): exactly the reader of before SS-0008. */
+    public OutboxReader(UnitOfWorkFactory unitOfWorkFactory, SummaryEngine engine, int segmentSize, int maxRowsPerTx, int quarantineAfter) {
+        this(unitOfWorkFactory, engine, segmentSize, maxRowsPerTx, quarantineAfter, RowCensus.NONE);
     }
 
     /** Drain until this bean is caught up in the connection's own schema; returns the total outbox rows processed. */
@@ -282,10 +295,13 @@ public class OutboxReader {
             int consumed = 0;
             RuntimeException poison = null;
             OutboxRow poisonRow = null;
+            List<byte[]> heard = census.counts(tier, bean) ? new ArrayList<>() : null;   // the rows the census hears after the commit
             for (OutboxRow row : rows) {
                 List<T> entities;
+                byte[] json;
                 try {
-                    entities = bean.buildBatch(OutboxCodec.decode(row.data()), tier);
+                    json = OutboxCodec.decode(row.data());
+                    entities = bean.buildBatch(json, tier);
                 } catch (RuntimeException decodeOrBuildFailure) {   // deterministic on the row's data -> poison
                     poison = decodeOrBuildFailure;
                     poisonRow = row;
@@ -305,6 +321,9 @@ public class OutboxReader {
                     break;
                 }
                 consumed++;
+                if (heard != null) {
+                    heard.add(json);
+                }
             }
             if (consumed == 0 && poison != null) {
                 return quarantineOrRethrow(schema, bean, poisonRow, poison, unitOfWork);
@@ -314,6 +333,9 @@ public class OutboxReader {
             unitOfWork.outbox().advanceOffset(bean.entityType(), bean.name(), newOffset);
             unitOfWork.commit();
             poisonStreaks.remove(streakKey(schema, bean));
+            if (heard != null) {
+                census.committed(tier, heard);
+            }
             if (poison != null) {
                 LOG.warnf(poison, "schema=%s bean=%s committed %d clean row(s); a poison row (id=%d) is now at the head",
                         tier, bean.name(), consumed, poisonRow.id());

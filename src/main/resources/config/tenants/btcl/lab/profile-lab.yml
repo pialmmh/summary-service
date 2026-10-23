@@ -16,6 +16,13 @@ summary:
   endpoints:
     local-only: true
 
+  # ---- the kinds (SS-0008; the owner's R13, 2026-10-23): the call, the ad view and the WiFi session, each its own bean set,
+  # switched on here. None named = the call alone (the voice deployment's profile names none). A bean below of a kind not
+  # named here REFUSES the start; a cdr row of a kind not named is summed by no bean and counted (KIND_NOT_ENABLED, once per
+  # tenant, kind and day). This profile's beans are of all three: call (the chargeable pair), ad (group 30: the ad pair and
+  # the view as a call), wifi (group 101: the session as a call, the session pair, the destination pair). ----
+  kinds: [call, ad, wifi]
+
   # ---- the store (brief S5): the switch database on PostgreSQL; a tenant is a SCHEMA of it ----
   # The engine is chosen here, at run time (kind: mysql | postgresql): one jar serves either.
   store:
@@ -73,8 +80,8 @@ summary:
     - hourlyWifiSessionSummary                   # config-instantiated, kind wifi-session    (sum_wifi_hr_101)
     - dailyWifiDstSummary                        # config-instantiated, kind wifi-dst        (sum_wifi_dst_day)
     - hourlyWifiDstSummary                       # config-instantiated, kind wifi-dst        (sum_wifi_dst_hr)
-    - dailyChargeableSummary                     # -> summarybeans/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
-    - hourlyChargeableSummary                    # -> summarybeans/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
+    - dailyChargeableSummary                     # -> summarybeans/call/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
+    - hourlyChargeableSummary                    # -> summarybeans/call/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
   beans:
     dailyCallSummarySg30:
       window: daily                              # no catalog class -> config-instantiated call bean

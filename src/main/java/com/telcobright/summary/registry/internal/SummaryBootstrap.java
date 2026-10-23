@@ -1,6 +1,9 @@
 package com.telcobright.summary.registry.internal;
 
+import com.telcobright.summary.bean.spi.CrossKindReader;
+import com.telcobright.summary.bean.spi.DdlPartitions;
 import com.telcobright.summary.bean.spi.SummaryBean;
+import com.telcobright.summary.bean.spi.SummaryKind;
 import com.telcobright.summary.config.internal.TenantProfileConfigSource;
 import com.telcobright.summary.context.api.ContextRegistry;
 import com.telcobright.summary.outbox.internal.OutboxReaper;
@@ -22,6 +25,7 @@ import org.eclipse.microprofile.config.ConfigProvider;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntConsumer;
 
@@ -40,6 +44,13 @@ import java.util.function.IntConsumer;
  * name with NO catalog class but a {@code summary.beans.<name>.window} key is CONFIG-INSTANTIATED instead
  * (§12g, {@link ConfigInstantiatedBeans}) — an extra instance under its own name: a call bean (e.g. the SG11 pair
  * beside the SG10 catalog beans), or, with {@code kind: wifi-session | wifi-dst}, a WiFi bean (SS-0006).
+ *
+ * <p>SS-0008 — the KINDS ({@code bean/spi/SummaryKind}: call, ad, wifi): the tenant's profile switches them on
+ * ({@code summary.kinds}, {@link TenantKinds}; none named = the call alone, as before). Every enabled bean is of one kind
+ * ({@link KnownKinds#kindOf}); a bean of a kind the tenant did not enable REFUSES the start, in words, before any bean is
+ * registered — left out instead, its outbox rows would be trimmed past it and its summaries lost. The call kind's chargeable
+ * roll-up ({@link CrossKindReader}) is told the enabled kinds' groups, and the rows of the other kinds are counted
+ * ({@link KindGate}: {@code KIND_NOT_ENABLED}, once per tenant, kind and day).
  */
 @ApplicationScoped
 public class SummaryBootstrap {
@@ -53,6 +64,7 @@ public class SummaryBootstrap {
     private final PingListener pingListener;
     private final TenantWatcher tenants;
     private final StoreDataSource store;
+    private final KindGate kindGate;
     private final boolean autostart;
     /** How a print-only start ends: the process exits with the code. (A test hears the code instead.) */
     IntConsumer exit = Quarkus::asyncExit;
@@ -65,6 +77,7 @@ public class SummaryBootstrap {
                             PingListener pingListener,
                             TenantWatcher tenants,
                             StoreDataSource store,
+                            KindGate kindGate,
                             @ConfigProperty(name = "summary.autostart", defaultValue = "false") boolean autostart) {
         this.registry = registry;
         this.discoveredBeans = discoveredBeans;
@@ -73,7 +86,14 @@ public class SummaryBootstrap {
         this.pingListener = pingListener;
         this.tenants = tenants;
         this.store = store;
+        this.kindGate = kindGate;
         this.autostart = autostart;
+    }
+
+    /** The bootstrap of before SS-0008's gate (tests): its own gate, which no reader hears. */
+    public SummaryBootstrap(SummaryBeanRegistry registry, Instance<SummaryBean<?>> discoveredBeans, ContextRegistry contexts, OutboxReaper reaper,
+                            PingListener pingListener, TenantWatcher tenants, StoreDataSource store, boolean autostart) {
+        this(registry, discoveredBeans, contexts, reaper, pingListener, tenants, store, new KindGate(), autostart);
     }
 
     void onStart(@Observes StartupEvent event) {
@@ -81,11 +101,11 @@ public class SummaryBootstrap {
         List<String> enabled = config.getOptionalValues("summary.enabledSummary", String.class).orElse(List.of());
         List<StartEndpoints.Endpoint> endpoints = StartEndpoints.resolve(config, enabled);
         if (config.getOptionalValue("summary.endpoints.print-only", Boolean.class).orElse(false)) {
-            printWhatThisStartResolvedAndExit(config, endpoints);   // nothing is started, nothing is dialled
+            printWhatThisStartResolvedAndExit(config, endpoints, enabled);   // nothing is started, nothing is dialled
             return;
         }
         sayAndCheckWhatThisStartResolved(config, endpoints);        // a fault of the configuration refuses the start here, before anything is dialled
-        registerBeans(enabled);
+        registerTheBeansOfTheEnabledKinds(config, enabled);         // a bean of a kind the tenant did not enable refuses the start here
         if (!autostart) {
             LOG.infof("autostart off — %d bean(s) registered; no schema served, workers/ping/reaper NOT started, nothing dialled", enabled.size());
             return;
@@ -94,10 +114,93 @@ public class SummaryBootstrap {
         startServing();
     }
 
-    private void registerBeans(List<String> enabled) {
-        for (String name : enabled) {
-            registerBean(name);
+    /**
+     * SS-0008: the tenant's kinds; a bean of a kind not enabled refuses the start BEFORE any bean is registered; then the
+     * beans, the chargeable roll-up told the enabled kinds' groups, the gate told what to count, and the kinds said.
+     */
+    private void registerTheBeansOfTheEnabledKinds(Config config, List<String> enabled) {
+        TenantKinds kinds = tenantKinds(config);
+        List<SummaryBean<?>> beans = resolveBeans(enabled);
+        refuseBeansOfKindsNotEnabled(beans, kinds);
+        beans.forEach(this::register);
+        readOnlyTheGroupsOfTheEnabledKinds(beans, kinds);
+        kindGate.countFor(kinds, firstBeanOfTheCdrEntity(beans), DdlPartitions.tenantZone(config));
+        LOG.info(kindsLine(kinds));
+    }
+
+    /** {@code summary.kinds} — a word that is no kind refuses the start, in words. */
+    private static TenantKinds tenantKinds(Config config) {
+        try {
+            return TenantKinds.of(config);
+        } catch (IllegalArgumentException noSuchKind) {
+            throw new IllegalStateException("REFUSING TO START: " + noSuchKind.getMessage());
         }
+    }
+
+    /** The beans the enabled names make, in the profile's order; a name that makes none is said and skipped, as before. */
+    private List<SummaryBean<?>> resolveBeans(List<String> enabled) {
+        List<SummaryBean<?>> beans = new ArrayList<>();
+        for (String name : enabled) {
+            SummaryBean<?> bean = resolveBean(name);
+            if (bean != null) {
+                beans.add(bean);
+            }
+        }
+        return beans;
+    }
+
+    /**
+     * Every bean must be of a kind this tenant enabled. One that is not refuses the start, naming each such bean and its kind:
+     * left out instead, it would not hold the outbox, so its rows would be trimmed past it and its summaries lost.
+     */
+    private static void refuseBeansOfKindsNotEnabled(List<SummaryBean<?>> beans, TenantKinds kinds) {
+        List<String> refused = new ArrayList<>();
+        for (SummaryBean<?> bean : beans) {
+            SummaryKind kind = kindOrNull(bean);
+            if (kind == null || !kinds.enables(kind)) {
+                refused.add(bean.name() + " (" + (kind == null ? "of no kind" : "kind " + kind.word()) + ")");
+            }
+        }
+        if (!refused.isEmpty()) {
+            throw new IllegalStateException("REFUSING TO START: summary.enabledSummary names beans of kinds this tenant did not enable — "
+                    + String.join(", ", refused) + "; the tenant's kinds: " + kinds.said() + ". Name their kinds in " + TenantKinds.KEY
+                    + " (the kinds: " + String.join(", ", KnownKinds.words()) + "), or take the beans out of summary.enabledSummary");
+        }
+    }
+
+    private static SummaryKind kindOrNull(SummaryBean<?> bean) {
+        try {
+            return KnownKinds.kindOf(bean);
+        } catch (IllegalArgumentException ofNoKind) {
+            return null;
+        }
+    }
+
+    /** The beans whose input crosses the kinds (the chargeable roll-up) sum only the legs of the enabled kinds' groups. */
+    private static void readOnlyTheGroupsOfTheEnabledKinds(List<SummaryBean<?>> beans, TenantKinds kinds) {
+        for (SummaryBean<?> bean : beans) {
+            if (bean instanceof CrossKindReader reader) {
+                reader.readOnly(kinds::enablesServiceGroup);
+            }
+        }
+    }
+
+    /** The bean whose drains count the rows of the kinds not enabled: the first of the {@code cdr} entity the profile enables. */
+    private static String firstBeanOfTheCdrEntity(List<SummaryBean<?>> beans) {
+        return beans.stream().filter(bean -> "cdr".equals(bean.entityType())).map(SummaryBean::name).findFirst().orElse(null);
+    }
+
+    /** {@code KINDS call, ad, wifi (summary.kinds) — call = service groups 10, 11 …; ad = …} and, when some are not enabled, what becomes of their rows. */
+    private static String kindsLine(TenantKinds kinds) {
+        List<String> reads = new ArrayList<>();
+        KnownKinds.all().stream().filter(kinds::enables).forEach(kind -> reads.add(TenantKinds.readsOf(kind)));
+        String line = "KINDS " + kinds.said() + " — " + String.join("; ", reads);
+        if (kinds.notEnabled().isEmpty()) {
+            return line;
+        }
+        List<String> others = kinds.notEnabled().stream().map(TenantKinds::readsOf).toList();
+        return line + ". NOT enabled: " + String.join("; ", others) + " — their cdr rows are summed by no bean here; they are counted "
+                + "and said (" + KindGate.MARK + ", once per tenant, kind and day)";
     }
 
     /** The beans' shared contexts (config-manager): best-effort, not load-bearing — and dialled only when the workers start. */
@@ -138,11 +241,11 @@ public class SummaryBootstrap {
      * Print-only: the same lines on standard output (the lab script reads them), and an exit code — 0 = every host
      * is this box and the configuration starts, 3 = a host is not this box, 4 = the configuration refuses the start.
      */
-    private void printWhatThisStartResolvedAndExit(Config config, List<StartEndpoints.Endpoint> endpoints) {
+    private void printWhatThisStartResolvedAndExit(Config config, List<StartEndpoints.Endpoint> endpoints, List<String> enabled) {
         System.out.println(PROFILE_MARK + " " + profileReadFrom(config));
         endpoints.forEach(endpoint -> System.out.println(endpoint.line()));
         int elsewhere = StartEndpoints.notThisBox(endpoints).size();
-        boolean configurationStarts = sayWhetherTheConfigurationStarts(config);
+        boolean configurationStarts = sayWhetherTheConfigurationStarts(config, enabled);
         System.out.println(StartEndpoints.LINE_MARK + "S " + endpoints.size() + " resolved, " + elsewhere + " not on this box — print-only: nothing was started");
         exit.accept(elsewhere != 0 ? 3 : configurationStarts ? 0 : 4);
     }
@@ -163,9 +266,12 @@ public class SummaryBootstrap {
      * Print-only: a {@code SECRET} line — where the store's password comes from, never its value — or, when the
      * configuration would refuse the start, the refusal as the start would say it ({@code REFUSING TO START: …}).
      */
-    private boolean sayWhetherTheConfigurationStarts(Config config) {
+    private boolean sayWhetherTheConfigurationStarts(Config config, List<String> enabled) {
         try {
             refuseAFaultOfTheProfile(config);
+            TenantKinds kinds = tenantKinds(config);
+            refuseBeansOfKindsNotEnabled(resolveBeans(enabled), kinds);
+            System.out.println(kindsLine(kinds));
             System.out.println("SECRET " + store.checkAtStart(autostart));
             return true;
         } catch (IllegalStateException refusal) {
@@ -181,7 +287,8 @@ public class SummaryBootstrap {
         reaper.stop();         // (workers are stopped by the registry's own @PreDestroy)
     }
 
-    private void registerBean(String name) {
+    /** The bean an enabled name makes — a catalog class, else config-instantiated — or null, said, when it makes none. */
+    private SummaryBean<?> resolveBean(String name) {
         try {
             SummaryBean<?> bean = findByName(name);
             if (bean == null) {
@@ -190,14 +297,19 @@ public class SummaryBootstrap {
             if (bean == null) {
                 LOG.errorf("enabledSummary '%s' matches no SummaryBean class and has no summary.beans.%s.window "
                         + "config to instantiate from", name, name);
-                return;
+                return null;
             }
             bean.table();   // fail-fast probe: throws if table-suffix is missing/invalid (caught + logged below)
-            registry.register(bean);
-            LOG.infof("bean registered: name=%s entity=%s window=%s table=%s", name, bean.entityType(), bean.window(), bean.table());
+            return bean;
         } catch (RuntimeException e) {
             LOG.errorf(e, "could not activate summary bean '%s': %s", name, e.getMessage());   // the cause in the line itself: a refused kind says its words here
+            return null;
         }
+    }
+
+    private void register(SummaryBean<?> bean) {
+        registry.register(bean);
+        LOG.infof("bean registered: name=%s entity=%s window=%s table=%s", bean.name(), bean.entityType(), bean.window(), bean.table());
     }
 
     /**
