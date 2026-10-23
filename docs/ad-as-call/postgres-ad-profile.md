@@ -33,6 +33,9 @@ summary:
                                            # (its billing.summary.ping-topic). The topic must exist
     ping-bootstrap-servers: <kafka host>:9092
 
+  kinds: [call, ad, wifi]                  # SS-0008: the kinds this tenant sums — none named = the call alone. EVERY bean below
+                                           # is of one of them (ad: group 30; wifi: group 101; call: the chargeable pair) — a
+                                           # bean of a kind not named here REFUSES the start
   enabledSummary:
     - dailyAdSummary                       # sum_ad_day_30
     - hourlyAdSummary                      # sum_ad_hr_30
@@ -98,6 +101,7 @@ ENDPOINT tree-prime-context http://<prime-context host>:7091 hosts=<prime-contex
 ENDPOINT doorbell-kafka <kafka host>:9092 hosts=<kafka host> …
 ENDPOINT listens-on <address>:<port> …
 the store's password: from the environment variable TENANT_BTCL_SWITCH_SUMMARY_SERVICE_PASSWORD (summary.store.password-ref)
+KINDS call, ad, wifi (summary.kinds) — call = service groups 10, 11 and every group no kind names; ad = service group 30; wifi = service group 101
 ```
 
 | a start is refused, in words, when | |
@@ -110,6 +114,8 @@ the store's password: from the environment variable TENANT_BTCL_SWITCH_SUMMARY_S
 | `kind` says one engine and the URL is the other's; `kind` is not `mysql` or `postgresql` | |
 | the workers are to start (`autostart`) and the profile names no store | it asks whether the start named its tenant |
 | `tenants.mode: tree` without `root` or `prime-context.base-url` (when the workers are to start) | |
+| (SS-0008) `summary.enabledSummary` names a bean of a kind `summary.kinds` does not enable — **an upgraded jar on a profile rendered before SS-0008, which names no kind (= the call alone), is refused for its ad and WiFi beans** | each such bean is named with its kind; nothing is registered. Add `kinds: [call, ad, wifi]` to the profile, then start. Why not skip the bean: left out, it would not hold the outbox — the reaper would trim its rows and its summaries would be lost |
+| (SS-0008) `summary.kinds` names a word that is no kind (the kinds: `call`, `ad`, `wifi`) | |
 | (a lab) `summary.endpoints.local-only: true` and an endpoint is not THIS BOX | every such endpoint is named. This box = `localhost`, a loopback address, or an address one of this box's own interfaces holds. A host name is never looked up, so a name is refused; so is a listener on every interface (`0.0.0.0`) |
 
 `-Dsummary.endpoints.print-only=true` prints these lines and exits: nothing is started and nothing is dialled.
@@ -129,6 +135,7 @@ up, says it (ERROR), and tries again: after `retry-seconds`, each try a little l
 | it makes, at its first use of a schema | `summary_offset` (the bookmarks), `summary_affected_dlq` (poison rows), and one table per enabled bean: `sum_ad_day_30`, `sum_ad_hr_30`, `sum_voice_day_30`, `sum_voice_hr_30`, `sum_voice_day_101`, `sum_voice_hr_101`, `sum_chargeable_day`, `sum_chargeable_hr`, and since SS-0006 `sum_wifi_day_101`, `sum_wifi_hr_101` (the WiFi session per day / hour), `sum_wifi_dst_day`, `sum_wifi_dst_hr` (the volume per destination). Plain tables, the table and its indexes in one transaction |
 | it never makes | `summary_affected`, `cdr`, `cdrerror`, `acc_chargeable`. Only billing-core makes them. A tier that has no `summary_affected` yet WAITS: one WARN names the schema and the table, and it is picked up when the table appears — no restart |
 | who reads its tables | `ad_sphere`, through prime-context's default privileges. The DDL of the ad pair: `src/main/resources/db/postgres/sum_ad.sql`; its columns: the README |
+| before an upgrade to SS-0008 or later | the profile gains `kinds: [call, ad, wifi]` (§1) — without it the start is refused in words, naming the ad and WiFi beans. Nothing else changes: the same beans, tables, keys and sums (pinned on both engines, `tools/lab/kinds-pin-e2e.sh`) |
 | after an upgrade | an ad table made by an earlier version is brought up to the new description at its first use — a column it lacks is added (`tup_contentid`; the old rows read `''`), a text column that is narrower is widened (`tup_rulecode`, 20 → 64; what it holds stays). A WARN line says each change. A table that is as described gets no statement. The service owns its tables, so it needs no new right. The four WiFi tables are kept up to date the same way: since SS-0007 a `sum_wifi_day_101` / `sum_wifi_hr_101` made by an earlier version gets `tup_gw` (`VARCHAR(64) NOT NULL DEFAULT ''`, the BRAS) at its first use — **the rows summarised before keep `tup_gw = ''`** (§4a) |
 | on its own connections | the tier's schema and `standard_conforming_strings = off` are set with `SET LOCAL`, inside each transaction. Nothing stays on a connection; no other session is touched |
 | Kafka | it only listens: `cdr_summary_ping_<root>` (billing-core) and `config_event_loader_<root>` (prime-context). It publishes nothing and makes no topic. **Both topics must exist** before billing-core starts: without the ping's topic billing-core's ingest waits 60 s per tier per batch, and this service runs on the poll alone, with about one WARN a second that names the topic; made later, it is heard with no restart. A broker that is away costs latency only: the poll and the refresh go on |
@@ -202,6 +209,7 @@ The keys of a profile:
 | `summary.outbox.reaper-interval-seconds` | `60` | |
 | `summary.outbox.quarantine-after` | `8` | tries on a poison row before it goes to `summary_affected_dlq` |
 | `summary.outbox.entity-type` | `cdr` | the entity the reaper trims |
+| `summary.kinds` | absent = `[call]` | SS-0008: the kinds this tenant sums — `call`, `ad`, `wifi` (case and blanks ignored). Every enabled bean must be of one of them, or the start is refused. A cdr row of a kind not named is summed by no bean and counted: `KIND_NOT_ENABLED <kind> <n> rows`, one WARN per tenant (tier schema), kind and day, the day's total in an INFO when the day turns and at stop; its outbox row is consumed as every other |
 | `summary.enabledSummary` | — | the beans to run |
 | `summary.beans.<name>.window` / `service-group` / `table-suffix` | — | a call bean made from the profile alone (group 30: suffix `"30"`; group 101, the WiFi session: suffix `"101"`) |
 | `summary.beans.<name>.kind` | absent = a call bean | `wifi-session` \| `wifi-dst` (SS-0006): a WiFi bean made from the profile alone, with `window`. `wifi-session`: the session per window into `sum_wifi_<window>_101` — entity `cdr`, group 101 and the suffix fixed by the kind (no `service-group`, no `table-suffix`). `wifi-dst`: the volume per destination into `sum_wifi_dst_<window>` — entity `wifi_flow`, billing-core's flow ingest (a new entity: its beans start at 0). Any other word: that bean is refused at the start, in words |
@@ -228,6 +236,7 @@ Everything on 127.0.0.1, in containers named `ss-*`; no password exists.
 | `tools/lab/wifi-gw-wayback.sh postgresql \| mysql <tier schema>` | NOT a story: devops's way back from the BRAS split to 3829e18's jar, one tier schema at a time, the new jar stopped (§4a; SS-0007 §9) |
 | `SS_OLDER_APP=<dir> tools/lab/wifi-gw-wayback-e2e.sh [pg \| mysql \| both]` | the way back proven with two packaged jars, both engines: 3829e18's jar, this one with sessions on two BRAS beside an older `''` row in the same hour and day, the way back (merged 3 / deleted 4 / bras cleared 2, READY; again 0 / 0 / 0) — the totals per old key kept, the averages the bean's, every other table digest-equal — 3829e18's jar RUNS on the collapsed tables (its session beans' offsets move, no `duplicate existing row`), and forward again is clean |
 | `tools/lab/wifi-beans-e2e.sh [pg \| mysql \| both]` | the WiFi beans' story (SS-0006) with the packaged jar, both engines: 12 sessions as BC-0008 writes them → `sum_wifi_hr_101` / `sum_wifi_day_101` as the known rows (keys by column, the derived average) and the 101 voice tables as before; 3 flow windows (one split in two outbox rows) → `sum_wifi_dst_hr` / `sum_wifi_dst_day`; the 30 and 101 voice tables unchanged; the owner's two reports (average session duration per site per day, top destinations per site per hour) equal to a separate query over the raw rows of the same hour |
+| `SS_PIN_APP=<dir> SS_PIN_PROFILE=all\|call tools/lab/kinds-pin-e2e.sh [pg \| mysql \| both]` | the PINS (SS-0008): one corpus of every record shape the scenarios use (testkit/LabPinCorpus — voice 10/11 v1 and v2, ad views, WiFi sessions with and without a BRAS, a group no kind names, a row mixing every kind, a correction, two `wifi_flow` rows) through a packaged app (`SS_PIN_APP`), every bean of the service (`all`, kinds call, ad, wifi) or a voice tenant's six (`call`, no kind named); every `sum_*` table digested (rows without the id, sorted), the bookmarks, the dead letters. Two apps' digests of one engine are compared: identical = the sums unchanged. The script never starts Maven (the classpath file first) |
 | `tools/lab/this-box-e2e.sh` | the lab's key: an address of this box's own interface is this box (a real prime-context never listens on loopback); another box's refuses the start |
 
 `mvn verify` runs the integration tests against the three containers; a test whose lab is away is skipped,

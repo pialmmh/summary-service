@@ -9,6 +9,19 @@ Summaries are **eventually consistent** (outbox-fed) — fine for derived roll-u
 It ports billing-core's proven **load-merge-write** engine (.NET → Java) over a typed summary **entity**, and
 consumes the outbox **exactly-once per bean**, for **every tenant of its root's tree in one process**.
 
+## Since 2026-10-24 — the kinds (branch `kinds`; decisions §17)
+
+- **One bean set per kind** — the call, the ad view, the WiFi session (`bean/spi/SummaryKind`; `summarybeans/call/CallKind`,
+  `summarybeans/ad/AdKind`, `summarybeans/wifi/WifiKind`; the list `registry/internal/KnownKinds`). A kind declares the service
+  groups it reads (call: 10, 11 and every group no kind names; ad: 30; wifi: 101), the entities, and its beans; each kind is
+  ONE package with its beans. The chargeable roll-up moved under the call kind (`summarybeans/call/chargeable`).
+- **Switched on per tenant**: `summary.kinds: [call, ad, wifi]` in the profile; none named = the call alone (as before kinds).
+  A bean of a kind not named refuses the start in words — the bed's rendered profile needs the line before this jar runs on it.
+- **The rows of a kind not enabled** are summed by no bean and counted: `KIND_NOT_ENABLED <kind> <n> rows`, one WARN per
+  tenant, kind and day; the outbox row is consumed as every other.
+- The blob billing-core writes is read exactly as before; every bean's sums are unchanged (pinned on both engines,
+  `tools/lab/kinds-pin-e2e.sh`). How to add the SMS: `docs/ad-as-call/SS-0008-done.md` §8.
+
 ## Since 2026-10-04 — an ad is a Call (branch `postgres-ad-call`; decisions §16)
 
 - **The ad view is a `cdr` row of service group 30.** The ad beans (`sum_ad_day_30` / `sum_ad_hr_30`) read the call's
@@ -207,20 +220,20 @@ tenancy/      TenantWatcher (api: which schemas are served — one, or the root'
 context/      ContextRegistry (api) · SummaryContext (spi) · ConfigManagerClient + MediationContext (internal/cdr)
 ping/         PingListener (Kafka cdr_summary_ping → wake the workers of the tenant it names) · PingPayload
 config/       TenantProfileConfigSource (routesphere-like profile loader)
-summarybeans/ one package per category (call + chargeable today; sms/packetflow/session later)
-  call/       HourlySummary · DailySummary · CallSummaries (config-instantiated extras, e.g. the SG11 pair)
-  wifi/       WifiSummaries · WifiBeanKind (kind: wifi-session | wifi-dst — SS-0006): the session per window
+summarybeans/ ONE package per KIND (SS-0008: call · ad · wifi; sms next) — each with its Kind class
+  call/       CallKind · HourlySummary · DailySummary · CallSummaries (config-instantiated extras, e.g. the SG11 pair)
+  wifi/       WifiKind · WifiSummaries · WifiBeanKind (kind: wifi-session | wifi-dst — SS-0006): the session per window
               (sum_wifi_<window>_101, model/WifiSessionSummary) and the volume per destination (sum_wifi_dst_<window>,
               model/WifiDestinationSummary, the wifi_flow entity); machinery in internal/
     internal/ CallSummaryBean (base) · CallSummaryBuilder · CdrBlobMapper · SumVoiceDdl
     model/    CallSummary (47 cols) · Cdr/Chargeable/CdrBlobEntry (blob v2, v1 tolerated — shared by both categories)
-  chargeable/ HourlyChargeableSummary · DailyChargeableSummary   (EVERY leg, every SG; fixed tables)
-    internal/ ChargeableSummaryBean (base) · ChargeableSummaryBuilder · SumChargeableDdl
-    model/    ChargeableSummary (7-key + 15 measures, DECIMAL(20,8))
-  ad/         DailyAdSummary · HourlyAdSummary   (service group 30 of the cdr stream; one pair per tier schema)
+    chargeable/ HourlyChargeableSummary · DailyChargeableSummary   (the call kind's; EVERY leg of the ENABLED kinds' records; fixed tables)
+      internal/ ChargeableSummaryBean (base) · ChargeableSummaryBuilder · SumChargeableDdl
+      model/    ChargeableSummary (7-key + 15 measures, DECIMAL(20,8))
+  ad/         AdKind · DailyAdSummary · HourlyAdSummary   (service group 30 of the cdr stream; one pair per tier schema)
     internal/ AdSummaryBean (base) · AdSummaryBuilder · AdMetaData · SumAdDdl
     model/    AdSummary (10-key + 8 measures) · AdCallCdr / AdCallEntry (the ad's view of the blob) · AdViewFacts · AdView
-  sms/        future — same shape
+  sms/        future — same shape (SmsKind; how: docs/ad-as-call/SS-0008-done.md §8)
 ```
 
 ### Assemble a bean (public builder API)
