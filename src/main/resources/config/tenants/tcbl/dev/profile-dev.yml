@@ -61,8 +61,8 @@ summary:
     - hourlyCallSummary                          # -> summarybeans/call/HourlySummary.java (sum_voice_hr_03)
     - dailyCallSummarySg11                       # config-instantiated (window key below)   (sum_voice_day_02)
     - hourlyCallSummarySg11                      # config-instantiated                      (sum_voice_hr_02)
-    - dailyChargeableSummary                     # -> summarybeans/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
-    - hourlyChargeableSummary                    # -> summarybeans/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
+    - dailyChargeableSummary                     # -> summarybeans/call/chargeable/DailyChargeableSummary.java  (sum_chargeable_day)
+    - hourlyChargeableSummary                    # -> summarybeans/call/chargeable/HourlyChargeableSummary.java (sum_chargeable_hr)
   beans:
     dailyCallSummary:
       service-group: 10                          # keep SG10 records

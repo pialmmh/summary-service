@@ -1,6 +1,7 @@
-package com.telcobright.summary.summarybeans.chargeable.internal;
+package com.telcobright.summary.summarybeans.call.chargeable.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.telcobright.summary.bean.spi.CrossKindReader;
 import com.telcobright.summary.bean.spi.SummaryBean;
 import com.telcobright.summary.bean.spi.SummaryMode;
 import com.telcobright.summary.bean.spi.SummaryTableSpec;
@@ -8,7 +9,7 @@ import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CdrBlobEntry;
 import com.telcobright.summary.summarybeans.call.model.Chargeable;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
@@ -20,6 +21,7 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntPredicate;
 
 /**
  * The shared <b>chargeable</b> summary machinery over the {@link ChargeableSummary} entity. It consumes the
@@ -27,8 +29,12 @@ import java.util.List;
  * reused from {@code summarybeans/call/model}, the one pinned blob contract) but rolls up EVERY chargeable
  * leg of every entry: no service-group filter, no direction filter. The target table is FIXED per window —
  * {@code sum_chargeable_<window token>} — no suffix concept. A per-window subclass adds only {@link #window()}.
+ *
+ * <p>SS-0008: the call kind's — and the one bean whose input crosses the kinds ({@link CrossKindReader}). The start tells it
+ * the service groups of the kinds the tenant enabled: a record of any other group (its customer leg's, the call beans' rule)
+ * is summed by no leg here — the kinds' gate counts it. Untold, every record is read, as before kinds.
  */
-public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSummary> {
+public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSummary>, CrossKindReader {
 
     private static final Logger LOG = Logger.getLogger(ChargeableSummaryBean.class);
     private static final ChargeableSummaryGenerator GENERATOR = new ChargeableSummaryGenerator();   // stateless, shared
@@ -37,6 +43,8 @@ public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSum
     private final String name;
     private final String context;
     private final SummaryMode mode;
+    /** The service groups whose records this bean sums: every group until the start says otherwise (SS-0008). */
+    private volatile IntPredicate serviceGroupsRead = serviceGroup -> true;
 
     /** CDI path: only {@code context}/{@code mode} come from {@code summary.beans.<name>} (no service-group / table-suffix). */
     protected ChargeableSummaryBean(ObjectMapper blobMapper, String name) {
@@ -49,6 +57,12 @@ public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSum
         this.name = name;
         this.context = context;
         this.mode = SummaryMode.parse(optString(name, "mode"));
+    }
+
+    /** SS-0008: sum only the records whose service group {@code serviceGroups} admits — the start passes the enabled kinds'. */
+    @Override
+    public void readOnly(IntPredicate serviceGroups) {
+        this.serviceGroupsRead = serviceGroups;
     }
 
     /** The per-bean fold setting — all outbox polls run INCREMENTAL. */
@@ -104,6 +118,9 @@ public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSum
         List<Chargeable> kept = new ArrayList<>();
         int skippedMalformed = 0;
         for (CdrBlobEntry entry : entries) {
+            if (!readsTheKindOf(entry)) {
+                continue;                                   // a record of a kind the tenant did not enable: counted by the gate, summed by none
+            }
             for (Chargeable leg : entry.legs()) {           // EVERY leg — customer and supplier rows both roll up
                 if (leg == null || leg.transactionTime() == null) {
                     skippedMalformed++;                     // billing always stamps it; guard, never NPE the drain
@@ -116,6 +133,12 @@ public abstract class ChargeableSummaryBean implements SummaryBean<ChargeableSum
             LOG.warnf("bean=%s skipped %d malformed chargeable leg(s) (null leg/transactionTime)", name, skippedMalformed);
         }
         return GENERATOR.generate(kept, window());
+    }
+
+    /** A record is of its customer leg's group (the call beans' rule); one with no leg has nothing to sum either way. */
+    private boolean readsTheKindOf(CdrBlobEntry entry) {
+        Chargeable customerLeg = entry.customerLeg();
+        return customerLeg == null || serviceGroupsRead.test(customerLeg.servicegroup());
     }
 
     @Override

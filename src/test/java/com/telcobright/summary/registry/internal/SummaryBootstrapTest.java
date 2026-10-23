@@ -260,7 +260,8 @@ class SummaryBootstrapTest {
         String[] keys = {"summary.enabledSummary", "dailyWifiSessionSummary,hourlyWifiDstSummary,badWifi",
                 "summary.beans.dailyWifiSessionSummary.window", "daily", "summary.beans.dailyWifiSessionSummary.kind", "wifi-session",
                 "summary.beans.hourlyWifiDstSummary.window", "hourly", "summary.beans.hourlyWifiDstSummary.kind", "wifi-dst",
-                "summary.beans.badWifi.window", "daily", "summary.beans.badWifi.kind", "wifi-nope"};
+                "summary.beans.badWifi.window", "daily", "summary.beans.badWifi.kind", "wifi-nope",
+                "summary.kinds", "call,wifi"};   // SS-0008: the WiFi beans are the wifi kind's — named, or the start is refused
         for (int i = 0; i < keys.length; i += 2) System.setProperty(keys[i], keys[i + 1]);
         try (LogCapture said = LogCapture.of(SummaryBootstrap.class)) {
             bootstrap(false).onStart(null);

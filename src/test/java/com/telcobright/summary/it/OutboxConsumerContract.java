@@ -15,7 +15,7 @@ import com.telcobright.summary.summarybeans.call.CallSummaries;
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
 import com.telcobright.summary.summarybeans.call.internal.CdrBlobMapper;
 import com.telcobright.summary.summarybeans.call.model.CallSummary;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 import com.telcobright.summary.summarybeans.wifi.model.WifiDestinationSummary;
 import com.telcobright.summary.summarybeans.wifi.model.WifiSessionSummary;
 import com.telcobright.summary.testkit.CdrTestSupport;
@@ -407,6 +407,44 @@ abstract class OutboxConsumerContract {
             assertEquals(0, reader.drain(each), "re-drain is a no-op (exactly once per bean)");
         }
         assertEquals("2 | 2 | 60.000000", voiceRow(WifiSessionTestSupport.DAY_TABLE, "TF_min"));
+    }
+
+    // ---- SS-0008 item 2: a tenant of the call alone, on this engine — its own records summed, the other kinds' counted ONCE,
+    //      every outbox row consumed ----
+
+    @Test
+    void a_call_tenant_sums_its_own_records_counts_the_other_kinds_records_once_and_consumes_every_outbox_row() {
+        com.telcobright.summary.registry.internal.TenantKinds callOnly = com.telcobright.summary.registry.internal.TenantKinds.of(List.of());
+        com.telcobright.summary.registry.internal.KindGate gate = new com.telcobright.summary.registry.internal.KindGate(
+                java.time.Clock.fixed(java.time.Instant.parse("2026-10-24T03:00:00Z"), java.time.ZoneOffset.UTC));
+        gate.countFor(callOnly, bean.name(), java.time.ZoneId.of("Asia/Dhaka"));
+        OutboxReader gated = new OutboxReader(unitOfWorkFactory(), new SummaryEngine(), 1000, 50, 8, gate);
+        SummaryBean<ChargeableSummary> chargeable = DailyChargeableSummaryBuilder.create(CdrBlobMapper.create()).build();
+        ((com.telcobright.summary.bean.spi.CrossKindReader) chargeable).readOnly(callOnly::enablesServiceGroup);
+        provisionSmall(chargeable);
+        java.time.LocalDateTime t = CdrTestSupport.at(2026, 10, 10, 9, 0);
+        String mixed = OutboxCodec.encode(AdTestSupport.batchJson(List.of(CdrTestSupport.entryJson(CdrTestSupport.sg10Entry(t)),
+                CdrTestSupport.entryJson(CdrTestSupport.sg11Entry(t.plusMinutes(5))), AdTestSupport.leafView(t.plusMinutes(10)).json(),
+                AdTestSupport.rootView(t.plusMinutes(10)).json(), WifiSessionTestSupport.session(t.plusMinutes(20)).json())));
+        seedOutbox(1, mixed);
+        seedOutbox(2, mixed);
+
+        assertEquals(2, gated.drain(bean), "the counting bean reads both rows");
+        assertEquals(2, gated.drain(chargeable), "the chargeable roll-up too, from its own bookmark");
+
+        assertEquals(2, sumTotalCalls(), "the group-10 call of each row");
+        assertEquals(6, queryLong("select sum(totalcount) from sum_chargeable_day"), "per row: the two SG10 legs and the SG11 leg");
+        assertEquals(0, queryLong("select count(*) from sum_chargeable_day where tup_servicegroup in (30, 101)"), "no leg of a view or a session");
+        assertEquals(2, offset(bean.name()));
+        assertEquals(2, offset("dailyChargeableSummary"));
+        java.time.LocalDate day = java.time.LocalDate.of(2026, 10, 24);
+        assertEquals(4, gate.rowsNotSummed(schemaName(), "ad", day), "two views a row, counted ONCE though two beans read the rows");
+        assertEquals(2, gate.rowsNotSummed(schemaName(), "wifi", day));
+
+        assertEquals(0, gated.drain(bean));
+        assertEquals(0, gated.drain(chargeable));
+        assertEquals(4, gate.rowsNotSummed(schemaName(), "ad", day), "a re-drain counts nothing again");
+        assertEquals(2, reapLike(Set.of(bean.name(), "dailyChargeableSummary")), "nothing stuck: the reaper trims both rows");
     }
 
     // ---- SS-0006 item 2: the WiFi session tables, made by the service on this engine, hold the known rows of a replayed hour ----

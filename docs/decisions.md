@@ -12,6 +12,10 @@ The rulings this service is built on. Items marked **RATIFIED** come from the de
 > dotnet ratified). The engine (§1–3) is unchanged — it reads the outbox blob now. §4 (Kafka-offset
 > idempotency) and §11 (recompute-from-cdr correction) are SUPERSEDED by §13.
 >
+> **The kinds (2026-10-24) — see §17.** One bean set per kind (call · ad · wifi), each one package; switched on per tenant
+> by `summary.kinds` (none = the call alone); a bean of a kind not enabled refuses the start; the rows of a kind not
+> enabled are summed by no bean and counted (`KIND_NOT_ENABLED`). The engine, exactly-once and the blob are unchanged.
+
 > **An ad is a Call (2026-10-04) — see §16.** The store is MySQL OR PostgreSQL per profile (supersedes §6); one
 > process serves every tenant schema of its root's tree; a schema seen for the first time starts at offset 0
 > (narrows §13's head-init); a password may come from the unit's environment by its variable's NAME (adds to
@@ -566,3 +570,70 @@ same on both engines, and no other session, role or database setting is touched.
 - `tenants.yml` still flags `tcbl/dev` as enabled (the pre-existing default of the voice deployment). A start
   that names no tenant falls on it; with autostart off it dials nothing. Recommended: no tenant enabled by
   default (in the done note's findings — the architect's call).
+
+## 17. The kinds — one bean set per kind, switched on per tenant (SS-0008, 2026-10-24)
+The owner's R13 (routesphere `docs/architecture/routesphere-seed-flow-requirements.md`, 2026-10-23: "billing and summary get
+new logic beans close to the current call processing, extended to the new services … switched on per tenant by config
+(kinds: call, ad, wifi)") — S17 of SS-0003 §5, which waited for his word. Built on the branch `kinds` (from
+`postgres-ad-call`); the note of the work is `docs/ad-as-call/SS-0008-done.md`. The engine (§1–3), exactly-once (§13), the
+outbox blob (billing-core's `summary_affected` shape, the contract with BC-0009) and every bean's sums are unchanged.
+
+### 17a. The contract — `bean/spi/SummaryKind`
+A kind declares: its WORD in `summary.kinds`; the SERVICE GROUPS whose `cdr` rows are its; the outbox ENTITIES its beans
+read; its BEAN SET — the catalog window classes (CDI singletons, by name), the shapes it config-instantiates from
+`summary.beans.<name>.kind`, and the beans it owns. Each bean carries its own generator, builder and table (the SPI of §12).
+A call-shaped bean (`sum_voice_*`, `ServiceGroupReader`) is the kind of the group it reads: the call's code is the model,
+`sum_voice_*_30` is the ad's view of a view as a call, `sum_voice_*_101` the WiFi's. The known kinds are listed ONCE,
+`registry/internal/KnownKinds` (call, ad, wifi — in that order); the questions asked of them: which kind a service group is
+(the kind naming it, else the call — every group was summed before kinds), which kind a bean is, which kind makes a shape.
+
+| kind | groups | entities | its beans (one package each) |
+|---|---|---|---|
+| `call` | 10, 11 and every group no kind names | `cdr` | `summarybeans/call`: the voice window classes and `CallSummaries` extras (`sum_voice_*_<suffix>` of 10/11); `call/chargeable`: the chargeable roll-up (`sum_chargeable_*`) |
+| `ad` | 30 | `cdr` | `summarybeans/ad`: `DailyAdSummary` / `HourlyAdSummary` (`sum_ad_*_30`); a call-shaped bean of 30 (`sum_voice_*_30`) |
+| `wifi` | 101 | `cdr`, `wifi_flow` | `summarybeans/wifi`: the shapes `wifi-session` (`sum_wifi_*_101`) and `wifi-dst` (`sum_wifi_dst_*`); a call-shaped bean of 101 (`sum_voice_*_101`) |
+
+The existing beans were MOVED, not rewritten: the chargeable package went under the call kind (`summarybeans/chargeable` →
+`summarybeans/call/chargeable`, the package lines only); the ad and WiFi beans were already in their kinds' packages.
+
+### 17b. Activation — `summary.kinds` in the tenant profile; none named = `call`
+`summary.kinds: [call, ad, wifi]` (case and blanks ignored, a repeat is one kind). None named = the call alone: what the
+service did before kinds existed, the voice deployment's profile (tcbl) unchanged. A word that is no kind refuses the
+start, in words naming the kinds. The start says the kinds in one line (`KINDS call, ad, wifi (summary.kinds) — call = service
+groups 10, 11 and every group no kind names; ad = service group 30; wifi = service group 101`), print-only too.
+
+### 17c. A bean of a kind the tenant did not enable REFUSES the start — it is not skipped
+Every bean `summary.enabledSummary` names must be of an enabled kind. One that is not refuses the start, naming each such
+bean and its kind, before any bean is registered. Why not skip it: a bean left out does not hold the outbox (the reaper
+trims past the registered beans' bookmarks), so the rows it should have summed would be deleted and its summaries lost for
+good once it came back. A refused start loses nothing: billing-core keeps writing, the bookmarks wait. **For a deployment
+whose profile is outside the jar (the bed): the profile gains `kinds: [call, ad, wifi]` BEFORE this jar starts on it.**
+
+### 17d. The rows of a kind not enabled — summed by no bean, counted once, said once per tenant, kind and day
+A `cdr` record whose service group belongs to a kind the tenant did not enable is summed by no bean (its kind's beans are not
+there; the call-shaped beans filter by their own group as before; the chargeable roll-up is told the enabled groups —
+17e). It is counted by `registry/internal/KindGate` and said: ONE WARN per tenant (tier schema), kind and day,
+`KIND_NOT_ENABLED <kind> <n> rows — tenant <tier>, day <day>: …` at the first such record of the day; the day's total in an
+INFO (`… <n> rows in all …`) when the day turns and at stop. The outbox row is consumed as every other. Counted ONCE per
+outbox row: only the drains of one bean per tier count — the first `cdr` bean the profile enables — and only after their
+commit (`outbox/spi/RowCensus`, heard by `OutboxReader`); that bean's drain is exactly once per row, across restarts too
+(a rolled-back step is not heard; a quarantined row is not counted). A record's kind is its customer chargeable's
+`servicegroup` (the call beans' rule), else the record's `Cdr.ServiceGroup`, else 0 (the call's). The day is the tenant's
+(`summary.zone`). The count lives in the process (a test reads it); the WARN and the INFO are its record.
+
+### 17e. The chargeable roll-up reads the enabled kinds' groups
+The one bean whose input crosses the kinds (`bean/spi/CrossKindReader`): the start tells it the enabled kinds' groups and it
+sums no leg of a record of another group (by the record's customer leg, as 17d). Untold — a test or an embedder — it reads
+every group, as before. With every kind enabled (the bed's profile) it is exactly as before; for a voice tenant it is as
+before for every group but 30 and 101, which a voice tenant never receives.
+
+### 17f. Left as it is, on purpose
+- `CallSummaryBuilder` keeps its per-group branches (10, 11, 30, 101): the call-shaped view of each kind is the call's code.
+  Moving them into the kinds would be a rewrite of the pinned sums, not a move.
+- The blob model stays in `summarybeans/call/model` (`Cdr`, `Chargeable`, `CdrBlobEntry`, `CdrBlobMapper`) and the ad and
+  WiFi kinds read it from there: one pinned contract, one decoder.
+- `summary.beans.<name>.kind` (a bean's SHAPE, the WiFi kind's fine-tuning) and `summary.kinds` (the tenant's kinds) share a
+  word; renaming the older key would break every deployed profile.
+- The reaper trims the `cdr` entity only (`summary.outbox.entity-type`), as before: `wifi_flow` rows are never trimmed, with or
+  without the wifi kind (a finding of this round, not changed by it).
+- A kind is all or nothing per tenant; the beans inside it are still chosen one by one in `enabledSummary`.

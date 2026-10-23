@@ -11,5 +11,8 @@
  * the ad's view of the blob in {@code model/}. The decoder is the call category's {@code CdrBlobMapper}
  * (case-insensitive, lenient) and the chargeable leg is the call category's {@code Chargeable}: one pinned blob
  * contract, read three ways.
+ *
+ * <p>SS-0008: this package is the AD kind ({@link com.telcobright.summary.summarybeans.ad.AdKind}): service group 30, its
+ * two window classes, and the view as a call ({@code sum_voice_*_30}, a call-shaped bean of group 30).
  */
 package com.telcobright.summary.summarybeans.ad;

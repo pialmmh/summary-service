@@ -4,7 +4,9 @@ The generic axis is the typed summary **entity `T`** (e.g. `CallSummary`). The i
 **outbox** (`summary_affected`) in each tenant's own schema — MySQL or PostgreSQL, per profile — consumed
 **exactly-once per (schema, bean)** via a bookmark in the same schema (`summary_offset`); Kafka
 (`cdr_summary_ping`) is only a wakeup. The ratified load-merge-write engine reads the decompressed blob. One
-process serves every tenant schema of its root's tree (2026-10-04; decisions §16).
+process serves every tenant schema of its root's tree (2026-10-04; decisions §16). Since SS-0008 (2026-10-24; decisions §17) the
+beans are grouped by KIND — the call, the ad view, the WiFi session — each ONE package with its bean set, switched on per
+tenant by `summary.kinds` (none named = the call alone).
 
 ## TreeView
 
@@ -12,6 +14,8 @@ process serves every tenant schema of its root's tree (2026-10-04; decisions §1
 summary-service (incremental time-windowed counters from a MySQL outbox)
 ├── bean/spi · SummaryEntity<T> · SummaryBean<T> · SummaryKey · WindowSize · SqlLiterals
 │             · SqlDialect · SummaryTableSpec (a table described once) · TableDdl (rendered per engine)
+│             · SummaryKind (a kind: its word, its service groups, its entities, its bean set — SS-0008)
+│             · ServiceGroupReader (a call-shaped bean: the kind of the group it reads) · CrossKindReader (the chargeable roll-up)
 ├── engine
 │   ├── api · SummaryEngine (runBatch), BatchResult
 │   ├── spi · SummaryStore (summary-row db seam), RowMapper, MergeMode, SummaryStoreException
@@ -19,7 +23,7 @@ summary-service (incremental time-windowed counters from a MySQL outbox)
 ├── outbox
 │   ├── api · OutboxReader (drain = the ONE tx per step: read offset+rows → merge → write summaries → advance offset;
 │   │         + head-init, + poison quarantine → summary_deadletter after quarantine-after consecutive failures)
-│   ├── spi · OutboxStore (offset/rows/reap/dead-letter DAO), OutboxRow
+│   ├── spi · OutboxStore (offset/rows/reap/dead-letter DAO), OutboxRow, RowCensus (hears a step's committed rows — SS-0008)
 │   └── internal · OutboxCodec (base64/gzip/json, 64 MiB decoded cap), OutboxReaper (scheduled trim)
 ├── runtime (the ONE transaction + JDBC — the EDGE: everything an engine differs in is here)
 │   ├── spi · UnitOfWork (schema(), dialect(), store() + outbox(), same connection), UnitOfWorkFactory (begin(schema))
@@ -29,7 +33,9 @@ summary-service (incremental time-windowed counters from a MySQL outbox)
 ├── registry (lifecycle / parallel workers / hot-start)
 │   ├── api · SummaryBeanRegistry (register; serve / unserve a schema; start / stop a bean; wake(tenant, entity))
 │   └── internal · OutboxWorker<T> (the drain loop of ONE (schema, bean), woken by ping/timer),
-│                  SummaryBootstrap (CDI-discovers beans by name), StartEndpoints (what a start will dial, said first)
+│                  SummaryBootstrap (CDI-discovers beans by name; a bean of a kind not enabled refuses the start),
+│                  StartEndpoints (what a start will dial, said first), KnownKinds (call, ad, wifi), TenantKinds
+│                  (summary.kinds), KindGate (the rows of the kinds not enabled: counted once, KIND_NOT_ENABLED)
 ├── tenancy (which schemas this process serves)
 │   ├── api · TenantWatcher (single: the connection's own schema | tree: every schema of the root's tree; reads
 │   │         the tree at the start, at every doorbell, on a timer; what could not be served is tried again)
@@ -46,23 +52,42 @@ summary-service (incremental time-windowed counters from a MySQL outbox)
 ├── beans/                       (PUBLIC API — fluent builders, the high-level entry points lib users import)
 │   · SummaryBeanBuilder<T,B> (root: mapper+context+final build→validate) · CallBeanBuilder (voice: SG+suffix)
 │   · DailySummaryBuilder · HourlySummaryBuilder · Daily/HourlyChargeableSummaryBuilder
-└── summarybeans/                (one sub-package per category — call + chargeable today; sms/packetflow later)
-    ├── call ·  HourlySummary · DailySummary        (HIGH-LEVEL window beans only)
+└── summarybeans/                (ONE package per KIND — SS-0008; sms next)
+    ├── call ·  CallKind (groups 10, 11 and every group no kind names) · HourlySummary · DailySummary (window beans)
     │   │       · CallSummaries (factory for CONFIG-INSTANTIATED extra instances, e.g. the SG11 pair — §12g)
-    │   ├── internal · CallSummaryBean (shared base) · CallSummaryBuilder (+ key canonicalization) · CdrBlobMapper
-    │   │            · SumVoiceDdl (self-provisioning CREATE with full partitions)
-    │   └── model    · CallSummary (entity, 47 cols) · Cdr/Chargeable/CdrBlobEntry (blob v2, v1 tolerated —
-    │                  the ONE pinned blob contract, shared by both categories)
-    ├── chargeable · HourlyChargeableSummary · DailyChargeableSummary   (EVERY leg, every SG — §13d)
-    │   ├── internal · ChargeableSummaryBean (base) · ChargeableSummaryBuilder · SumChargeableDdl
-    │   └── model    · ChargeableSummary (7-col key + 15 measures, DECIMAL(20,8))
-    ├── ad · HourlyAdSummary · DailyAdSummary         (service group 30 of the SAME cdr stream — §16b)
+    │   ├── internal · CallSummaryBean (shared base, a ServiceGroupReader) · CallSummaryBuilder (+ key canonicalization)
+    │   │            · CdrBlobMapper · SumVoiceDdl (self-provisioning CREATE with full partitions)
+    │   ├── model    · CallSummary (entity, 47 cols) · Cdr/Chargeable/CdrBlobEntry (blob v2, v1 tolerated —
+    │   │              the ONE pinned blob contract, shared by every kind)
+    │   └── chargeable · HourlyChargeableSummary · DailyChargeableSummary   (EVERY leg of the ENABLED kinds' records — §13d, §17e)
+    │       ├── internal · ChargeableSummaryBean (base, a CrossKindReader) · ChargeableSummaryBuilder · SumChargeableDdl
+    │       └── model    · ChargeableSummary (7-col key + 15 measures, DECIMAL(20,8))
+    ├── ad · AdKind (group 30) · HourlyAdSummary · DailyAdSummary   (the SAME cdr stream — §16b; + the call-shaped sum_voice_*_30)
     │   ├── internal · AdSummaryBean (base) · AdSummaryBuilder · AdMetaData · SumAdDdl
     │   └── model    · AdSummary · AdCallCdr / AdCallEntry (the ad's view of the blob) · AdViewFacts · AdView
-    └── sms  ·  (future — same shape as call)
+    ├── wifi · WifiKind (group 101; entities cdr + wifi_flow) · WifiSummaries · WifiBeanKind (the shapes wifi-session | wifi-dst)
+    │   ├── internal · WifiSessionSummaryBean · WifiDestinationSummaryBean · builders · generators · SumWifi*Ddl
+    │   └── model    · WifiSessionSummary · WifiDestinationSummary · WifiFlowRow         (+ the call-shaped sum_voice_*_101)
+    └── sms  ·  (future — SmsKind, same shape: docs/ad-as-call/SS-0008-done.md §8)
 ```
 
 Discover the system through `**/api` + `**/spi`; `internal/` is implementation (no outward imports).
+
+## The kinds (SS-0008, decisions §17)
+
+```
+profile: summary.kinds: [call, ad, wifi]   (none = [call])
+           │
+SummaryBootstrap ── every enabledSummary bean ─▶ KnownKinds.kindOf(bean) ── not enabled? ─▶ REFUSING TO START (nothing registered)
+           │                                           (a call-shaped bean: the kind of its group; else the kind owning its class)
+           ├── the chargeable roll-up (CrossKindReader) ◀── readOnly(the enabled kinds' groups)
+           └── KindGate.countFor(kinds, the first cdr bean, the tenant's zone)
+drain of the first cdr bean, per tier ── commit ─▶ RowCensus.committed(rows) ─▶ KindGate: records of kinds not enabled
+                                                    counted; WARN KIND_NOT_ENABLED <kind> <n> rows once per tenant, kind and day
+```
+
+A record's kind is the kind of its service group (its customer chargeable's, else its `Cdr.ServiceGroup`). With every
+kind enabled — the bed's profile — nothing is counted and every bean is exactly as before.
 
 ## Exactly-once per (schema, bean)
 

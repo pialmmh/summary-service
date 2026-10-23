@@ -1,4 +1,4 @@
-package com.telcobright.summary.summarybeans.chargeable.model;
+package com.telcobright.summary.summarybeans.call.chargeable.model;
 
 import com.telcobright.summary.bean.spi.SqlLiterals;
 import com.telcobright.summary.bean.spi.SummaryEntity;

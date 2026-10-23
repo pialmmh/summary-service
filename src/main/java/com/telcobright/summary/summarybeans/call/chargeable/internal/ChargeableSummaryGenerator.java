@@ -1,9 +1,9 @@
-package com.telcobright.summary.summarybeans.chargeable.internal;
+package com.telcobright.summary.summarybeans.call.chargeable.internal;
 
 import com.telcobright.summary.bean.spi.SummaryGenerator;
 import com.telcobright.summary.bean.spi.WindowSize;
 import com.telcobright.summary.summarybeans.call.model.Chargeable;
-import com.telcobright.summary.summarybeans.chargeable.model.ChargeableSummary;
+import com.telcobright.summary.summarybeans.call.chargeable.model.ChargeableSummary;
 
 /**
  * The CHARGEABLE category's generator — {@code I = Chargeable} (one leg), {@code T = ChargeableSummary}.
