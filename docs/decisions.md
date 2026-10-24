@@ -634,6 +634,33 @@ before for every group but 30 and 101, which a voice tenant never receives.
   WiFi kinds read it from there: one pinned contract, one decoder.
 - `summary.beans.<name>.kind` (a bean's SHAPE, the WiFi kind's fine-tuning) and `summary.kinds` (the tenant's kinds) share a
   word; renaming the older key would break every deployed profile.
-- The reaper trims the `cdr` entity only (`summary.outbox.entity-type`), as before: `wifi_flow` rows are never trimmed, with or
-  without the wifi kind (a finding of this round, not changed by it).
+- The reaper trimmed the `cdr` entity only (`summary.outbox.entity-type`): `wifi_flow` rows were never trimmed, with or without
+  the wifi kind — a finding of this round, not changed by it, and closed by HARDEN-1: the reaper now trims every entity that has
+  a registered bean, each by its own beans (§18).
 - A kind is all or nothing per tenant; the beans inside it are still chosen one by one in `enabledSummary`.
+
+## 18. The reaper trims EVERY entity that has beans, each by its own beans' bookmarks (HARDEN-1, 2026-10-25)
+Before: `OutboxReaper` trimmed ONE entity, `summary.outbox.entity-type` (default `cdr`). A WiFi tenant's `wifi_flow` rows were
+never trimmed, so its outbox grew for ever (SS-0008 F1, §17f). The rule, decided (the owner's "yes", 2026-10-25 02:5x):
+
+- **Every pass trims EACH entity that has at least one registered bean, each by `min(last_offset)` over THAT entity's beans only.**
+  The bookmarks are per (entity, bean) already (§13), and so are the store's `minOffset` / `deleteUpTo`: one entity's watermark is
+  never another's — a lagging `wifi_flow` bean holds the `wifi_flow` rows, not the `cdr` ones, and the other way round. The
+  watermark set stays the CONFIGURED beans, not the running ones (§13, Q2): a hot-stopped bean still holds its entity's rows.
+- **An entity with no registered bean is never trimmed.** It is not in the reaper's map at all
+  (`SummaryBeanRegistry.registeredBeanNamesByEntity`). The reason is §17c's (SS-0008 D1): a bean that comes back must find its
+  rows. So `ad_cdr` rows (read by no bean since the ad became a Call) and a `wifi_flow` row on a tenant without a WiFi bean stay —
+  their removal, if ever wanted, is an operator's act, not the reaper's.
+- **Each (schema, entity) is its own transaction**, and a trouble is said per (schema, entity): ONE WARN when it starts
+  (`reaper: schema <s>, entity <e> failed this pass; …`), ONE INFO when that pair trims again (`… trims again — after <n> failed
+  passes`), DEBUG lines in between (S16, §16, now per entity).
+- **`summary.outbox.entity-type` is retired.** A profile that still sets it hears so once, at the reaper's start:
+  `summary.outbox.entity-type=<e> is IGNORED: the key is retired (HARDEN-1). Every pass trims EACH entity …`. Nothing else
+  changes; the line can be removed. The jar's own profiles (btcl/lab, btcl/radius2, tcbl/dev) no longer carry it.
+- What a running deployment sees on the first pass after this jar: the `wifi_flow` rows every WiFi destination bean has passed
+  are deleted — on a WiFi tenant that has run a while, possibly many at once (one `DELETE … WHERE entity_type = 'wifi_flow' AND
+  id <= ?` per tier schema, in its own transaction). The `cdr` trims are exactly as before.
+
+Proof: `OutboxReaperTest` (6, the fakes) and two tests of the IT contract on BOTH engines (the rows of the two entities
+interleaved in one id sequence, as billing-core writes them); red first on the code of before; the mutants in
+`docs/ad-as-call/HARDEN-1B-done.md`.

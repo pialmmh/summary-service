@@ -125,8 +125,9 @@ Runs when a worker wakes (ping or fallback timer) for a bean that has un-consume
 6. `outbox().advanceOffset(entity, bean, lastRowId)`; `UnitOfWork.commit()` — summaries + offset together.
 7. On ANY exception in 2–6, `OutboxReader` rolls back; the offset is unchanged and the rows redeliver (the
    worker backs off linearly to 60s while failing, with an escalating error count).
-8. Separately, `OutboxReaper` deletes, in each served schema, the `summary_affected` rows with
-   `id ≤ min(last_offset)` across the configured beans.
+8. Separately, `OutboxReaper` deletes, in each served schema and for EACH entity that has a configured bean, that
+   entity's `summary_affected` rows with `id ≤ min(last_offset)` across THAT entity's configured beans — one
+   transaction per (schema, entity); an entity no bean reads is never trimmed (decisions §18).
 
 ## Why these seams
 
