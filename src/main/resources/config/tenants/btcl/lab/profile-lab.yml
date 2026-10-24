@@ -114,7 +114,6 @@ summary:
 
   # ---- the outbox ----
   outbox:
-    entity-type: cdr
     ping-topic: cdr_summary_ping_btcl            # billing-core's ping {tenant, entity, rows}. The topic carries the ROOT, the
                                                  # same name on both sides (its billing.summary.ping-topic), and it must exist
     ping-bootstrap-servers: 127.0.0.1:7692       # the lab's own broker (tools/lab/pg-lab.sh kafka)

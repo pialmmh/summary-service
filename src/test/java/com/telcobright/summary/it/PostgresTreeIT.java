@@ -293,7 +293,7 @@ class PostgresTreeIT {
         assertTrue(Await.until(() -> allPassed(RES_44, 2) && allPassed(BTCL, 2), 30_000));
         long recordsBefore = PgLab.queryLong(PgLab.SUMMARY_SERVICE, BTCL, "select count(*) from cdr");
 
-        int deleted = new OutboxReaper(reader, registry, "cdr", 60).reapOnce();
+        int deleted = new OutboxReaper(reader, registry, 60).reapOnce();
 
         assertEquals(4, deleted, "two rows in each schema, every bean passed them");
         assertEquals(0, PgLab.queryLong(PgLab.SUMMARY_SERVICE, RES_44, "select count(*) from summary_affected"));

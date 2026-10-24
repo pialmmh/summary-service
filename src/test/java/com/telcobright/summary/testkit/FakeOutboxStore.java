@@ -13,10 +13,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** In-memory {@link OutboxStore} — seedable outbox rows + per-bean offsets, for the reader/reaper tests. */
+/**
+ * In-memory {@link OutboxStore} — seedable outbox rows + per-bean offsets, for the reader/reaper tests. A row seeded
+ * {@link #seedOf OF an entity} is that entity's alone, as in the real table ({@code entity_type}); a row seeded without
+ * one answers every entity (what the tests of one entity always seeded).
+ */
 public final class FakeOutboxStore implements OutboxStore {
 
     private final List<OutboxRow> rows = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** The entity of each row seeded OF one, by its id; a row not in here answers every entity. */
+    private final Map<Long, String> entityOf = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Long> offsets = new java.util.concurrent.ConcurrentHashMap<>();
     private boolean failReads = false;
 
@@ -26,6 +32,22 @@ public final class FakeOutboxStore implements OutboxStore {
 
     public void seed(long id, String op, String data) {
         rows.add(new OutboxRow(id, op, data));
+    }
+
+    /** A row of {@code entityType} only — billing-core's cdr and its flow ingest's wifi_flow share one table. */
+    public void seedOf(String entityType, long id, String data) {
+        entityOf.put(id, entityType);
+        rows.add(new OutboxRow(id, data));
+    }
+
+    /** The ids of the rows {@code entityType} reads, in order. */
+    public List<Long> idsOf(String entityType) {
+        return rows.stream().filter(r -> isOf(r, entityType)).map(OutboxRow::id).sorted().toList();
+    }
+
+    private boolean isOf(OutboxRow row, String entityType) {
+        String entity = entityOf.get(row.id());
+        return entity == null || entity.equals(entityType);
     }
 
     public void failReads() {
@@ -43,7 +65,7 @@ public final class FakeOutboxStore implements OutboxStore {
     @Override
     public void initOffsetAtHead(String entityType, String beanName) {
         offsets.computeIfAbsent(key(entityType, beanName),
-                k -> rows.stream().mapToLong(OutboxRow::id).max().orElse(0L));
+                k -> rows.stream().filter(r -> isOf(r, entityType)).mapToLong(OutboxRow::id).max().orElse(0L));
     }
 
     /** billing-core has made its outbox in this schema (the default); false = a tier it has not served yet. */
@@ -78,7 +100,7 @@ public final class FakeOutboxStore implements OutboxStore {
             throw new SummaryStoreException("relation \"summary_affected\" does not exist (test)", null);
         }
         return rows.stream()
-                .filter(r -> r.id() > afterId)
+                .filter(r -> r.id() > afterId && isOf(r, entityType))
                 .sorted(Comparator.comparingLong(OutboxRow::id))
                 .limit(limit)
                 .toList();
@@ -105,7 +127,7 @@ public final class FakeOutboxStore implements OutboxStore {
     @Override
     public int deleteUpTo(String entityType, long maxIdInclusive) {
         int before = rows.size();
-        rows.removeIf(r -> r.id() <= maxIdInclusive);
+        rows.removeIf(r -> r.id() <= maxIdInclusive && isOf(r, entityType));
         return before - rows.size();
     }
 

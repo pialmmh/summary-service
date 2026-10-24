@@ -6,6 +6,8 @@ import com.telcobright.summary.beans.DailyChargeableSummaryBuilder;
 import com.telcobright.summary.engine.api.SummaryEngine;
 import com.telcobright.summary.outbox.api.OutboxReader;
 import com.telcobright.summary.outbox.internal.OutboxCodec;
+import com.telcobright.summary.outbox.internal.OutboxReaper;
+import com.telcobright.summary.registry.api.SummaryBeanRegistry;
 import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
 import com.telcobright.summary.runtime.spi.UnitOfWork;
 import com.telcobright.summary.runtime.spi.UnitOfWorkFactory;
@@ -158,6 +160,37 @@ abstract class OutboxConsumerContract {
         assertEquals(2, reapLike(activeBeans), "both beans passed -> both rows reaped");
         assertEquals(0, count("summary_affected"), "outbox trimmed");
         assertEquals(0, reader.drain(bean), "post-reap drains are no-ops");
+    }
+
+    // ---- HARDEN-1 B: the reaper trims EVERY entity that has beans, each by its own beans' minimum; never one without ----
+
+    @Test
+    void the_reaper_trims_every_entity_that_has_beans_each_to_its_own_beans_minimum() {
+        SummaryBean<WifiDestinationSummary> wifiDaily = WifiFlowTestSupport.daily(), wifiHourly = WifiFlowTestSupport.hourly();
+        OutboxReaper reaper = theServicesReaperWith(bean, CdrTestSupport.hourlyBean(), wifiDaily, wifiHourly);
+        cdrAndWifiFlowRowsInterleaved();
+        bookmark("cdr", "dailyCallSummary", 7);
+        bookmark("cdr", "hourlyCallSummary", 5);                        // cdr's laggard: its minimum is 5
+        bookmark("wifi_flow", WifiFlowTestSupport.DAILY_BEAN, 8);
+        bookmark("wifi_flow", WifiFlowTestSupport.HOURLY_BEAN, 2);      // wifi_flow's laggard: its minimum is 2
+
+        assertEquals(4, reaper.reapOnce(), "cdr 1, 3, 5 (up to ITS minimum 5) and wifi_flow 2 (up to ITS minimum 2)");
+        assertEquals(List.of(7L), outboxIdsOf("cdr"));
+        assertEquals(List.of(4L, 6L, 8L), outboxIdsOf("wifi_flow"), "4 and 6 wait for the wifi laggard, whatever cdr's beans passed");
+        assertEquals(0, reaper.reapOnce(), "nothing more until a bean moves");
+    }
+
+    @Test
+    void a_wifi_flow_row_with_no_wifi_bean_registered_is_never_trimmed() {
+        OutboxReaper reaper = theServicesReaperWith(bean, CdrTestSupport.hourlyBean());
+        cdrAndWifiFlowRowsInterleaved();
+        bookmark("cdr", "dailyCallSummary", 8);
+        bookmark("cdr", "hourlyCallSummary", 8);
+        bookmark("wifi_flow", WifiFlowTestSupport.DAILY_BEAN, 8);       // the bookmark of a wifi bean that is NOT registered now
+
+        assertEquals(4, reaper.reapOnce(), "the cdr rows only");
+        assertEquals(List.of(), outboxIdsOf("cdr"));
+        assertEquals(List.of(2L, 4L, 6L, 8L), outboxIdsOf("wifi_flow"), "no wifi bean registered: a bean that comes back must find its rows");
     }
 
     @Test
@@ -1191,6 +1224,54 @@ abstract class OutboxConsumerContract {
         } finally {
             unitOfWork.close();
         }
+    }
+
+    /**
+     * The service's own reaper over this schema (the connection's own): the beans registered, the schema served, the
+     * workers stopped again before any row is written — the bookmarks are then the test's. MySQL's tables are made small.
+     */
+    private OutboxReaper theServicesReaperWith(SummaryBean<?>... beans) {
+        SummaryBeanRegistry registry = new SummaryBeanRegistry(reader, 3600);
+        for (SummaryBean<?> each : beans) {
+            provisionSmall(each);
+            registry.register(each);
+        }
+        registry.serve(null);
+        registry.stopAll();
+        return new OutboxReaper(reader, registry, 60);
+    }
+
+    /** cdr rows 1, 3, 5, 7 and wifi_flow rows 2, 4, 6, 8 — one table, one id sequence, as billing-core writes both. */
+    private void cdrAndWifiFlowRowsInterleaved() {
+        for (long id = 1; id <= 8; id++) {
+            seedOutboxOf(id % 2 == 1 ? "cdr" : "wifi_flow", id, "x");
+        }
+    }
+
+    /** A bean's bookmark set as its drains would have left it. */
+    private void bookmark(String entityType, String beanName, long offset) {
+        UnitOfWork unitOfWork = unitOfWorkFactory().begin();
+        try {
+            unitOfWork.outbox().advanceOffset(entityType, beanName, offset);
+            unitOfWork.commit();
+        } finally {
+            unitOfWork.close();
+        }
+    }
+
+    /** The ids of the outbox rows of {@code entityType} still there, in order. */
+    private List<Long> outboxIdsOf(String entityType) {
+        List<Long> ids = new java.util.ArrayList<>();
+        try (Connection c = dbConnection();
+             PreparedStatement ps = c.prepareStatement("select id from summary_affected where entity_type = ? order by id")) {
+            ps.setString(1, entityType);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) ids.add(rs.getLong(1));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("outbox ids of " + entityType, e);
+        }
+        return ids;
     }
 
     protected void seedOutbox(long id, String data) {

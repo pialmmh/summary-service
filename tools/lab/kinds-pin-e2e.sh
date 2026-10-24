@@ -85,7 +85,7 @@ write_profile() {
     echo "    hourlyWifiSessionSummary: {window: hourly, kind: wifi-session}"
     echo "    dailyWifiDstSummary: {window: daily, kind: wifi-dst}"
     echo "    hourlyWifiDstSummary: {window: hourly, kind: wifi-dst}"
-    echo "  outbox: {entity-type: cdr, ping-topic: cdr_summary_ping_btcl, ping-bootstrap-servers: '127.0.0.1:7692', poll-interval-seconds: 1, max-rows-per-tx: 1, segment-size: 1000, reaper-interval-seconds: 600, quarantine-after: 8}"
+    echo "  outbox: {ping-topic: cdr_summary_ping_btcl, ping-bootstrap-servers: '127.0.0.1:7692', poll-interval-seconds: 1, max-rows-per-tx: 1, segment-size: 1000, reaper-interval-seconds: 600, quarantine-after: 8}"
   } > "$CONF/config/tenants/btcl/pin/profile-pin.yml"
 }
 
