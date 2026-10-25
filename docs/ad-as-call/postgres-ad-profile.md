@@ -25,6 +25,8 @@ summary:
     root: btcl                             # the root tenant = the root schema
     prime-context:
       base-url: http://<prime-context host>:7091
+      # token-ref: env:PRIME_CONTEXT_TOKEN # HARDEN-2: the NAME of the variable that holds this service's token for prime-context's
+      #                                    # tree roads (§6). Set it — with the variable — before prime-context's guard is flipped
     doorbell:
       bootstrap-servers: <kafka host>:9092 # config_event_loader_btcl is heard here
 
@@ -79,6 +81,7 @@ A deployment keeps its configuration OUTSIDE the jar, in one directory — the o
 | the start's first line | says which tenant, what named it, and which FILE was read: `PROFILE tenant btcl, profile bed (named by SUMMARY_ACTIVE_TENANT): the file /etc/summary-service/config/tenants/btcl/bed/profile-bed.yml`. A start that fell back to the jar says `THE JAR'S OWN config/tenants/…`. Read this line at every start |
 | Quarkus's own keys | the listener (`quarkus.http.host`, `quarkus.http.port`) go into `config/application.properties` beside the working directory, or into the unit's environment. A profile is not asked for them. The house rule: bind the host's 10.10.x.x address. The service serves `/q/health` only |
 | the password | by the NAME of its variable (`password-ref: env:NAME`). The value comes from secreteer's `/etc/secreteer/<tenant>/<app>.env` through the unit's `EnvironmentFile=`. It is never in the profile, a URL or a command line. Wherever a configured value is printed, a password in it is hidden |
+| the tree roads' token (HARDEN-2) | the same way: `summary.tenants.prime-context.token-ref: env:NAME` (and a context's `token-ref`, §6), the value in the same environment file. Named, the tree is asked with `Authorization: Bearer <value>`; not named, with no Authorization header — as before. Needed once prime-context's tree roads are guarded (`primecontext.tree-roads.guard=bearer`) |
 
 ```
 [Service]
@@ -101,6 +104,7 @@ ENDPOINT tree-prime-context http://<prime-context host>:7091 hosts=<prime-contex
 ENDPOINT doorbell-kafka <kafka host>:9092 hosts=<kafka host> …
 ENDPOINT listens-on <address>:<port> …
 the store's password: from the environment variable TENANT_BTCL_SWITCH_SUMMARY_SERVICE_PASSWORD (summary.store.password-ref)
+tree roads: bearer from PRIME_CONTEXT_TOKEN (summary.tenants.prime-context.token-ref)      (or: tree roads: no bearer (… is not set))
 KINDS call, ad, wifi (summary.kinds) — call = service groups 10, 11 and every group no kind names; ad = service group 30; wifi = service group 101
 ```
 
@@ -112,6 +116,7 @@ KINDS call, ad, wifi (summary.kinds) — call = service groups 10, 11 and every 
 | the variable `password-ref` names is not set, or is empty | it names the variable. Nothing was dialled |
 | `password` and `password-ref` are both set; `password-ref` is not `env:NAME`; the URL carries a password (a parameter, or `user:password@` before a host) | what was written there is not shown |
 | `kind` says one engine and the URL is the other's; `kind` is not `mysql` or `postgresql` | |
+| (HARDEN-2) a `token-ref` names a variable that is not set, or is empty; a `token-ref` is not `env:NAME` | it names the variable and the key; what was written in a key that is not `env:NAME` is not shown. Nothing was dialled |
 | the workers are to start (`autostart`) and the profile names no store | it asks whether the start named its tenant |
 | `tenants.mode: tree` without `root` or `prime-context.base-url` (when the workers are to start) | |
 | (SS-0008) `summary.enabledSummary` names a bean of a kind `summary.kinds` does not enable — **an upgraded jar on a profile rendered before SS-0008, which names no kind (= the call alone), is refused for its ad and WiFi beans** | each such bean is named with its kind; nothing is registered. Add `kinds: [call, ad, wifi]` to the profile, then start. Why not skip the bean: left out, it would not hold the outbox — the reaper would trim its rows and its summaries would be lost |
@@ -138,6 +143,7 @@ up, says it (ERROR), and tries again: after `retry-seconds`, each try a little l
 | before an upgrade to SS-0008 or later | the profile gains `kinds: [call, ad, wifi]` (§1) — without it the start is refused in words, naming the ad and WiFi beans. Nothing else changes: the same beans, tables, keys and sums (pinned on both engines, `tools/lab/kinds-pin-e2e.sh`) |
 | after an upgrade | an ad table made by an earlier version is brought up to the new description at its first use — a column it lacks is added (`tup_contentid`; the old rows read `''`), a text column that is narrower is widened (`tup_rulecode`, 20 → 64; what it holds stays). A WARN line says each change. A table that is as described gets no statement. The service owns its tables, so it needs no new right. The four WiFi tables are kept up to date the same way: since SS-0007 a `sum_wifi_day_101` / `sum_wifi_hr_101` made by an earlier version gets `tup_gw` (`VARCHAR(64) NOT NULL DEFAULT ''`, the BRAS) at its first use — **the rows summarised before keep `tup_gw = ''`** (§4a) |
 | after an upgrade to HARDEN-1 or later | the reaper trims EVERY entity that has a registered bean (decisions §18): the first passes delete the `wifi_flow` rows every WiFi destination bean has passed — until now they were never trimmed — in batches of `reap-batch` rows (10 000) per transaction, as many as a pass's `reap-pass-budget-ms` (5 000) allow beyond each entity's first, the rest over the next passes (one INFO per pass that stops on the budget, with the rows left). The `cdr` trims are as before: one transaction a pass. A profile that still sets `summary.outbox.entity-type` is told once at start that it is ignored; the line can go |
+| after an upgrade to HARDEN-2 or later | nothing changes until the profile names a `token-ref`: one more line at start, `tree roads: no bearer (summary.tenants.prime-context.token-ref is not set)`. For prime-context's guard flip: add the key and the variable (secreteer) first, restart, read the line `tree roads: bearer from <NAME> …` — then the flip. A 401 / 403 from prime-context is said with the bearer's variable |
 | on its own connections | the tier's schema and `standard_conforming_strings = off` are set with `SET LOCAL`, inside each transaction. Nothing stays on a connection; no other session is touched |
 | Kafka | it only listens: `cdr_summary_ping_<root>` (billing-core) and `config_event_loader_<root>` (prime-context). It publishes nothing and makes no topic. **Both topics must exist** before billing-core starts: without the ping's topic billing-core's ingest waits 60 s per tier per batch, and this service runs on the poll alone, with about one WARN a second that names the topic; made later, it is heard with no restart. A broker that is away costs latency only: the poll and the refresh go on |
 | one process per root | a second process on the same tree would wait on the first one's bookmark locks; it is not a way to scale |
@@ -198,6 +204,8 @@ The keys of a profile:
 | `summary.tenants.mode` | `single` | `single`: one schema, the URL's own. `tree`: every schema of the root's tree |
 | `summary.tenants.root` | — | the root tenant's schema; names the doorbell's topic |
 | `summary.tenants.prime-context.base-url` | — | where `POST /get-specific-tenant-root` is asked (a read road) |
+| `summary.tenants.prime-context.token-ref` | — | HARDEN-2: `env:NAME` — the tree is asked with `Authorization: Bearer <that variable's value>` (prime-context's `primecontext.tree-roads.guard=bearer` needs it). Not set: no Authorization header, as before. A named variable that is not set or empty refuses the start |
+| `summary.contexts.<name>.token-ref` | — | HARDEN-2: the same for a bean's context (`source: config-manager`, its `base-url`, `tenant`) — each context its own key: a token goes only where its block sends it |
 | `summary.tenants.doorbell.topic-base` | `config_event_loader` | the topic is `<base>_<root>` |
 | `summary.tenants.doorbell.bootstrap-servers` | the ping's | |
 | `summary.tenants.refresh-seconds` | `300` | the tree is read again, doorbell or not. `0` = never on a timer |

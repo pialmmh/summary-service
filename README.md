@@ -35,6 +35,9 @@ consumes the outbox **exactly-once per bean**, for **every tenant of its root's 
   prime-context; a reseller made at run time is served with no restart. A schema seen for the first time starts
   at offset 0. The ping wakes the tenant it names.
 - **The password by the NAME of its environment variable** (`summary.store.password-ref: env:NAME`).
+- **A bearer for prime-context's tree roads, by the NAME of its variable** (HARDEN-2): `summary.tenants.prime-context.token-ref:
+  env:NAME` (the root's tree) and `summary.contexts.<name>.token-ref: env:NAME` (a bean's context). None named = no Authorization
+  header, as before; a named variable that is empty refuses the start (`docs/decisions.md` §19).
 - A start **names its tenant** (`SUMMARY_ACTIVE_TENANT=<tenant>/<profile>`), says the endpoints it resolved before
   it dials one, and a deployment's profile is a file beside its working directory.
 
@@ -203,6 +206,10 @@ A row is one KEY — every `tup_*` column — in one window; the measures are su
   `cdr_summary_ping`, is the voice deployment's name and is not changed.
 - **DB credentials**: `password-ref: env:NAME` on the wifi bed (the value in the unit's environment only); the
   **inline** form stays for the other deployments (see `docs/decisions.md` §8, §16j).
+- **The tree roads' token** (HARDEN-2): a block that names a tree road's base URL — `summary.tenants.prime-context`, a
+  `summary.contexts.<name>` of `source: config-manager` — may name `token-ref: env:NAME`; the road is then asked with
+  `Authorization: Bearer <value>`. The start says one line per block (`tree roads: bearer from <NAME> (<key>)` or `tree roads:
+  no bearer (<key> is not set)`), never the value (`docs/decisions.md` §19).
 
 ## Layout
 
@@ -220,6 +227,7 @@ registry/     SummaryBeanRegistry (api: a worker per (schema, bean)) · OutboxWo
 tenancy/      TenantWatcher (api: which schemas are served — one, or the root's tree) · TenantTreeSource (spi)
               · PrimeContextTreeSource + TenantTreeParser + DoorbellListener (internal)
 context/      ContextRegistry (api) · SummaryContext (spi) · ConfigManagerClient + MediationContext (internal/cdr)
+treeroads/    TreeRoadBearer (api: the bearer a tree road is asked with — a block's token-ref: env:NAME; HARDEN-2)
 ping/         PingListener (Kafka cdr_summary_ping → wake the workers of the tenant it names) · PingPayload
 config/       TenantProfileConfigSource (routesphere-like profile loader)
 summarybeans/ ONE package per KIND (SS-0008: call · ad · wifi; sms next) — each with its Kind class

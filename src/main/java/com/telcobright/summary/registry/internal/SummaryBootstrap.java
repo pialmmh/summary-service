@@ -11,6 +11,7 @@ import com.telcobright.summary.ping.internal.PingListener;
 import com.telcobright.summary.registry.api.SummaryBeanRegistry;
 import com.telcobright.summary.runtime.internal.StoreDataSource;
 import com.telcobright.summary.tenancy.api.TenantWatcher;
+import com.telcobright.summary.treeroads.api.TreeRoadBearer;
 
 import io.quarkus.runtime.Quarkus;
 import io.quarkus.runtime.StartupEvent;
@@ -27,6 +28,7 @@ import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.IntConsumer;
 
 /**
@@ -68,6 +70,8 @@ public class SummaryBootstrap {
     private final boolean autostart;
     /** How a print-only start ends: the process exits with the code. (A test hears the code instead.) */
     IntConsumer exit = Quarkus::asyncExit;
+    /** Where a start reads the variable of a tree road's token (HARDEN-2): the process's own environment. (A test gives its own.) */
+    Function<String, String> environment = System::getenv;
 
     @Inject
     public SummaryBootstrap(SummaryBeanRegistry registry,
@@ -104,7 +108,7 @@ public class SummaryBootstrap {
             printWhatThisStartResolvedAndExit(config, endpoints, enabled);   // nothing is started, nothing is dialled
             return;
         }
-        sayAndCheckWhatThisStartResolved(config, endpoints);        // a fault of the configuration refuses the start here, before anything is dialled
+        sayAndCheckWhatThisStartResolved(config, endpoints, enabled);   // a fault of the configuration refuses the start here, before anything is dialled
         registerTheBeansOfTheEnabledKinds(config, enabled);         // a bean of a kind the tenant did not enable refuses the start here
         if (!autostart) {
             LOG.infof("autostart off — %d bean(s) registered; no schema served, workers/ping/reaper NOT started, nothing dialled", enabled.size());
@@ -225,9 +229,10 @@ public class SummaryBootstrap {
      * BEFORE anything is dialled, the start's first lines: which profile file was read, then what it will dial — the
      * database, the brokers, each configuration source — and where it listens. They are said FIRST, so a refused
      * start has them in its log too. Then the checks, each a refusal in words that fails the start: a fault of the
-     * profile, a lab start that would leave this box ({@link StartEndpoints}), a fault of the store's configuration.
+     * profile, a lab start that would leave this box ({@link StartEndpoints}), a fault of the store's configuration, a
+     * tree road's token named by a variable that is not set or empty (HARDEN-2).
      */
-    private void sayAndCheckWhatThisStartResolved(Config config, List<StartEndpoints.Endpoint> endpoints) {
+    private void sayAndCheckWhatThisStartResolved(Config config, List<StartEndpoints.Endpoint> endpoints, List<String> enabled) {
         LOG.info(PROFILE_MARK + " " + profileReadFrom(config));
         endpoints.forEach(endpoint -> LOG.info(endpoint.line()));
         refuseAFaultOfTheProfile(config);
@@ -235,6 +240,19 @@ public class SummaryBootstrap {
             StartEndpoints.requireThisBoxOnly(endpoints);
         }
         LOG.info(store.checkAtStart(autostart));
+        treeRoadBearerLines(config, enabled).forEach(line -> LOG.info(line));
+    }
+
+    /**
+     * HARDEN-2 — each block of this start that asks one of prime-context's tree roads ({@link StartEndpoints#treeRoadBlocks}): its
+     * bearer, read now from the environment by the variable's NAME — a named variable that is not set or empty refuses the start
+     * here, in words — and its line: {@code tree roads: bearer from <VAR> (<key>)} or {@code tree roads: no bearer (<key> is not
+     * set)}. Never the value.
+     */
+    private List<String> treeRoadBearerLines(Config config, List<String> enabled) {
+        return StartEndpoints.treeRoadBlocks(config, enabled).stream()
+                .map(block -> TreeRoadBearer.of(config, block, environment).said())
+                .toList();
     }
 
     /**
@@ -263,8 +281,8 @@ public class SummaryBootstrap {
     }
 
     /**
-     * Print-only: a {@code SECRET} line — where the store's password comes from, never its value — or, when the
-     * configuration would refuse the start, the refusal as the start would say it ({@code REFUSING TO START: …}).
+     * Print-only: the {@code SECRET} lines — where the store's password and each tree road's token come from, never a value — or,
+     * when the configuration would refuse the start, the refusal as the start would say it ({@code REFUSING TO START: …}).
      */
     private boolean sayWhetherTheConfigurationStarts(Config config, List<String> enabled) {
         try {
@@ -273,6 +291,7 @@ public class SummaryBootstrap {
             refuseBeansOfKindsNotEnabled(resolveBeans(enabled), kinds);
             System.out.println(kindsLine(kinds));
             System.out.println("SECRET " + store.checkAtStart(autostart));
+            treeRoadBearerLines(config, enabled).forEach(line -> System.out.println("SECRET " + line));
             return true;
         } catch (IllegalStateException refusal) {
             System.out.println(refusal.getMessage());

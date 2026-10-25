@@ -4,6 +4,7 @@ import com.telcobright.summary.registry.api.SummaryBeanRegistry;
 import com.telcobright.summary.tenancy.internal.DoorbellListener;
 import com.telcobright.summary.tenancy.internal.PrimeContextTreeSource;
 import com.telcobright.summary.tenancy.spi.TenantTreeSource;
+import com.telcobright.summary.treeroads.api.TreeRoadBearer;
 
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -18,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 /**
@@ -40,6 +42,10 @@ import java.util.regex.Pattern;
  * a little later, up to the refresh); the other schemas are not held up by it. That holds for the one schema of a
  * one-tenant deployment too: a store that is down when the service starts does not fail the start and does not
  * leave it idle — it is served when the store answers.
+ *
+ * <p>HARDEN-2: the tree is asked with the bearer {@code summary.tenants.prime-context.token-ref: env:<VAR>} names
+ * ({@link TreeRoadBearer}; none named: no Authorization header, as before). A named variable that is empty refuses the watcher —
+ * and the start, which has checked it before ({@code SummaryBootstrap}).
  */
 @ApplicationScoped
 public class TenantWatcher {
@@ -49,6 +55,8 @@ public class TenantWatcher {
     private static final Pattern SCHEMA_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,62}");
     /** The longest wait between two tries when no refresh is configured. */
     private static final long LONGEST_RETRY_MILLIS = 300_000;
+    /** The block that names where prime-context listens and, optionally, the variable that holds its tree roads' token. */
+    public static final String PRIME_CONTEXT_BLOCK = "summary.tenants.prime-context.";
 
     private final SummaryBeanRegistry registry;
     private final boolean tree;
@@ -65,10 +73,11 @@ public class TenantWatcher {
 
     @Inject
     public TenantWatcher(SummaryBeanRegistry registry) {
-        this(registry, ConfigProvider.getConfig());
+        this(registry, ConfigProvider.getConfig(), System::getenv);
     }
 
-    private TenantWatcher(SummaryBeanRegistry registry, Config config) {
+    /** The service's watcher over a given configuration and environment (a test's, an embedder's): where the tree's token variable is read. */
+    public TenantWatcher(SummaryBeanRegistry registry, Config config, Function<String, String> environment) {
         this.registry = registry;
         this.tree = "tree".equalsIgnoreCase(text(config, "summary.tenants.mode", "single"));
         this.root = text(config, "summary.tenants.root", null);
@@ -81,7 +90,7 @@ public class TenantWatcher {
                 throw new IllegalStateException("summary.tenants.mode is tree: summary.tenants.root and "
                         + "summary.tenants.prime-context.base-url must both be set (the root tenant's schema, and where prime-context listens)");
             }
-            this.source = new PrimeContextTreeSource(baseUrl, root);
+            this.source = new PrimeContextTreeSource(baseUrl, root, TreeRoadBearer.of(config, PRIME_CONTEXT_BLOCK, environment));
             this.doorbell = new DoorbellListener(
                     text(config, "summary.tenants.doorbell.topic-base", "config_event_loader") + "_" + root,
                     text(config, "summary.tenants.doorbell.bootstrap-servers", text(config, "summary.outbox.ping-bootstrap-servers", "127.0.0.1:9092")),

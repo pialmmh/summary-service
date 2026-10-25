@@ -681,3 +681,35 @@ never trimmed, so its outbox grew for ever (SS-0008 F1, §17f). The rule, decide
 Proof: `OutboxReaperTest` (6) and `OutboxReaperBatchesTest` (4), the fakes; four tests of the IT contract on BOTH engines (the
 rows of the two entities interleaved in one id sequence, as billing-core writes them; a 25 000-row backlog); red first on the
 code of before; the mutants in `docs/ad-as-call/HARDEN-1B-done.md`.
+
+## 19. A bearer for prime-context's tree roads, by the NAME of its variable (HARDEN-2, 2026-10-25)
+prime-context may guard its tree roads (its PC-0025: `primecontext.tree-roads.guard = open | bearer`, default `open`); with
+`bearer`, a call that shows no token is answered 401. Before the owner flips it, every caller must be able to send one. This
+service has TWO callers of a tree road, each `POST /get-specific-tenant-root`: the root's tree in `summary.tenants.mode: tree`
+(`TenantWatcher` → `PrimeContextTreeSource`, the bed's profile) and a bean's context (`ContextRegistry` → `ConfigManagerClient`,
+`source: config-manager`). Both get the bearer: after the flip, the one left out would be refused.
+
+- **The block that names a road's base URL names the token's variable**: `summary.tenants.prime-context.token-ref: env:NAME`,
+  `summary.contexts.<name>.token-ref: env:NAME` — the shape of `summary.store.password-ref` (§16j), so one rule reads both: a
+  reference is `env:` and a variable's name, nothing else. Per block, not one key for the service: a context may point at
+  another server than the tree's, and a token goes only where its block sends it.
+- **None named = no bearer**: no Authorization header, the calls of before exactly; the environment is not read.
+- **Named**: every call of that block carries `Authorization: Bearer <value>`; the value is read from the environment (secreteer's
+  `EnvironmentFile=`) and taken without the blanks around it.
+- **A named variable that is not set or empty REFUSES THE START**, in words that name it, before anything is dialled
+  (`SummaryBootstrap`, after the store's line; print-only exits 4). A `token-ref` that is not `env:NAME` is refused WITHOUT being
+  shown (it may be the token itself, typed into the wrong key).
+- **The start says one line per block** — `tree roads: bearer from <NAME> (<key>)` or `tree roads: no bearer (<key> is not set)`
+  — and print-only prints the same as `SECRET` lines. A block that asks no road (one-schema mode, a context no enabled bean
+  names) says nothing.
+- **A 401 / 403 says which bearer was shown** — its variable's name and key, never its value — in the tree's IOException (logged
+  by the watcher) and the context's WARN.
+- **Never the value**: not in a line, a refusal, a message or a `toString`. Proven by a capture of EVERY class's log lines (the
+  root logger, the exceptions' messages included) across a start, a refused tree read and a refused context read.
+
+Left as it is, on purpose: the token is read at start and kept for the run (a rotated token needs a restart — the process's
+environment does not change while it runs); the bed's rendered profile and secreteer's file gain the key and the variable in
+prime-context's guard-flip window (its `tools/deploy/window/pc25-tree-roads-guard.md`, G0) — not here.
+
+Proof: `TreeRoadBearerTest` (7), `PrimeContextTreeSourceTest` (+3), `ContextRegistryBearerTest` (4), `TenantWatcherBearerTest` (4),
+`SummaryBootstrapTest` (+6); red first on a skeleton; the mutants in `docs/ad-as-call/HARDEN-2-done.md`.
