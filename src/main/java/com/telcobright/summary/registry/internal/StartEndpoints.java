@@ -1,6 +1,7 @@
 package com.telcobright.summary.registry.internal;
 
 import com.telcobright.summary.runtime.internal.UrlSecrets;
+import com.telcobright.summary.tenancy.api.TenantWatcher;
 import org.eclipse.microprofile.config.Config;
 
 import java.net.InetAddress;
@@ -80,11 +81,42 @@ public final class StartEndpoints {
         List<Endpoint> endpoints = new ArrayList<>();
         endpoints.add(endpoint("store", text(config, "summary.store.url", null)));
         endpoints.add(endpoint("ping-kafka", text(config, "summary.outbox.ping-bootstrap-servers", "127.0.0.1:9092")));
-        if ("tree".equalsIgnoreCase(text(config, "summary.tenants.mode", "single"))) {
+        if (treeMode(config)) {
             endpoints.add(endpoint("tree-prime-context", text(config, "summary.tenants.prime-context.base-url", null)));
             endpoints.add(endpoint("doorbell-kafka", text(config, "summary.tenants.doorbell.bootstrap-servers",
                     text(config, "summary.outbox.ping-bootstrap-servers", "127.0.0.1:9092"))));
         }
+        for (String context : contextsOf(config, enabledBeans)) {
+            endpoints.add(endpoint("context-" + context, text(config, "summary.contexts." + context + ".base-url", null)));
+        }
+        endpoints.add(endpoint("listens-on", text(config, "quarkus.http.host", "0.0.0.0") + ":" + text(config, "quarkus.http.port", "8080")));
+        return endpoints;
+    }
+
+    /**
+     * HARDEN-2 — the blocks of this start that ask one of prime-context's tree roads ({@code POST /get-specific-tenant-root}), each
+     * a key prefix that may name the variable of its token ({@code <block>token-ref}): the root's tree in
+     * {@code summary.tenants.mode: tree}, then each context an enabled bean names whose source is config-manager.
+     */
+    public static List<String> treeRoadBlocks(Config config, List<String> enabledBeans) {
+        List<String> blocks = new ArrayList<>();
+        if (treeMode(config)) {
+            blocks.add(TenantWatcher.PRIME_CONTEXT_BLOCK);
+        }
+        for (String context : contextsOf(config, enabledBeans)) {
+            if ("config-manager".equals(text(config, "summary.contexts." + context + ".source", ""))) {
+                blocks.add("summary.contexts." + context + ".");
+            }
+        }
+        return blocks;
+    }
+
+    private static boolean treeMode(Config config) {
+        return "tree".equalsIgnoreCase(text(config, "summary.tenants.mode", "single"));
+    }
+
+    /** The contexts the enabled beans name ({@code summary.beans.<bean>.context}), each once, in the beans' order. */
+    private static Set<String> contextsOf(Config config, List<String> enabledBeans) {
         Set<String> contexts = new LinkedHashSet<>();
         for (String bean : enabledBeans) {
             String context = text(config, "summary.beans." + bean.trim() + ".context", null);
@@ -92,11 +124,7 @@ public final class StartEndpoints {
                 contexts.add(context);
             }
         }
-        for (String context : contexts) {
-            endpoints.add(endpoint("context-" + context, text(config, "summary.contexts." + context + ".base-url", null)));
-        }
-        endpoints.add(endpoint("listens-on", text(config, "quarkus.http.host", "0.0.0.0") + ":" + text(config, "quarkus.http.port", "8080")));
-        return endpoints;
+        return contexts;
     }
 
     /**

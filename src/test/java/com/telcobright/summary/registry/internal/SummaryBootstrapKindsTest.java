@@ -48,7 +48,7 @@ class SummaryBootstrapKindsTest {
 
     private final ConfigManagerClient nothingDialled = new ConfigManagerClient() {
         @Override
-        public Optional<String> fetchTenantRoot(String baseUrl, String tenant) {
+        public Optional<String> fetchTenantRoot(String baseUrl, String tenant, com.telcobright.summary.treeroads.api.TreeRoadBearer bearer) {
             throw new AssertionError("nothing is dialled with autostart off");
         }
     };
