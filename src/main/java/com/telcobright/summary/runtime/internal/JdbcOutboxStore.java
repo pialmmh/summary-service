@@ -211,10 +211,11 @@ final class JdbcOutboxStore implements OutboxStore {
     /**
      * The batch's ids are read through the {@code (entity_type, id)} index ({@code ix_entity} on MySQL,
      * {@code ix_summary_affected_entity} on PostgreSQL — billing-core makes both), the lowest first, then deleted by
-     * primary key. MySQL 5.7 on its own walks the PRIMARY key for {@code … ORDER BY id LIMIT ?} and filters the entity —
-     * through every row of the other entity and every row an earlier batch delete-marked and purge has not removed yet
-     * (measured in the lab: each batch slower than the one before) — so its id read refuses the primary key, by the one
-     * index name every table has. PostgreSQL plans {@code id = ANY(ARRAY(…))} as an index-only scan, then the primary key.
+     * primary key. MySQL 5.7 on its own plans {@code … ORDER BY id LIMIT ?} through the PRIMARY key and filters the
+     * entity, walking every row of another entity held below the watermark (a lagging or hot-stopped bean's) — measured
+     * in the lab, one 10 000-row batch behind 100 000 held cdr rows on a buffer pool smaller than the table: 4.32 s that
+     * way, 0.25 s this way — so its id read refuses the primary key, by the one index name every table has. PostgreSQL
+     * plans {@code id = ANY(ARRAY(…))} as an index-only scan, then the primary key ({@code id IN (…)} scans the table).
      */
     @Override
     public int deleteUpTo(String entityType, long maxIdInclusive, int limit) {
