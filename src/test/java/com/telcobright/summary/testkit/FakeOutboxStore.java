@@ -40,6 +40,16 @@ public final class FakeOutboxStore implements OutboxStore {
         rows.add(new OutboxRow(id, data));
     }
 
+    /** Rows {@code fromId}..{@code toId} of {@code entityType}, added at once (a backlog of many rows). */
+    public void seedOf(String entityType, long fromId, long toId, String data) {
+        List<OutboxRow> backlog = new ArrayList<>();
+        for (long id = fromId; id <= toId; id++) {
+            entityOf.put(id, entityType);
+            backlog.add(new OutboxRow(id, data));
+        }
+        rows.addAll(backlog);
+    }
+
     /** The ids of the rows {@code entityType} reads, in order. */
     public List<Long> idsOf(String entityType) {
         return rows.stream().filter(r -> isOf(r, entityType)).map(OutboxRow::id).sorted().toList();
@@ -129,6 +139,32 @@ public final class FakeOutboxStore implements OutboxStore {
         int before = rows.size();
         rows.removeIf(r -> r.id() <= maxIdInclusive && isOf(r, entityType));
         return before - rows.size();
+    }
+
+    /** The reaper's bounded batch: at most {@code limit} rows of the entity, the lowest ids first; each one recorded. */
+    @Override
+    public int deleteUpTo(String entityType, long maxIdInclusive, int limit) {
+        java.util.Set<Long> batch = new java.util.HashSet<>(rows.stream().filter(r -> r.id() <= maxIdInclusive && isOf(r, entityType))
+                .map(OutboxRow::id).sorted().limit(Math.max(limit, 0)).toList());
+        rows.removeIf(r -> batch.contains(r.id()));
+        boundedDeletes.add(new BoundedDelete(entityType, limit, batch.size()));
+        return batch.size();
+    }
+
+    @Override
+    public long countUpTo(String entityType, long maxIdInclusive) {
+        return rows.stream().filter(r -> r.id() <= maxIdInclusive && isOf(r, entityType)).count();
+    }
+
+    /** One bounded batch as the reaper asked for it: the entity, the limit, the rows it deleted. */
+    public record BoundedDelete(String entityType, int limit, int deleted) {
+    }
+
+    private final List<BoundedDelete> boundedDeletes = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** The bounded batches of {@code entityType}, in order — each one its own transaction of the reader. */
+    public List<BoundedDelete> boundedDeletesOf(String entityType) {
+        return boundedDeletes.stream().filter(d -> d.entityType().equals(entityType)).toList();
     }
 
     public int rowCount() {

@@ -657,10 +657,27 @@ never trimmed, so its outbox grew for ever (SS-0008 F1, §17f). The rule, decide
 - **`summary.outbox.entity-type` is retired.** A profile that still sets it hears so once, at the reaper's start:
   `summary.outbox.entity-type=<e> is IGNORED: the key is retired (HARDEN-1). Every pass trims EACH entity …`. Nothing else
   changes; the line can be removed. The jar's own profiles (btcl/lab, btcl/radius2, tcbl/dev) no longer carry it.
-- What a running deployment sees on the first pass after this jar: the `wifi_flow` rows every WiFi destination bean has passed
-  are deleted — on a WiFi tenant that has run a while, possibly many at once (one `DELETE … WHERE entity_type = 'wifi_flow' AND
-  id <= ?` per tier schema, in its own transaction). The `cdr` trims are exactly as before.
+- **The trim deletes in BOUNDED batches (B4).** At most `summary.outbox.reap-batch` rows (default 10 000) per transaction, the
+  lowest ids first, batch after batch until that (schema, entity)'s passed rows are gone or the pass's time budget
+  `summary.outbox.reap-pass-budget-ms` (default 5 000) is spent. Every (schema, entity) gets its FIRST batch whatever the budget:
+  the `cdr` entity's minute of rows is trimmed every pass in one transaction, as before, even behind a `wifi_flow` backlog. What a
+  spent budget leaves is the next pass's, said in ONE INFO per such pass with the rows left (`reaper: this pass stopped on its
+  budget (summary.outbox.reap-pass-budget-ms=5000) — the next pass goes on with the rows left: schema <s>, entity <e>: <n>`).
+  A batch below 1 row or a negative budget refuses the start in words.
+- **The statements — the batch's ids through billing-core's `(entity_type, id)` index, the rows by primary key.**
+  MySQL: `DELETE sa FROM summary_affected sa JOIN (SELECT id FROM summary_affected IGNORE INDEX (PRIMARY) WHERE entity_type = ?
+  AND id <= ? ORDER BY id LIMIT ?) batch ON batch.id = sa.id`. PostgreSQL: `DELETE FROM summary_affected WHERE id = ANY (ARRAY(
+  SELECT id FROM summary_affected WHERE entity_type = ? AND id <= ? ORDER BY id LIMIT ?))`. Not MySQL's plain `DELETE … ORDER BY
+  id LIMIT ?`: 5.7 plans it through the PRIMARY key and filters the entity, so it walks every row of another entity held below
+  the watermark (a lagging or hot-stopped bean's rows) — measured on a buffer pool smaller than the table, one 10 000-row batch
+  behind 100 000 held `cdr` rows: 4.32 s against 0.25 s. `IGNORE INDEX (PRIMARY)` names the one index every table has, so no
+  production index name is assumed. Not PostgreSQL's `id IN (sub-select)`: planned as a hash semi-join over a sequential scan of
+  the whole table; `= ANY (ARRAY(…))` is an index-only scan, then the primary key; a ctid batch was a little faster in the lab
+  but its sub-select walked the primary key across both entities. The numbers: `docs/ad-as-call/HARDEN-1B-done.md` §7.
+- What a running deployment sees on the first pass after this jar: a WiFi tenant's `wifi_flow` backlog — the rows every WiFi
+  destination bean has passed, never trimmed before — goes in batches of 10 000, as many as the pass's 5 s allow beyond the first,
+  the rest over the next passes. The `cdr` trims are as before: one transaction a pass.
 
-Proof: `OutboxReaperTest` (6, the fakes) and two tests of the IT contract on BOTH engines (the rows of the two entities
-interleaved in one id sequence, as billing-core writes them); red first on the code of before; the mutants in
-`docs/ad-as-call/HARDEN-1B-done.md`.
+Proof: `OutboxReaperTest` (6) and `OutboxReaperBatchesTest` (4), the fakes; four tests of the IT contract on BOTH engines (the
+rows of the two entities interleaved in one id sequence, as billing-core writes them; a 25 000-row backlog); red first on the
+code of before; the mutants in `docs/ad-as-call/HARDEN-1B-done.md`.

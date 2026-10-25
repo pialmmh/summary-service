@@ -235,32 +235,57 @@ public class OutboxReader {
     }
 
     /**
-     * Trim the outbox of {@code schema}: delete the rows every one of {@code beanNames} has passed — its own
-     * transaction. Nothing is deleted while a bean has no bookmark; in a schema with no outbox yet every bookmark
-     * is 0, so nothing is asked of a table that is not there.
+     * Trim one entity of {@code schema} by ONE bounded batch — its own transaction (HARDEN-1 B4): of the rows every one
+     * of {@code beanNames} has passed, at most {@code limit}, the lowest ids first. Nothing is deleted while a bean has
+     * no bookmark; in a schema with no outbox yet every bookmark is 0, so nothing is asked of a table that is not there.
+     * Returns the rows deleted: {@code limit} means more may be left — the reaper asks again, within its pass's budget.
      */
-    public int reap(String schema, String entityType, Collection<String> beanNames) {
+    public int reap(String schema, String entityType, Collection<String> beanNames, int limit) {
         if (beanNames.isEmpty()) {
             return 0;
         }
         UnitOfWork unitOfWork = unitOfWorkFactory.begin(schema);
         try {
             long min = unitOfWork.outbox().minOffset(entityType, beanNames);
-            int deleted = min > 0 ? unitOfWork.outbox().deleteUpTo(entityType, min) : 0;
+            int deleted = min > 0 ? unitOfWork.outbox().deleteUpTo(entityType, min, limit) : 0;
             unitOfWork.commit();
             if (deleted > 0) {
-                LOG.infof("schema=%s reaper deleted %d outbox rows (entity=%s id<=%d)", unitOfWork.schema(), deleted, entityType, min);
+                LOG.infof("schema=%s reaper deleted %d outbox rows (entity=%s id<=%d, a batch of at most %d)", unitOfWork.schema(), deleted,
+                        entityType, min, limit);
             }
             return deleted;
         } catch (RuntimeException failure) {
-            try {
-                unitOfWork.rollback();
-            } catch (RuntimeException rollbackFailure) {
-                failure.addSuppressed(rollbackFailure);
-            }
+            rollbackKeepingTheFailure(unitOfWork, failure);
             throw failure;
         } finally {
             closeQuietly(unitOfWork);
+        }
+    }
+
+    /** How many of the rows every one of {@code beanNames} has passed are still in {@code schema}'s outbox — one read. */
+    public long passedRowsLeft(String schema, String entityType, Collection<String> beanNames) {
+        if (beanNames.isEmpty()) {
+            return 0;
+        }
+        UnitOfWork unitOfWork = unitOfWorkFactory.begin(schema);
+        try {
+            long min = unitOfWork.outbox().minOffset(entityType, beanNames);
+            long left = min > 0 ? unitOfWork.outbox().countUpTo(entityType, min) : 0;
+            unitOfWork.commit();
+            return left;
+        } catch (RuntimeException failure) {
+            rollbackKeepingTheFailure(unitOfWork, failure);
+            throw failure;
+        } finally {
+            closeQuietly(unitOfWork);
+        }
+    }
+
+    private static void rollbackKeepingTheFailure(UnitOfWork unitOfWork, RuntimeException failure) {
+        try {
+            unitOfWork.rollback();
+        } catch (RuntimeException rollbackFailure) {
+            failure.addSuppressed(rollbackFailure);
         }
     }
 

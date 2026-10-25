@@ -207,4 +207,45 @@ final class JdbcOutboxStore implements OutboxStore {
             throw new SummaryStoreException("deleteUpTo failed for " + entityType, e);
         }
     }
+
+    /**
+     * The batch's ids are read through the {@code (entity_type, id)} index ({@code ix_entity} on MySQL,
+     * {@code ix_summary_affected_entity} on PostgreSQL — billing-core makes both), the lowest first, then deleted by
+     * primary key. MySQL 5.7 on its own walks the PRIMARY key for {@code … ORDER BY id LIMIT ?} and filters the entity —
+     * through every row of the other entity and every row an earlier batch delete-marked and purge has not removed yet
+     * (measured in the lab: each batch slower than the one before) — so its id read refuses the primary key, by the one
+     * index name every table has. PostgreSQL plans {@code id = ANY(ARRAY(…))} as an index-only scan, then the primary key.
+     */
+    @Override
+    public int deleteUpTo(String entityType, long maxIdInclusive, int limit) {
+        if (maxIdInclusive <= 0 || limit <= 0) {
+            return 0;
+        }
+        String sql = dialect == SqlDialect.POSTGRESQL
+                ? "delete from summary_affected where id = any (array(select id from summary_affected where entity_type=? and id<=? order by id limit ?))"
+                : "delete sa from summary_affected sa join (select id from summary_affected ignore index (primary) where entity_type=? and id<=? "
+                + "order by id limit ?) batch on batch.id = sa.id";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, entityType);
+            ps.setLong(2, maxIdInclusive);
+            ps.setInt(3, limit);
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new SummaryStoreException("deleteUpTo (a batch of " + limit + ") failed for " + entityType, e);
+        }
+    }
+
+    @Override
+    public long countUpTo(String entityType, long maxIdInclusive) {
+        String sql = "select count(*) from summary_affected where entity_type=? and id<=?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, entityType);
+            ps.setLong(2, maxIdInclusive);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0L;
+            }
+        } catch (SQLException e) {
+            throw new SummaryStoreException("countUpTo failed for " + entityType, e);
+        }
+    }
 }

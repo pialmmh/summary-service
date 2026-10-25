@@ -193,6 +193,38 @@ abstract class OutboxConsumerContract {
         assertEquals(List.of(2L, 4L, 6L, 8L), outboxIdsOf("wifi_flow"), "no wifi bean registered: a bean that comes back must find its rows");
     }
 
+    // ---- HARDEN-1 B4: the trim deletes in BOUNDED batches, through the (entity_type, id) index, the lowest ids first ----
+
+    @Test
+    void a_backlog_of_25000_passed_wifi_flow_rows_goes_in_batches_of_at_most_10000_the_lowest_ids_first() {
+        seedManyOf("wifi_flow", 1, 25_000);
+        bookmark("wifi_flow", WifiFlowTestSupport.DAILY_BEAN, 25_000);
+        Set<String> itsBean = Set.of(WifiFlowTestSupport.DAILY_BEAN);
+
+        assertEquals(10_000, reader.reap(null, "wifi_flow", itsBean, 10_000), "one transaction, at most the batch");
+        assertEquals(10_001L, queryLong("select min(id) from summary_affected where entity_type = 'wifi_flow'"), "the lowest ids went first");
+        assertEquals(10_000, reader.reap(null, "wifi_flow", itsBean, 10_000));
+        assertEquals(5_000, reader.reap(null, "wifi_flow", itsBean, 10_000), "three transactions clear the 25 000");
+        assertEquals(0, reader.reap(null, "wifi_flow", itsBean, 10_000));
+        assertEquals(0, count("summary_affected"));
+    }
+
+    @Test
+    void a_tiny_budget_leaves_wifi_flow_rows_for_the_next_pass_and_the_cdr_minute_still_goes_in_the_first_batch() {
+        OutboxReaper reaper = theServicesReaperWith(10_000, 0, bean, WifiFlowTestSupport.daily());
+        seedManyOf("wifi_flow", 1, 25_000);
+        seedManyOf("cdr", 25_001, 25_030);
+        bookmark("wifi_flow", WifiFlowTestSupport.DAILY_BEAN, 25_000);
+        bookmark("cdr", "dailyCallSummary", 25_030);
+
+        assertEquals(10_030, reaper.reapOnce(), "every cdr row of the minute, and wifi_flow's first batch");
+        assertEquals(List.of(), outboxIdsOf("cdr"));
+        assertEquals(15_000, queryLong("select count(*) from summary_affected where entity_type = 'wifi_flow'"));
+        assertEquals(10_000, reaper.reapOnce(), "the next pass goes on from there");
+        assertEquals(5_000, reaper.reapOnce());
+        assertEquals(0, count("summary_affected"));
+    }
+
     @Test
     void a_failed_drain_rolls_back_completely_and_the_redelivery_counts_once() {
         seedOutbox(1, CdrTestSupport.encodedBatch(List.of(CdrTestSupport.sg10Entry(CdrTestSupport.at(2026, 6, 19, 10, 0)))));
@@ -1231,6 +1263,11 @@ abstract class OutboxConsumerContract {
      * workers stopped again before any row is written — the bookmarks are then the test's. MySQL's tables are made small.
      */
     private OutboxReaper theServicesReaperWith(SummaryBean<?>... beans) {
+        return theServicesReaperWith(OutboxReaper.DEFAULT_REAP_BATCH, OutboxReaper.DEFAULT_REAP_PASS_BUDGET_MS, beans);
+    }
+
+    /** The same, with its batch and its pass's budget. */
+    private OutboxReaper theServicesReaperWith(int reapBatch, long passBudgetMillis, SummaryBean<?>... beans) {
         SummaryBeanRegistry registry = new SummaryBeanRegistry(reader, 3600);
         for (SummaryBean<?> each : beans) {
             provisionSmall(each);
@@ -1238,13 +1275,28 @@ abstract class OutboxConsumerContract {
         }
         registry.serve(null);
         registry.stopAll();
-        return new OutboxReaper(reader, registry, 60);
+        return new OutboxReaper(reader, registry, 60, reapBatch, passBudgetMillis);
     }
 
     /** cdr rows 1, 3, 5, 7 and wifi_flow rows 2, 4, 6, 8 — one table, one id sequence, as billing-core writes both. */
     private void cdrAndWifiFlowRowsInterleaved() {
         for (long id = 1; id <= 8; id++) {
             seedOutboxOf(id % 2 == 1 ? "cdr" : "wifi_flow", id, "x");
+        }
+    }
+
+    /** Outbox rows {@code fromId}..{@code toId} of {@code entityType} as billing-core's connection writes them, a thousand per statement. */
+    private void seedManyOf(String entityType, long fromId, long toId) {
+        try (Connection c = billingConnection(); Statement st = c.createStatement()) {
+            for (long first = fromId; first <= toId; first += 1000) {
+                StringBuilder sql = new StringBuilder("insert into summary_affected(id, entity_type, data) values ");
+                for (long id = first; id <= Math.min(first + 999, toId); id++) {
+                    sql.append(id == first ? "" : ",").append('(').append(id).append(", '").append(entityType).append("', 'x')");
+                }
+                st.executeUpdate(sql.toString());
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("seed of " + entityType + " " + fromId + ".." + toId + " failed", e);
         }
     }
 

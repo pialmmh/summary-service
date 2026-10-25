@@ -55,7 +55,7 @@ class OutboxReaperTest {
 
     /** The reaper of a profile that still sets the retired {@code summary.outbox.entity-type}. */
     private OutboxReaper reaperWhoseProfileStillNames(String entityType) {
-        return new OutboxReaper(reader, registry, Optional.of(entityType), 60);
+        return new OutboxReaper(reader, registry, Optional.of(entityType), 60, OutboxReaper.DEFAULT_REAP_BATCH, OutboxReaper.DEFAULT_REAP_PASS_BUDGET_MS);
     }
 
     /** These beans registered, the schema btcl served, the workers stopped again: the bookmarks below are the test's. */

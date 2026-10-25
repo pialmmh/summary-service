@@ -10,7 +10,7 @@ The brief: `~/arch-drafts/launch/HARDEN-1-billing-summary-brief.md`, part B. The
 |---|---|
 | the branch | `reaper-entities`, from `kinds` ead3f2b: **9008c3a** B1 (the code, the tests, the jar's profiles) · **1fe828d** B2 (the docs, the state file) · the commit that carries this note's final form. Not pushed; `kinds`, `master-merge` and `postgres-ad-call` not touched |
 | the rule, as built | every reaper pass trims EACH entity that has ≥ 1 registered bean, each by `min(last_offset)` over THAT entity's beans only; an entity with no registered bean is never trimmed (SS-0008 D1); each (schema, entity) its own transaction; the once-said WARN / INFO of S16 now per (schema, entity); `summary.outbox.entity-type` retired — set, ONE INFO at start says it is ignored and why |
-| what a deployment sees | the first pass after this jar deletes the `wifi_flow` rows every WiFi destination bean has passed (never trimmed until now: on a WiFi tenant that has run a while, one large `DELETE` per tier schema, in its own transaction). The `cdr` trims are exactly as before. A rendered profile that still sets `summary.outbox.entity-type` (the bed's, probably) gets the INFO; the line can go (the deploy page says so) |
+| what a deployment sees | the first passes after this jar delete the `wifi_flow` rows every WiFi destination bean has passed (never trimmed until now) — since B4 in BOUNDED batches: 10 000 rows a transaction, as many as a pass's 5 s allow beyond each (schema, entity)'s first, the rest over the next passes (§7). The `cdr` trims are exactly as before: one transaction a pass. A rendered profile that still sets `summary.outbox.entity-type` (the bed's, probably) gets the INFO; the line can go (the deploy page says so) |
 | the gate (Maven `verify`, a git-archive clean copy of 1fe828d, both engines) | **unit 442 · 0 · 0 · 0, ITs 92 · 0 · 0 · 3**, BUILD SUCCESS (05:23:43–05:30:05 +06) — the baseline of `kinds` (unit 436 · 0 · 0 · 0, ITs 88 · 0 · 0 · 3) + `OutboxReaperTest`'s 6 + the 2 contract tests on each engine. ITs: `PostgresOutboxConsumerIT` 43 + `PostgresTreeIT` 9 (PostgreSQL 52), `OutboxConsumerIT` 34 + `MySqlTreeIT` 2 (MySQL 36), `BuildBakesNoTenantIT` 1, `KafkaListenersIT` 3 skipped (no broker, as SS-0007/SS-0008). No red; 0 ERROR lines |
 | red first | 5 red on the code of before (§2) |
 | mutants | MB1–MB5 (the brief's three + two), all red (§3) |
@@ -83,10 +83,91 @@ Maven ran offline under `flock /home/mustafa/telcobright-projects/.one-maven.loc
 | | |
 |---|---|
 | the bed's rendered profile | probably still sets `summary.outbox.entity-type: cdr` (the jar's did): harmless — one INFO at start. Removing the line is devops's, in a window; nothing breaks if it stays |
-| the first pass on a WiFi tenant | deletes the `wifi_flow` backlog the WiFi destination beans have passed, in one statement per tier schema. On the bed this is small; on a long-running WiFi tenant it is one large delete (PostgreSQL: one transaction, then autovacuum). If that is a worry, a bounded delete (`… AND id <= ? LIMIT n` on MySQL, a ctid batch on PostgreSQL) is a small follow-up — not done here |
+| the first pass on a WiFi tenant | CLOSED by B4 (§7): the backlog goes in bounded batches within a time budget per pass |
 | `ad_cdr` rows | no bean reads them since the ad became a Call (SS-0008); by the rule they are never trimmed. Removing them, if wanted, is an operator's act |
 
-## 7 · State (newest last; real times, `date`)
+## 7 · B4 — the trim deletes in BOUNDED batches (the coordinator's item, 2026-10-25 05:3x; my open point 1)
+
+### 7.1 · As built
+
+| where | what |
+|---|---|
+| `outbox/spi/OutboxStore` | `deleteUpTo(entity, maxId, limit)` — at most `limit` rows of the entity with `id <= maxId`, the lowest ids first; `countUpTo(entity, maxId)` — what a bounded trim left. The unbounded `deleteUpTo(entity, maxId)` stays (the tests' watermark helpers use it); the reaper no longer does |
+| `runtime/internal/JdbcOutboxStore` | MySQL: `delete sa from summary_affected sa join (select id from summary_affected ignore index (primary) where entity_type=? and id<=? order by id limit ?) batch on batch.id = sa.id`. PostgreSQL: `delete from summary_affected where id = any (array(select id from summary_affected where entity_type=? and id<=? order by id limit ?))`. Both read the batch's ids through billing-core's `(entity_type, id)` index (`ix_entity`; `ix_summary_affected_entity`) and delete by primary key — why these and not the others: §7.3 |
+| `outbox/api/OutboxReader` | `reap(schema, entity, beans, limit)` — ONE bounded batch, its own transaction (it replaces the unbounded `reap(schema, entity, beans)`, whose one caller was the reaper); `passedRowsLeft(schema, entity, beans)` — one read, for the INFO. Its per-batch INFO line is the old one plus `a batch of at most <n>` |
+| `outbox/internal/OutboxReaper` | `summary.outbox.reap-batch` (10 000) and `summary.outbox.reap-pass-budget-ms` (5 000). Per pass: a budget from the pass's start; per (schema, entity): the FIRST batch always, then more while a batch comes back full and the budget lasts; a full last batch counts what it left. ONE INFO per pass that stops on the budget: `reaper: this pass stopped on its budget (summary.outbox.reap-pass-budget-ms=<ms>) — the next pass goes on with the rows left: schema <s>, entity <e>: <n>[; …]`. A batch below 1 or a negative budget refuses the start in words. A failure in the middle of a pair's batches: the committed batches stay counted, the trouble is said once (S16) |
+| decision | the budget is the PASS's (as asked), but every (schema, entity) gets its first batch whatever is left of it: otherwise a big backlog early in the order (a schema, an entity) would take every pass's budget and starve the others — the `cdr` minute of rows among them. So a pass is bounded by the budget plus one batch per (schema, entity) |
+
+### 7.2 · Tests — red first
+
+| test | what it proves | on the code before B4 (the batch ignored: one big delete) |
+|---|---|---|
+| `OutboxReaperBatchesTest.a_backlog_of_25000_passed_wifi_flow_rows_is_cleared_in_three_transactions_of_at_most_10000_when_the_budget_allows` | the fake records each bounded batch: 10 000 + 10 000 + 5 000, each its own transaction of the reader; no budget INFO | RED |
+| `….a_tiny_budget_leaves_rows_and_the_next_pass_goes_on_from_there` | budget 0: 10 000 a pass (the first batch), the lowest ids first; the INFO says 15 000 left, then 5 000; nothing said when nothing is left | RED |
+| `….the_cdr_entitys_minute_of_rows_goes_in_one_transaction_every_pass_even_behind_a_wifi_flow_backlog_with_no_budget` | 30 cdr rows passed: ONE bounded batch of 30 (as before: one transaction, every passed row), even with budget 0 beside a 25 000-row wifi backlog | RED |
+| `….a_batch_below_one_row_or_a_negative_budget_is_refused_in_words` | the start refuses | green (the refusal came with the keys) |
+| IT contract, BOTH engines: `a_backlog_of_25000_passed_wifi_flow_rows_goes_in_batches_of_at_most_10000_the_lowest_ids_first` | the real statements: 10 000, 10 000, 5 000, 0 — and after the first, the lowest id left is 10 001 | RED on PostgreSQL and on MySQL (25 000 in one) |
+| IT contract, BOTH engines: `a_tiny_budget_leaves_wifi_flow_rows_for_the_next_pass_and_the_cdr_minute_still_goes_in_the_first_batch` | the service's reaper, budget 0: pass 1 = the 30 cdr rows + 10 000 wifi rows, 15 000 left; pass 2 = 10 000; pass 3 = 5 000; the table empty | RED on PostgreSQL and on MySQL |
+
+Red first: 7 red (3 unit + 2 per engine); every existing test green on that code. Green: the fast runner 142/142 (the new and
+touched unit classes, `OutboxConsumerIT`, `PostgresOutboxConsumerIT`, `MySqlTreeIT`, `PostgresTreeIT` in full, both engines).
+
+### 7.3 · Measured in my labs — one 10 000-row batch on each engine
+
+Rows of ~4 KB (a 4 096-character text; PostgreSQL's of 128 distinct md5s, little to compress), `cdr` and `wifi_flow` interleaved
+in one id sequence (odd / even) unless said; billing-core's DDL on each engine; the times are the statement's own (MySQL client,
+psql `\timing`), each batch committed on its own unless said.
+
+| engine, setting | table | statement | the batch(es) |
+|---|---|---|---|
+| PostgreSQL 16.13, docker defaults (`shared_buffers` 128 MB) | 60 000 rows, 324 MB | as built (`id = ANY (ARRAY(…))`) | 0.44 s · 0.84 s · 0.78 s (three in a row) |
+| same | 100 000 `cdr` rows held below the watermark, then 10 000 `wifi_flow` | as built | 0.36 s |
+| same, `EXPLAIN ANALYZE`, rolled back | 60 000 rows | `id IN (sub-select)` | 0.33 s — a hash semi-join over a SEQUENTIAL SCAN of the whole table (grows with the table) |
+| same | same | `id = ANY (ARRAY(…))` (as built) | 0.37 s — index-only scan on `(entity_type, id)`, then the primary key |
+| same | same | ctid batch | 0.27 s — but its sub-select walked the primary key across both entities |
+| MySQL 5.7.44, production-like (buffer pool 2 GB, redo 2 × 512 MB, `io_capacity` 2 000) | 60 000 rows, 315 MB | as built (join to the ids read with `IGNORE INDEX (PRIMARY)`) | 0.59 s · 0.10 s · 0.09 s |
+| same | same | plain `DELETE … ORDER BY id LIMIT 10000` | 0.46 s · 0.16 s · 0.21 s |
+| same | 200 000 rows, 100 000 `wifi_flow`: ten batches | as built / plain | 0.18–0.69 s / 0.12–0.87 s per batch, neither growing |
+| same | 100 000 held `cdr` rows, then 10 000 `wifi_flow` | as built / plain | 0.30 s / 0.41 s (the plain one walks the 400 MB of held rows, hot in the pool) |
+| MySQL 5.7.44, the image's defaults (buffer pool 128 MB, redo 2 × 48 MB, `io_capacity` 200) | 100 000 held `cdr` rows, then 10 000 `wifi_flow` | as built / plain | **0.25 s / 4.32 s** — the plain one plans through the PRIMARY key (`EXPLAIN`: `key PRIMARY … Using where`) and reads every held row from disk |
+| same | 60 000 rows, interleaved, the table 2.5 × the pool | as built / plain | 3.0 s · 13.2 s · 25.5 s / 1.8 s · 13.8 s — both I/O-bound: each batch dirties ~80 MB of pages, and the next waits for the page cleaner and purge. A box with a pool this small is slow at any delete of this size; the budget stops such a pass after its first batch per pair, and the next pass comes a minute later |
+
+The choice: on MySQL not the plain `DELETE … ORDER BY id LIMIT ?` — 5.7 plans it through the PRIMARY key whatever the
+statistics say (`entity_type` has cardinality 1 in InnoDB's sampled stats) and walks every row of another entity held below the
+watermark; the join reads its ids through `(entity_type, id)` only, and costs the same where the plain one is fine. On
+PostgreSQL the keyed `= ANY (ARRAY(…))` — index-driven on both sides; `IN (…)` turns into a scan of the whole table, and the
+ctid batch's id read walks the primary key across entities.
+
+### 7.4 · Mutants (fast runner, both labs; each original aside, the break, the tests, the original back with a FRESH mtime, byte equality asserted)
+
+All of part B's mutants were run again on the B4 code (the tests per mutant: `OutboxReaperTest`, `OutboxReaperBatchesTest`,
+`SummaryBeanRegistryTest`, `OutboxReapTest`, `PostgresTreeIT`, and the four new contract tests on both engines — 48 tests). MB2
+now breaks the BOUNDED statements (the reaper no longer uses the unbounded one), one per engine.
+
+| | the break | red |
+|---|---|---|
+| **MB6 (B4)** | **the batch ignored: the reader's batch issues the one big delete of every passed row** | **7** — the three batch tests of `OutboxReaperBatchesTest`, the two batch tests of the contract on PostgreSQL and on MySQL |
+| MB1 | one watermark for every entity | 10 |
+| MB2p | an entity without beans trimmed — PostgreSQL's bounded id read loses its `entity_type` filter | 3 — the per-entity, the no-wifi-bean and the tiny-budget contract tests on PostgreSQL |
+| MB2m | the same on MySQL | 3 — the same three on MySQL |
+| MB3 | the `cdr` entity no longer trimmed | 14 |
+| MB4 | a trouble said once per SCHEMA again | 2 |
+| MB5 | the retired key not said at start | 1 |
+
+Three more reds appeared in those runs, one each in MB2p, MB2m and MB6, in tests none of those breaks can reach:
+`PostgresTreeIT.billing_writes_first_summary_starts_second_every_row_is_summed` (`expected: <3> but was: <2>`; the test calls no
+reaper), `SummaryBeanRegistryTest.a_ping_that_cannot_be_read_or_names_no_tenant_wakes_every_worker_as_before` and
+`….every_schema_has_its_own_worker_and_its_own_bookmark_for_every_bean` (`each schema's summary holds its own tier's record only
+==> expected: <1> but was: <2>`; the fakes record a rolled-back attempt's SQL too). Those mutant runs overlapped my lab
+measurements (§7.3: 200 000 rows of 4 KB inserted into each engine on the same disk). Both classes, run three times on the
+final code with nothing else running: 28/28 each time; and in the gate. I take them for timing tests that a loaded box can
+upset — a note for the summary-service owner, not something B4 changed.
+
+### 7.5 · The gate
+
+PENDING
+
+## 8 · State (newest last; real times, `date`)
 
 - 04:3x +06 — worktree `worktrees/reaper-entities` made from `kinds` ead3f2b.
 - 05:03 — RED (fast runner, outside Maven; my labs PostgreSQL 16 127.0.0.1:7457 trust, MySQL 5.7.44 127.0.0.1:7357):
@@ -105,3 +186,13 @@ Maven ran offline under `flock /home/mustafa/telcobright-projects/.one-maven.loc
   ITs 92 · 0 · 0 · 3 (both engines), BUILD SUCCESS; no log line holds the password; the head repository 0 files. The labs
   REMOVED (`h1b-pg16`, `h1b-mysql57`, their volumes, the password file); the clean copy removed; the Maven logs kept in
   `~/harden1-work/logs/`. The report finished. ALL ITEMS OF PART B DONE (this commit).
+- 05:3x — B4 asked by the coordinator (bounded batches; my open point 1). Labs up again (a new password).
+- 05:37–05:42 — PostgreSQL shapes compared on 60 000 lab rows (`IN` = a whole-table scan; `= ANY (ARRAY(…))` = index-only;
+  ctid = the primary key across entities); MySQL: the plain `DELETE … ORDER BY id LIMIT` plans through the PRIMARY key and
+  filters the entity. The statements chosen (§7.3).
+- 05:47 — RED (fast runner): the B4 tests on the code with the batch ignored — 7 red (3 unit, 2 per engine); every other test green.
+- 05:48–05:57 — GREEN: the bounded batch; the fast runner 142/142 (both engines, the IT classes in full).
+- 05:59–06:04 — measured (§7.3); the measurement container removed.
+- 06:10 — mutants on the B4 code: MB6 and MB1–MB5 (MB2 per engine) all red; three timing reds of untouched tests under the load
+  of my measurements — those classes 3 × 28/28 alone (§7.4).
+- 06:14 — docs (decisions §18, README, architecture, the deploy page's keys and rows). NEXT: commit B4, then the gate.

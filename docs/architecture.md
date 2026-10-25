@@ -127,7 +127,10 @@ Runs when a worker wakes (ping or fallback timer) for a bean that has un-consume
    worker backs off linearly to 60s while failing, with an escalating error count).
 8. Separately, `OutboxReaper` deletes, in each served schema and for EACH entity that has a configured bean, that
    entity's `summary_affected` rows with `id ≤ min(last_offset)` across THAT entity's configured beans — one
-   transaction per (schema, entity); an entity no bean reads is never trimmed (decisions §18).
+   transaction per (schema, entity); an entity no bean reads is never trimmed (decisions §18). It deletes in bounded
+   batches — at most `reap-batch` rows (10 000) per transaction, the lowest ids first, through the `(entity_type, id)`
+   index — until the passed rows are gone or the pass's `reap-pass-budget-ms` (5 000) is spent; every (schema, entity)
+   gets its first batch whatever the budget, the rest waits for the next pass.
 
 ## Why these seams
 
