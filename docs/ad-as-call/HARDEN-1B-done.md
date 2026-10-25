@@ -8,12 +8,13 @@ The brief: `~/arch-drafts/launch/HARDEN-1-billing-summary-brief.md`, part B. The
 
 | | |
 |---|---|
-| the branch | `reaper-entities`, from `kinds` ead3f2b: **9008c3a** B1 (the code, the tests, the jar's profiles) · **1fe828d** B2 (the docs, the state file) · the commit that carries this note's final form. Not pushed; `kinds`, `master-merge` and `postgres-ad-call` not touched |
+| the branch | `reaper-entities`, from `kinds` ead3f2b: **9008c3a** B1 (the code, the tests, the jar's profiles) · **1fe828d** B2 (the docs, the state file) · **e598117** B3 (the report) · **4ca45a0** B4 (bounded batches: code, tests, docs, report §7) · **f09a6b8** B4 (the store's comment) · the commit that carries this note's final form. Not pushed; `kinds`, `master-merge` and `postgres-ad-call` not touched |
 | the rule, as built | every reaper pass trims EACH entity that has ≥ 1 registered bean, each by `min(last_offset)` over THAT entity's beans only; an entity with no registered bean is never trimmed (SS-0008 D1); each (schema, entity) its own transaction; the once-said WARN / INFO of S16 now per (schema, entity); `summary.outbox.entity-type` retired — set, ONE INFO at start says it is ignored and why |
 | what a deployment sees | the first passes after this jar delete the `wifi_flow` rows every WiFi destination bean has passed (never trimmed until now) — since B4 in BOUNDED batches: 10 000 rows a transaction, as many as a pass's 5 s allow beyond each (schema, entity)'s first, the rest over the next passes (§7). The `cdr` trims are exactly as before: one transaction a pass. A rendered profile that still sets `summary.outbox.entity-type` (the bed's, probably) gets the INFO; the line can go (the deploy page says so) |
 | the gate (Maven `verify`, a git-archive clean copy of 1fe828d, both engines) | **unit 442 · 0 · 0 · 0, ITs 92 · 0 · 0 · 3**, BUILD SUCCESS (05:23:43–05:30:05 +06) — the baseline of `kinds` (unit 436 · 0 · 0 · 0, ITs 88 · 0 · 0 · 3) + `OutboxReaperTest`'s 6 + the 2 contract tests on each engine. ITs: `PostgresOutboxConsumerIT` 43 + `PostgresTreeIT` 9 (PostgreSQL 52), `OutboxConsumerIT` 34 + `MySqlTreeIT` 2 (MySQL 36), `BuildBakesNoTenantIT` 1, `KafkaListenersIT` 3 skipped (no broker, as SS-0007/SS-0008). No red; 0 ERROR lines |
+| the gate of B4 (Maven `verify`, a git-archive clean copy of f09a6b8, both engines) | **unit 446 · 0 · 0 · 0, ITs 96 · 0 · 0 · 3**, BUILD SUCCESS (06:25:27–06:30:22 +06) — B3's 442 / 92 + `OutboxReaperBatchesTest`'s 4 + the two batch tests on each engine. No red (§7.5) |
 | red first | 5 red on the code of before (§2) |
-| mutants | MB1–MB5 (the brief's three + two), all red (§3) |
+| mutants | MB1–MB5 (the brief's three + two), all red (§3); on the B4 code MB6 (the batch ignored = one big delete) and MB1–MB5 again (MB2 per engine), all red (§7.4) |
 
 ## 1 · As built
 
@@ -70,7 +71,7 @@ Maven ran offline under `flock /home/mustafa/telcobright-projects/.one-maven.loc
 (`~/harden1-work/m2-head-ss`) and the read-only tails `~/.m2/arch-ss-review-repo`, `~/.m2/summary-service-repo`,
 `~/.m2/repository` (SS-0008's way): nothing written to `~/.m2`.
 
-## 5 · The labs (mine; REMOVED 2026-10-25 05:30 +06)
+## 5 · The labs (mine; REMOVED 2026-10-25 05:30 +06; made again for B4 and REMOVED 06:30)
 
 | | |
 |---|---|
@@ -109,7 +110,7 @@ Maven ran offline under `flock /home/mustafa/telcobright-projects/.one-maven.loc
 | IT contract, BOTH engines: `a_backlog_of_25000_passed_wifi_flow_rows_goes_in_batches_of_at_most_10000_the_lowest_ids_first` | the real statements: 10 000, 10 000, 5 000, 0 — and after the first, the lowest id left is 10 001 | RED on PostgreSQL and on MySQL (25 000 in one) |
 | IT contract, BOTH engines: `a_tiny_budget_leaves_wifi_flow_rows_for_the_next_pass_and_the_cdr_minute_still_goes_in_the_first_batch` | the service's reaper, budget 0: pass 1 = the 30 cdr rows + 10 000 wifi rows, 15 000 left; pass 2 = 10 000; pass 3 = 5 000; the table empty | RED on PostgreSQL and on MySQL |
 
-Red first: 7 red (3 unit + 2 per engine); every existing test green on that code. Green: the fast runner 142/142 (the new and
+Red first: 7 red (3 unit + 2 per engine); the existing tests run beside them (`OutboxReaperTest`, `SummaryBeanRegistryTest`) green on that code. Green: the fast runner 142/142 (the new and
 touched unit classes, `OutboxConsumerIT`, `PostgresOutboxConsumerIT`, `MySqlTreeIT`, `PostgresTreeIT` in full, both engines).
 
 ### 7.3 · Measured in my labs — one 10 000-row batch on each engine
@@ -165,7 +166,12 @@ upset — a note for the summary-service owner, not something B4 changed.
 
 ### 7.5 · The gate
 
-PENDING
+Maven `mvn -o -B verify` on a git-archive clean copy of **f09a6b8** (the B4 head), both labs, one hold of the lock
+(06:25:27–06:30:22 +06): **unit 446 · 0 · 0 · 0** (442 + `OutboxReaperBatchesTest`'s 4), **ITs 96 · 0 · 0 · 3** (92 + the two
+batch tests on each engine: `PostgresOutboxConsumerIT` 45 + `PostgresTreeIT` 9, `OutboxConsumerIT` 36 + `MySqlTreeIT` 2,
+`BuildBakesNoTenantIT` 1, `KafkaListenersIT` 3 skipped — no broker). BUILD SUCCESS; 0 ERROR lines; the four new contract tests
+present and passed in failsafe's reports on both engines; no log line holds the MySQL password; the head repository 0 files.
+No red.
 
 ## 8 · State (newest last; real times, `date`)
 
@@ -196,3 +202,8 @@ PENDING
 - 06:10 — mutants on the B4 code: MB6 and MB1–MB5 (MB2 per engine) all red; three timing reds of untouched tests under the load
   of my measurements — those classes 3 × 28/28 alone (§7.4).
 - 06:14 — docs (decisions §18, README, architecture, the deploy page's keys and rows). NEXT: commit B4, then the gate.
+- 06:15 — B4 committed 4ca45a0, and f09a6b8 (the store's comment: the measured reason, not a growth I first assumed); the gate queued.
+- 06:30 — THE GATE of B4 (one hold of the lock, 06:25:27–06:30:22) on a git-archive clean copy of f09a6b8: unit 446 · 0 · 0 · 0,
+  ITs 96 · 0 · 0 · 3 (both engines), BUILD SUCCESS; no log line holds the password; the head repository 0 files. The labs
+  REMOVED again (`h1b-pg16`, `h1b-mysql57`, their volumes and the measurement data in them, the password file; the measurement
+  container already at 06:04); the clean copy removed. B4 DONE (this commit).
