@@ -52,6 +52,9 @@ summary:
     root: btcl                                           # the root tenant = the root schema; names the doorbell's topic
     prime-context:
       base-url: http://10.10.188.2:7091                  # the bed's one prime-context (the facade, upgraded in place)
+      # token-ref: env:PRIME_CONTEXT_TOKEN               # HARDEN-2: the NAME of the variable (secreteer) that holds this service's
+                                                         # token for prime-context's tree roads; set it, with the variable, before
+                                                         # prime-context's guard is flipped to bearer. Not set: no bearer, as before
     doorbell:
       topic-base: config_event_loader                    # -> config_event_loader_btcl
       bootstrap-servers: 10.10.188.2:9092                # kafka-s2, the bed's one cluster

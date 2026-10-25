@@ -33,7 +33,7 @@ Nothing pushed. The report: `docs/ad-as-call/HARDEN-2-done.md`.
 |---|---|---|---|
 | 0 | DONE | — | worktree made 15:4x; labs up 16:08; the baseline queued 16:09 |
 | 1 | DONE — the bearer on BOTH tree-road clients: `summary.tenants.prime-context.token-ref` (the tree, `PrimeContextTreeSource`) and `summary.contexts.<name>.token-ref` (a bean's context, `ConfigManagerClient`); the start's lines; an empty variable refuses the start | (this commit) | red-first on a skeleton: 18 of 21 red (the 3 green: no header when none is named — today's behaviour, guards); green: fast runner 71/71, then every unit class 470/470 (446 + 24); mutants SM1–SM13 all red (below) |
-| 2 | the docs (README, decisions, the profile page, the bed profile's comment) and the report | | |
+| 2 | DONE — the docs: decisions §19, README (the rule, the layout's `treeroads/`), `postgres-ad-profile.md` (the YAML, §2's row, the start's line, the refusal, the upgrade row, the two keys); the jar's radius2 profile carries the key COMMENTED (no behaviour change); the report drafted (the gate PENDING) | (this commit) | `WifiProfileTest` + `ProfileKindsTest` 26/26 on the commented profile |
 | 3 | the gate: unit + ITs, both engines, a git-archive clean copy of the head; the labs removed | | |
 
 ## State lines (newest last; real times, `date`)
@@ -76,3 +76,6 @@ Nothing pushed. The report: `docs/ad-as-call/HARDEN-2-done.md`.
   | SM12 | the service's context registry reads no environment | 1 — its wiring test |
   | SM13 | the service's start reads no environment | 1 — its wiring test |
 - 16:24 — every unit class green again on the restored tree: 470/470. Item 1 committed.
+- 16:26–16:30 — item 2: decisions §19, README, the profile page, the radius2 profile's commented key, the report drafted. The profile
+  tests 26/26. Committed. NEXT: the gate (Maven `verify`, both labs, a git-archive clean copy of the head), its numbers into the report
+  and the table above, then the labs removed.
