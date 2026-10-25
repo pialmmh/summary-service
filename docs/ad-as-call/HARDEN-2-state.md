@@ -12,7 +12,7 @@ Nothing pushed. The report: `docs/ad-as-call/HARDEN-2-done.md`.
 | mutants | `mutants.py ss` — original copied aside, the break, the named tests, the original back with a FRESH mtime, byte equality asserted |
 | the gate | `gate-ss.sh <commit> <label>` — ONE hold of the lock: a git-archive clean copy, `mvn -o -B verify` (unit + ITs) on BOTH engines, an EMPTY head repository with read-only tails (`~/.m2/arch-ss-review-repo`, `~/.m2/summary-service-repo`, `~/.m2/repository`): nothing written to `~/.m2` |
 
-## Labs (mine; 127.0.0.1 only; to be REMOVED at the end)
+## Labs (mine; 127.0.0.1 only; REMOVED 16:36 +06 — the containers, their volumes, the password file)
 
 | | |
 |---|---|
@@ -34,7 +34,7 @@ Nothing pushed. The report: `docs/ad-as-call/HARDEN-2-done.md`.
 | 0 | DONE | — | worktree made 15:4x; labs up 16:08; the baseline queued 16:09 |
 | 1 | DONE — the bearer on BOTH tree-road clients: `summary.tenants.prime-context.token-ref` (the tree, `PrimeContextTreeSource`) and `summary.contexts.<name>.token-ref` (a bean's context, `ConfigManagerClient`); the start's lines; an empty variable refuses the start | (this commit) | red-first on a skeleton: 18 of 21 red (the 3 green: no header when none is named — today's behaviour, guards); green: fast runner 71/71, then every unit class 470/470 (446 + 24); mutants SM1–SM13 all red (below) |
 | 2 | DONE — the docs: decisions §19, README (the rule, the layout's `treeroads/`), `postgres-ad-profile.md` (the YAML, §2's row, the start's line, the refusal, the upgrade row, the two keys); the jar's radius2 profile carries the key COMMENTED (no behaviour change); the report drafted (the gate PENDING) | (this commit) | `WifiProfileTest` + `ProfileKindsTest` 26/26 on the commented profile |
-| 3 | the gate: unit + ITs, both engines, a git-archive clean copy of the head; the labs removed | | |
+| 3 | DONE — the gate: **unit 470 · 0 · 0 · 0, ITs 96 · 0 · 0 · 3**, BUILD SUCCESS — Maven `verify`, a git-archive clean copy of **32e8056** (all of the round's code; the head adds only this report's numbers), both labs, one hold of the lock 16:30:07–16:35:19 +06 (`~/harden2-work/logs/gate-ss-head-32e8056.log`). Unit 470 = the baseline's 446 + the 24 new (`TreeRoadBearerTest` 7, `PrimeContextTreeSourceTest` +3, `ContextRegistryBearerTest` 4, `TenantWatcherBearerTest` 4, `SummaryBootstrapTest` +6). ITs = the baseline's, class for class: `PostgresOutboxConsumerIT` 45 + `PostgresTreeIT` 9 (PostgreSQL), `OutboxConsumerIT` 36 + `MySqlTreeIT` 2 (MySQL), `BuildBakesNoTenantIT` 1, `KafkaListenersIT` 3 skipped (no broker). No red. 0 lines hold the lab password; the two test tokens are in no line of the Maven log and in no surefire / failsafe report; the head repository 0 files. The labs removed 16:36 | (this commit: the numbers) | the report §0 / §4 |
 
 ## State lines (newest last; real times, `date`)
 
@@ -79,3 +79,8 @@ Nothing pushed. The report: `docs/ad-as-call/HARDEN-2-done.md`.
 - 16:26–16:30 — item 2: decisions §19, README, the profile page, the radius2 profile's commented key, the report drafted. The profile
   tests 26/26. Committed. NEXT: the gate (Maven `verify`, both labs, a git-archive clean copy of the head), its numbers into the report
   and the table above, then the labs removed.
+- 16:29–16:35 — THE GATE (`~/harden2-work/gate-ss.sh 32e8056`): a git-archive clean copy of 32e8056, `mvn -o -B verify`, both labs, one
+  hold of the lock 16:30:07–16:35:19: unit 470 · 0 · 0 · 0, ITs 96 · 0 · 0 · 3, BUILD SUCCESS; 0 lines hold the lab password; the test
+  tokens in no Maven line and in no surefire / failsafe report; the head repository 0 files.
+- 16:36 — the labs REMOVED (`h2-lab.sh down`: `h2-pg16`, `h2-mysql57`, their volumes, the password file; 7461 / 7361 closed). The numbers
+  into the report. ALL ITEMS DONE (this commit; docs only on top of 32e8056).

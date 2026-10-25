@@ -10,13 +10,13 @@ without a token is answered 401. Before the owner flips it, summary-service must
 
 | | |
 |---|---|
-| the branch | `tree-bearer`, from `postgres-ad-call` c76d098: **37e7b82** item 1 (code + tests + the state file) · the docs + this report · the gate's numbers. Not pushed; `postgres-ad-call` not touched |
+| the branch | `tree-bearer`, from `postgres-ad-call` c76d098: **37e7b82** item 1 (code + tests + the state file) · **32e8056** item 2 (the docs, this report drafted) · the commit that carries this report's numbers (docs only). Not pushed; `postgres-ad-call` not touched |
 | TWO clients, not one | the brief names `context/internal/ConfigManagerClient`; the service has a second caller of the same road — `tenancy/internal/PrimeContextTreeSource`, the root's tree in `summary.tenants.mode: tree`, which **the bed's profile uses** (PC-0025's flip row lists both). Both get the bearer: after the flip, the one left out would be refused (the tree read 401 = no new reseller schema is ever served) |
 | the rule, as built | per block, the shape of `summary.store.password-ref`: `summary.tenants.prime-context.token-ref: env:<VAR>` (the tree) and `summary.contexts.<name>.token-ref: env:<VAR>` (a bean's context) → that block's `POST /get-specific-tenant-root` carries `Authorization: Bearer <value>`. Not set → no Authorization header: the calls of before, exactly; the environment is not read |
 | the start | one line per block that asks a tree road, after the store's line: `tree roads: bearer from <VAR> (<key>)` or `tree roads: no bearer (<key> is not set)` — the NAME, never the value; print-only prints them as `SECRET tree roads: …`. A named variable that is not set or empty refuses the start in words (`REFUSING TO START: the environment variable <VAR> is empty — <key> names it as the token for prime-context's tree roads. …`), before anything is dialled (print-only: exit 4); a `token-ref` that is not `env:<NAME>` is refused and not shown |
 | a 401 / 403 | the tree's error (logged by the watcher) and the context's WARN name the bearer that was shown — never the value |
 | baseline (the bed line c76d098, a git-archive clean copy, Maven `verify`, both engines) | **unit 446 · 0 · 0 · 0, ITs 96 · 0 · 0 · 3** (16:08:48–16:13:46 +06) |
-| the gate (the head, a git-archive clean copy, Maven `verify`, both engines) | PENDING |
+| the gate (a git-archive clean copy, Maven `verify`, both engines) | **unit 470 · 0 · 0 · 0, ITs 96 · 0 · 0 · 3**, BUILD SUCCESS — Maven `verify`, a git-archive clean copy of **32e8056** (all of the round's code; the head adds only this report's numbers), both labs, one hold of the lock 16:30:07–16:35:19 +06 (`~/harden2-work/logs/gate-ss-head-32e8056.log`). Unit 470 = the baseline's 446 + the 24 new (`TreeRoadBearerTest` 7, `PrimeContextTreeSourceTest` +3, `ContextRegistryBearerTest` 4, `TenantWatcherBearerTest` 4, `SummaryBootstrapTest` +6). ITs = the baseline's, class for class: `PostgresOutboxConsumerIT` 45 + `PostgresTreeIT` 9 (PostgreSQL), `OutboxConsumerIT` 36 + `MySqlTreeIT` 2 (MySQL), `BuildBakesNoTenantIT` 1, `KafkaListenersIT` 3 skipped (no broker). No red. 0 lines hold the lab password; the two test tokens are in no line of the Maven log and in no surefire / failsafe report; the head repository 0 files |
 | red first | 18 of 21 red on a skeleton of the API (§2) |
 | mutants | SM1–SM13, all red (§3) |
 | for the flip | the bed's RENDERED profile gains `token-ref: env:<VAR>` under `summary.tenants.prime-context` and secreteer's file the variable — then a restart, and the start line says `tree roads: bearer from <VAR>` — BEFORE the guard is flipped (prime-context's `tools/deploy/window/pc25-tree-roads-guard.md`, G0). The jar's own radius2 profile carries the line COMMENTED (no behaviour change) |
@@ -79,12 +79,12 @@ The tests per mutant: `TreeRoadBearerTest`, `PrimeContextTreeSourceTest`, `Conte
 |---|---|---|
 | fast runner (red-first, green, mutants) | plain `javac` + the JUnit launcher on the classpath Maven resolved once; main and test sources compiled fresh every run — NOT Maven; every number of record is Maven's | green 71/71, then every unit class 470/470 (446 + 24) |
 | **the baseline** | Maven `mvn -o -B verify`, a git-archive clean copy of c76d098, both labs | **unit 446 · 0 · 0 · 0; ITs 96 · 0 · 0 · 3** |
-| **the gate** | Maven `mvn -o -B verify`, a git-archive clean copy of the head, both labs | PENDING |
+| **the gate** | Maven `mvn -o -B verify`, a git-archive clean copy of 32e8056, both labs | **unit 470 · 0 · 0 · 0; ITs 96 · 0 · 0 · 3**, BUILD SUCCESS (16:30:07–16:35:19) |
 
 Maven ran offline under `flock /home/mustafa/telcobright-projects/.one-maven.lock`, with an EMPTY head repository and the read-only
 tails `~/.m2/arch-ss-review-repo`, `~/.m2/summary-service-repo`, `~/.m2/repository`: nothing written to `~/.m2`.
 
-## 5 · The labs (mine; REMOVED at the end — PENDING)
+## 5 · The labs (mine; REMOVED 2026-10-25 16:36 +06 — the containers, their volumes, the password file)
 
 | | |
 |---|---|
