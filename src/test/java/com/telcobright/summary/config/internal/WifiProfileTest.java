@@ -380,6 +380,6 @@ class WifiProfileTest {
         // tenants.yml selects the build's tenant: tcbl/dev stays the first enabled; btcl/lab is chosen at a start
         assertEquals(new ProfileYamlLoader.ActiveTenant("tcbl", "dev"), ProfileYamlLoader.activeTenant("config/tenants.yml").orElseThrow());
         assertFalse(PROFILE.isEmpty(), "config/tenants/btcl/lab/profile-lab.yml is on the class path");
-        assertEquals("cdr", PROFILE.get("summary.outbox.entity-type"));
+        assertEquals("cdr_summary_ping_btcl", PROFILE.get("summary.outbox.ping-topic"));
     }
 }

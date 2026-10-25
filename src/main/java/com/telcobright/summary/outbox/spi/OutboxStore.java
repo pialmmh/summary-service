@@ -48,6 +48,16 @@ public interface OutboxStore {
     int deleteUpTo(String entityType, long maxIdInclusive);
 
     /**
+     * Delete AT MOST {@code limit} outbox rows of the entity with {@code id <= maxIdInclusive}, the lowest ids first —
+     * the reaper's bounded batch (HARDEN-1 B4). The batch's ids are taken through the {@code (entity_type, id)} index,
+     * then deleted by primary key. Returns the number deleted: {@code limit} means more may be left.
+     */
+    int deleteUpTo(String entityType, long maxIdInclusive, int limit);
+
+    /** How many outbox rows of the entity have {@code id <= maxIdInclusive} — what a bounded trim left behind. */
+    long countUpTo(String entityType, long maxIdInclusive);
+
+    /**
      * Copy a poison outbox row into {@code summary_affected_dlq} for this bean (same transaction as the offset
      * advance that skips it) — the quarantine record an operator repairs from.
      */

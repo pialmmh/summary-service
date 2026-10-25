@@ -634,6 +634,50 @@ before for every group but 30 and 101, which a voice tenant never receives.
   WiFi kinds read it from there: one pinned contract, one decoder.
 - `summary.beans.<name>.kind` (a bean's SHAPE, the WiFi kind's fine-tuning) and `summary.kinds` (the tenant's kinds) share a
   word; renaming the older key would break every deployed profile.
-- The reaper trims the `cdr` entity only (`summary.outbox.entity-type`), as before: `wifi_flow` rows are never trimmed, with or
-  without the wifi kind (a finding of this round, not changed by it).
+- The reaper trimmed the `cdr` entity only (`summary.outbox.entity-type`): `wifi_flow` rows were never trimmed, with or without
+  the wifi kind — a finding of this round, not changed by it, and closed by HARDEN-1: the reaper now trims every entity that has
+  a registered bean, each by its own beans (§18).
 - A kind is all or nothing per tenant; the beans inside it are still chosen one by one in `enabledSummary`.
+
+## 18. The reaper trims EVERY entity that has beans, each by its own beans' bookmarks (HARDEN-1, 2026-10-25)
+Before: `OutboxReaper` trimmed ONE entity, `summary.outbox.entity-type` (default `cdr`). A WiFi tenant's `wifi_flow` rows were
+never trimmed, so its outbox grew for ever (SS-0008 F1, §17f). The rule, decided (the owner's "yes", 2026-10-25 02:5x):
+
+- **Every pass trims EACH entity that has at least one registered bean, each by `min(last_offset)` over THAT entity's beans only.**
+  The bookmarks are per (entity, bean) already (§13), and so are the store's `minOffset` / `deleteUpTo`: one entity's watermark is
+  never another's — a lagging `wifi_flow` bean holds the `wifi_flow` rows, not the `cdr` ones, and the other way round. The
+  watermark set stays the CONFIGURED beans, not the running ones (§13, Q2): a hot-stopped bean still holds its entity's rows.
+- **An entity with no registered bean is never trimmed.** It is not in the reaper's map at all
+  (`SummaryBeanRegistry.registeredBeanNamesByEntity`). The reason is §17c's (SS-0008 D1): a bean that comes back must find its
+  rows. So `ad_cdr` rows (read by no bean since the ad became a Call) and a `wifi_flow` row on a tenant without a WiFi bean stay —
+  their removal, if ever wanted, is an operator's act, not the reaper's.
+- **Each (schema, entity) is its own transaction**, and a trouble is said per (schema, entity): ONE WARN when it starts
+  (`reaper: schema <s>, entity <e> failed this pass; …`), ONE INFO when that pair trims again (`… trims again — after <n> failed
+  passes`), DEBUG lines in between (S16, §16, now per entity).
+- **`summary.outbox.entity-type` is retired.** A profile that still sets it hears so once, at the reaper's start:
+  `summary.outbox.entity-type=<e> is IGNORED: the key is retired (HARDEN-1). Every pass trims EACH entity …`. Nothing else
+  changes; the line can be removed. The jar's own profiles (btcl/lab, btcl/radius2, tcbl/dev) no longer carry it.
+- **The trim deletes in BOUNDED batches (B4).** At most `summary.outbox.reap-batch` rows (default 10 000) per transaction, the
+  lowest ids first, batch after batch until that (schema, entity)'s passed rows are gone or the pass's time budget
+  `summary.outbox.reap-pass-budget-ms` (default 5 000) is spent. Every (schema, entity) gets its FIRST batch whatever the budget:
+  the `cdr` entity's minute of rows is trimmed every pass in one transaction, as before, even behind a `wifi_flow` backlog. What a
+  spent budget leaves is the next pass's, said in ONE INFO per such pass with the rows left (`reaper: this pass stopped on its
+  budget (summary.outbox.reap-pass-budget-ms=5000) — the next pass goes on with the rows left: schema <s>, entity <e>: <n>`).
+  A batch below 1 row or a negative budget refuses the start in words.
+- **The statements — the batch's ids through billing-core's `(entity_type, id)` index, the rows by primary key.**
+  MySQL: `DELETE sa FROM summary_affected sa JOIN (SELECT id FROM summary_affected IGNORE INDEX (PRIMARY) WHERE entity_type = ?
+  AND id <= ? ORDER BY id LIMIT ?) batch ON batch.id = sa.id`. PostgreSQL: `DELETE FROM summary_affected WHERE id = ANY (ARRAY(
+  SELECT id FROM summary_affected WHERE entity_type = ? AND id <= ? ORDER BY id LIMIT ?))`. Not MySQL's plain `DELETE … ORDER BY
+  id LIMIT ?`: 5.7 plans it through the PRIMARY key and filters the entity, so it walks every row of another entity held below
+  the watermark (a lagging or hot-stopped bean's rows) — measured on a buffer pool smaller than the table, one 10 000-row batch
+  behind 100 000 held `cdr` rows: 4.32 s against 0.25 s. `IGNORE INDEX (PRIMARY)` names the one index every table has, so no
+  production index name is assumed. Not PostgreSQL's `id IN (sub-select)`: planned as a hash semi-join over a sequential scan of
+  the whole table; `= ANY (ARRAY(…))` is an index-only scan, then the primary key; a ctid batch was a little faster in the lab
+  but its sub-select walked the primary key across both entities. The numbers: `docs/ad-as-call/HARDEN-1B-done.md` §7.
+- What a running deployment sees on the first pass after this jar: a WiFi tenant's `wifi_flow` backlog — the rows every WiFi
+  destination bean has passed, never trimmed before — goes in batches of 10 000, as many as the pass's 5 s allow beyond the first,
+  the rest over the next passes. The `cdr` trims are as before: one transaction a pass.
+
+Proof: `OutboxReaperTest` (6) and `OutboxReaperBatchesTest` (4), the fakes; four tests of the IT contract on BOTH engines (the
+rows of the two entities interleaved in one id sequence, as billing-core writes them; a 25 000-row backlog); red first on the
+code of before; the mutants in `docs/ad-as-call/HARDEN-1B-done.md`.
