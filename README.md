@@ -101,7 +101,9 @@ summary  (one tx per drain, per bean):
    read THIS bean's last_offset  →  read summary_affected rows after it  →  decode blobs
       →  compute windows involved  →  load those windows ONCE  →  merge the batch's deltas
       →  segmented multi-row INSERT/UPDATE summaries  +  advance last_offset   →  COMMIT (together)
-   reaper: delete summary_affected rows with id ≤ min(last_offset) across active beans
+   reaper: per entity, delete its summary_affected rows with id ≤ min(last_offset) across THAT entity's configured beans
+           (an entity no bean reads is never trimmed — decisions §18), in bounded batches: reap-batch rows a transaction
+           (10 000), as many as the pass's reap-pass-budget-ms allow (5 000) beyond each entity's first, the rest next pass
 ```
 
 The **load-windows-once** rule (loading per event double-counts), the **segmented** writer, and the

@@ -30,7 +30,6 @@ summary:
 
   # 2) Outbox consumer settings (input is the MySQL outbox; Kafka is only a ping).
   outbox:
-    entity-type: cdr
     ping-topic: cdr_summary_ping                # PINNED (matches billing-core producer)
     ping-bootstrap-servers: 103.95.96.78:9092   # CCL Kafka — same as billing-core (dotnet)
     poll-interval-seconds: 5                     # fallback drain if no ping arrives

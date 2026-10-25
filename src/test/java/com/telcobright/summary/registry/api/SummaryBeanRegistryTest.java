@@ -381,7 +381,7 @@ class SummaryBeanRegistryTest {
         res44.outbox().advanceOffset("cdr", DAILY, 3);
         res44.outbox().advanceOffset("cdr", HOURLY, 1);         // the hourly bean lags
 
-        int deleted = new OutboxReaper(reader, registry, "cdr", 60).reapOnce();
+        int deleted = new OutboxReaper(reader, registry, 60).reapOnce();
 
         assertEquals(4, deleted, "3 in btcl, 1 in res_44; res_46 has no outbox to trim");
         assertEquals(0, btcl.outbox().rowCount());
@@ -400,7 +400,7 @@ class SummaryBeanRegistryTest {
         registry.serve("btcl");
         registry.stopAll();
         btcl.outbox().advanceOffset("cdr", DAILY, 3);
-        OutboxReaper reaper = new OutboxReaper(reader, registry, "cdr", 60);
+        OutboxReaper reaper = new OutboxReaper(reader, registry, 60);
 
         try (com.telcobright.summary.testkit.LogCapture said = com.telcobright.summary.testkit.LogCapture.of(OutboxReaper.class)) {
             store.goAway();
@@ -410,8 +410,8 @@ class SummaryBeanRegistryTest {
             assertEquals(0, reaper.reapOnce());
 
             assertEquals(1, said.warnings().size(), "ONE line when the trouble starts, not one per pass: " + said.lines());
-            assertTrue(said.warnings().get(0).startsWith("reaper: schema btcl failed this pass"), said.warnings().get(0));
-            assertEquals(java.util.List.of("reaper: schema btcl trims again — after 5 failed passes"),
+            assertTrue(said.warnings().get(0).startsWith("reaper: schema btcl, entity cdr failed this pass"), said.warnings().get(0));
+            assertEquals(java.util.List.of("reaper: schema btcl, entity cdr trims again — after 5 failed passes"),
                     said.lines().stream().filter(line -> line.contains("trims again —")).toList());
         }
     }

@@ -17,6 +17,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -102,19 +104,17 @@ public class SummaryBeanRegistry {
     }
 
     /**
-     * The names of ALL registered (configured) beans for the entity_type — the reaper's watermark set
-     * (work order §5.2, resolving Q2): a hot-STOPPED bean's unread rows must survive until it catches up or
-     * its offset row is explicitly decommissioned, so the watermark covers configured beans, not just
-     * currently-running workers. A registered bean with no offset row yet pins the watermark at 0.
+     * The names of ALL registered (configured) beans, per entity_type — the reaper's watermark sets, ONE PER ENTITY
+     * (HARDEN-1): each entity's outbox rows are trimmed by its own beans' bookmarks only, and an entity with no
+     * registered bean is not in the map, so it is never trimmed (a bean that comes back must find its rows — SS-0008
+     * D1). Configured, not running (work order §5.2, resolving Q2): a hot-STOPPED bean's unread rows must survive until
+     * it catches up or its offset row is explicitly decommissioned. A registered bean with no offset row yet pins its
+     * entity's watermark at 0.
      */
-    public Set<String> registeredBeanNames(String entityType) {
-        Set<String> names = new LinkedHashSet<>();
-        beans.forEach((name, bean) -> {
-            if (bean.entityType().equals(entityType)) {
-                names.add(name);
-            }
-        });
-        return names;
+    public Map<String, Set<String>> registeredBeanNamesByEntity() {
+        Map<String, Set<String>> byEntity = new TreeMap<>();
+        beans.forEach((name, bean) -> byEntity.computeIfAbsent(bean.entityType(), entity -> new TreeSet<>()).add(name));
+        return byEntity;
     }
 
     /**

@@ -85,7 +85,7 @@ class SummaryBootstrapKindsTest {
                     if (method.getName().equals("handles")) return List.of(handle);
                     throw new UnsupportedOperationException(method.getName());
                 });
-        return new SummaryBootstrap(registry, catalog, new ContextRegistry(nothingDialled), new OutboxReaper(reader, registry, "cdr", 60),
+        return new SummaryBootstrap(registry, catalog, new ContextRegistry(nothingDialled), new OutboxReaper(reader, registry, 60),
                 new PingListener(registry, "cdr_summary_ping", "127.0.0.1:1"), new TenantWatcher(registry), store, gate, false);
     }
 
