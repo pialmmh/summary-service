@@ -713,3 +713,22 @@ prime-context's guard-flip window (its `tools/deploy/window/pc25-tree-roads-guar
 
 Proof: `TreeRoadBearerTest` (7), `PrimeContextTreeSourceTest` (+3), `ContextRegistryBearerTest` (4), `TenantWatcherBearerTest` (4),
 `SummaryBootstrapTest` (+6); red first on a skeleton; the mutants in `docs/ad-as-call/HARDEN-2-done.md`.
+
+## 20. One summary-service per service CATEGORY; a cross-kind reader starts under any kind (ARCH-0102 / SS-0009, 2026-10-31)
+The owner's ruling of 2026-10-30 (routesphere `docs/architecture/two-db-two-tenant-organisation.md`): one billing pair per service
+category (ad, wifi; later call, sms), each on its category's own records database (`ad_services`, `wifi_services`). The AD pair's
+summary-service is this jar with the profile `btcl/ad-radius2` (the profile page §8).
+
+- **`summary.category`** (one word, optional) names this service's consumer groups: `summary-service-<category>-ping-<uuid>` and
+  `summary-service-<category>-doorbell-<uuid>` (`registry/internal/ServiceCategory`). The groups stay UNIQUE per start — a ping and
+  a ring are broadcasts, every instance hears every one — so the word only tells the categories apart on one set of brokers (the
+  broker's group list, its ACLs). Not named: the names of before, exactly (no deployment changes on the day).
+- **A cross-kind reader is a bean of every enabled kind.** The chargeable roll-up (`CrossKindReader`) sums every leg of the
+  ENABLED kinds' groups (§17c); its catalog package is the call's. Under §17's rule "a bean of a kind not enabled refuses the start"
+  an ad-only tenant could not have it — but the ad pair wants `sum_chargeable_*` (the brief ARCH-0102 item 3). So the refusal
+  passes over a `CrossKindReader`; it is told the enabled groups as before (with `kinds: [ad]`: group 30's legs alone) and the
+  `KINDS` line says so when its own kind is not enabled (`dailyChargeableSummary = every enabled kind's legs (a cross-kind roll-up;
+  its kind is not enabled here)`). A voice tenant's start, sums and lines are unchanged (its kind is enabled: nothing new is said).
+- **The ping topic per category** (`cdr_summary_ping_<category>_<root>`): a profile value on both sides, as before; billing-core's
+  BC-0010 D1.
+

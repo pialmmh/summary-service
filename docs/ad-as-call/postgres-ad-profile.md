@@ -194,6 +194,7 @@ The keys of a profile:
 | key | default | what |
 |---|---|---|
 | `summary.autostart` | `false` | start the workers, the ping listener and the reaper. Off: the beans are registered and nothing is dialled |
+| `summary.category` | — | ARCH-0102 / SS-0009: the service CATEGORY this deployment sums (`ad`, `wifi`; one summary-service per category, §8). Names this service's consumer groups: `summary-service-<category>-ping-<uuid>`, `summary-service-<category>-doorbell-<uuid>` (unique per start, as before). Not set: `summary-ping-<uuid>`, `summary-doorbell-<uuid>` — the names of before |
 | `summary.store.kind` | from the URL | `mysql` or `postgresql` |
 | `summary.store.url` | — | the JDBC URL. PostgreSQL: the switch database. In tree mode it names no schema |
 | `summary.store.username` | empty | |
@@ -254,3 +255,24 @@ Everything on 127.0.0.1, in containers named `ss-*`; no password exists.
 `mvn verify` runs the integration tests against the three containers; a test whose lab is away is skipped,
 never passed. MySQL's lab is named with
 `-Dsummary.it.mysql.url='jdbc:mysql://127.0.0.1:7633/?useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true'`.
+
+## 8 · One summary-service per service CATEGORY (ARCH-0102 / SS-0009)
+
+The owner's ruling (routesphere `docs/architecture/two-db-two-tenant-organisation.md` §1, §3, §5, §6): one operator runs several
+service categories (ad, wifi; later call, sms); each category keeps the common Odoo database and catalog but has ITS OWN services
+database for the records, and ONE billing-core + ONE summary-service per category. A category's summary-service is this same jar with
+a profile of its own — the bundled `btcl/ad-radius2` is the AD category's on the radius-2 bed:
+
+| key | the AD pair (`btcl/ad-radius2`) | the rule |
+|---|---|---|
+| `summary.store.url` | `jdbc:postgresql://127.0.0.1:5434/ad_services` | the category's services database (`<category>_services`), where its billing-core writes; a tier is a schema of it as before. No other database is read |
+| `summary.kinds` | `[ad]` | the category's kind(s) |
+| `summary.enabledSummary` | `dailyAdSummary`, `hourlyAdSummary`, `dailyChargeableSummary`, `hourlyChargeableSummary` | the category's beans. The chargeable pair is a CROSS-KIND reader (decisions §20): it starts under any enabled kind and sums the enabled kinds' legs only — here group 30's |
+| `summary.category` | `ad` | names the consumer groups (`summary-service-ad-ping-<uuid>`, `summary-service-ad-doorbell-<uuid>`): the two summary-services on one Kafka are told apart |
+| `summary.outbox.ping-topic` | `cdr_summary_ping_ad_btcl` | the category's ping — the same name as its billing-core's `billing.summary.ping-topic`. Both summary-services serve the same tier NAMES of their own databases: a shared ping would wake the other category's workers at every batch |
+| `summary.tenants.doorbell.topic-base` | `config_event_loader` | the root's ONE doorbell topic (`config_event_loader_btcl`), heard by every category's service (each in its own group) |
+| `summary.store.password-ref`, `summary.tenants.prime-context.token-ref` | `env:<NAME>` | secrets only by the NAME of an environment variable (secreteer's file per pair, e.g. `/etc/secreteer/btcl/summary-service-ad.env`) |
+
+The reaper trims the entities that have registered beans (HARDEN-1): on the ad pair, `cdr` alone, by the four beans' minimum.
+Pinned by `AdPairProfileTest`, `ProfileKindsTest`, `CategoryNamedGroupsTest`, `SummaryBootstrapKindsTest`.
+

@@ -1,6 +1,7 @@
 package com.telcobright.summary.ping.internal;
 
 import com.telcobright.summary.registry.api.SummaryBeanRegistry;
+import com.telcobright.summary.registry.internal.ServiceCategory;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -20,7 +21,6 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Properties;
-import java.util.UUID;
 
 /**
  * Listens to the {@code cdr_summary_ping} topic and nudges the workers of the tenant a ping names to drain
@@ -41,6 +41,8 @@ public class PingListener {
     private final SummaryBeanRegistry registry;
     private final String topic;
     private final String bootstrapServers;
+    /** This listener's consumer group: unique per start (a broadcast), named by the service category when the profile names one (ARCH-0102). */
+    private final String consumerGroup;
     private volatile boolean running = false;
     private volatile boolean hearing = false;
     private Thread thread;
@@ -49,10 +51,22 @@ public class PingListener {
     @Inject
     public PingListener(SummaryBeanRegistry registry,
                         @ConfigProperty(name = "summary.outbox.ping-topic", defaultValue = "cdr_summary_ping") String topic,
-                        @ConfigProperty(name = "summary.outbox.ping-bootstrap-servers", defaultValue = "127.0.0.1:9092") String bootstrapServers) {
+                        @ConfigProperty(name = "summary.outbox.ping-bootstrap-servers", defaultValue = "127.0.0.1:9092") String bootstrapServers,
+                        @ConfigProperty(name = ServiceCategory.KEY, defaultValue = "") String category) {
         this.registry = registry;
         this.topic = topic;
         this.bootstrapServers = bootstrapServers;
+        this.consumerGroup = ServiceCategory.consumerGroup(category, "ping");
+    }
+
+    /** No category named: the group names of before ({@code summary-ping-<uuid>}). */
+    public PingListener(SummaryBeanRegistry registry, String topic, String bootstrapServers) {
+        this(registry, topic, bootstrapServers, "");
+    }
+
+    /** The consumer group this listener joins — {@code summary-service-<category>-ping-<uuid>}, or {@code summary-ping-<uuid>} with no category. */
+    public String consumerGroup() {
+        return consumerGroup;
     }
 
     public synchronized void start() {
@@ -86,7 +100,7 @@ public class PingListener {
     }
 
     private void consume() {
-        LOG.infof("ping listener started: topic=%s", topic);
+        LOG.infof("ping listener started: topic=%s group=%s", topic, consumerGroup);
         try {
             consumer = new KafkaConsumer<>(props());
             consumer.subscribe(List.of(topic), new ConsumerRebalanceListener() {
@@ -151,7 +165,7 @@ public class PingListener {
     private Properties props() {
         Properties p = new Properties();
         p.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        p.put(ConsumerConfig.GROUP_ID_CONFIG, "summary-ping-" + UUID.randomUUID());   // unique -> broadcast
+        p.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroup);   // unique -> broadcast; named by the category (ARCH-0102)
         p.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         p.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
