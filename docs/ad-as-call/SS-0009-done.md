@@ -12,7 +12,7 @@ telcobright-billing-core `docs/ad-as-call/BC-0010-done.md` (its §1 holds the re
 |---|---|---|
 | 1 the read list | DONE — §1 below (the table; no non-record read exists; D2 the chargeable pair under kinds = ad) | 2026-10-31 02:01 +0600 |
 | 2 (billing-core's; BC-0010) | — | |
-| 3 summary-service on the services store, kind ad | — | |
+| 3 summary-service on the services store, kind ad | DONE — §3 below (the profile btcl/ad-radius2; summary.category names the groups; a cross-kind reader starts under any kind (D2); 4 test classes touched/new, fast runner 58/58) | 2026-10-31 02:41 +0600 |
 | 4 the proof: two categories, two databases, two topics | — | |
 | 5 the gates and the bed jar | — | |
 
@@ -42,3 +42,24 @@ crosses the kinds by design (`bean/spi/CrossKindReader`: told the enabled kinds'
 makes a cross-kind reader a bean of EVERY enabled kind: it starts whenever the tenant enables any kind and sums the enabled kinds' legs
 only (here: group 30's) — the ownership for the catalog (the call's package) is unchanged, the pins of a voice tenant are unchanged.
 Taken unless you rule otherwise (your D3 said "or rule otherwise"; the brief rules it).
+
+## 3 · Item 3 — summary-service on the services store, kind ad (as built)
+
+| where | what |
+|---|---|
+| `src/main/resources/config/tenants/btcl/ad-radius2/profile-ad-radius2.yml` (NEW) | the AD category's profile on the bed, the radius2 shape with the contract's values: `store.url` → `ad_services` (127.0.0.1:5434 on the box), `password-ref: env:TENANT_BTCL_AD_SUMMARY_SERVICE_PASSWORD`; `kinds: [ad]`; `category: ad`; the beans `dailyAdSummary`, `hourlyAdSummary`, `dailyChargeableSummary`, `hourlyChargeableSummary` and NO config-instantiated bean (no call-shaped 30/101, no WiFi bean); `outbox.ping-topic: cdr_summary_ping_ad_btcl` (BC-0010 D1); the tree and the doorbell the root's (`config_event_loader_btcl`); the reaper as HARDEN-1 built it (the `cdr` entity, the four beans' minimum). `profile-radius2.yml` (the pre-split bed) untouched |
+| `registry/internal/ServiceCategory` (NEW) | `summary.category` → the consumer groups `summary-service-<category>-ping-<uuid>` / `summary-service-<category>-doorbell-<uuid>`; unique per start as before (broadcasts); none named = the names of before |
+| `ping/internal/PingListener`, `tenancy/internal/DoorbellListener`, `tenancy/api/TenantWatcher` | take the category (the CDI constructor reads `summary.category`; the old constructors kept = no category); their start lines say the group: `ping listener started: topic=… group=…`, `doorbell listener started: topic=… brokers=… group=…` |
+| `registry/internal/SummaryBootstrap` | D2: `refuseBeansOfKindsNotEnabled` passes over a `CrossKindReader` (the chargeable roll-up: a bean of every enabled kind); the `KINDS` line names such a bean when its own kind is not enabled; the print-only road the same |
+| tests | NEW `config/internal/AdPairProfileTest` (5: the store `ad_services` + the password by name, the kinds / category / beans, the ping and the root's tree + doorbell, nothing of the pre-split store or ping shared, no secret value in the file); NEW `registry/internal/CategoryNamedGroupsTest` (4: the names of before without a category; a category names the groups, unique per start; both listeners; the watcher hands the profile's category to its doorbell); `ProfileKindsTest` +1 (the ad pair's profile starts: `ad` alone, its four beans); `SummaryBootstrapKindsTest` +1 (an ad-only tenant with the chargeable roll-up starts, and the roll-up sums the view's leg alone — the call's two legs not) |
+| docs | decisions §20; the profile page: the `summary.category` key row and §8 (one summary-service per category) |
+
+Fast runner (`~/adpair-work/jt-ss.sh`, NOT Maven) on the touched and neighbouring classes (`SummaryBootstrapKindsTest`,
+`ProfileKindsTest`, `CategoryNamedGroupsTest`, `AdPairProfileTest`, `KnownKindsTest`, `TenantKindsTest`, `SummaryBootstrapTest`,
+`TenantWatcherBearerTest`): **58 found, 58 passed, 0 failed** (02:34 +06, after the owner's model switch; one compile fault of the
+print-only road found by the first run and fixed). Maven's numbers of record: item 5.
+
+**Stops.** The owner's model switches stopped the round twice (02:0x, 02:3x); nothing was running at either stop but my own
+background package of billing-core (it had finished, exit 0, 02:21); no mutant had been applied; item 3 was in the worktree
+uncommitted and is this commit.
+

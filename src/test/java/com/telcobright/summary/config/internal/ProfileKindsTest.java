@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -49,11 +50,17 @@ class ProfileKindsTest {
         return kinds;
     }
 
+    /** The beans whose input crosses the kinds (the chargeable roll-up): admitted under ANY enabled kind (SS-0009 D2). */
+    private static final Set<String> CROSS_KIND = Set.of("dailyChargeableSummary", "hourlyChargeableSummary");
+
     private static void assertStarts(String tenant, String name) {
         Map<String, String> profile = profile(tenant, name);
         TenantKinds enabled = TenantKinds.of(configOf(profile));
         for (String beanAndKind : kindsOfTheEnabledBeans(profile)) {
             String kind = beanAndKind.substring(beanAndKind.indexOf('=') + 1);
+            if (CROSS_KIND.contains(beanAndKind.substring(0, beanAndKind.indexOf('=')))) {
+                continue;
+            }
             assertTrue(enabled.words().contains(kind), tenant + "/" + name + ": " + beanAndKind + " is of a kind the profile does not enable " + enabled.words());
         }
     }
@@ -76,5 +83,15 @@ class ProfileKindsTest {
                     kindsOfTheEnabledBeans(profile("btcl", name)), name);
             assertStarts("btcl", name);
         }
+    }
+
+    @Test
+    void the_ad_pairs_profile_names_the_ad_kind_alone_and_its_beans_are_the_ad_pair_and_the_cross_kind_chargeable_pair() {
+        // ARCH-0102 / SS-0009: one summary-service per category — the ad pair's profile. The chargeable pair's catalog kind stays the
+        // call's (its package); it starts under kinds = ad because its input crosses the kinds (D2).
+        assertEquals(List.of("ad"), TenantKinds.of(configOf(profile("btcl", "ad-radius2"))).words());
+        assertEquals(List.of("dailyAdSummary=ad", "hourlyAdSummary=ad", "dailyChargeableSummary=call", "hourlyChargeableSummary=call"),
+                kindsOfTheEnabledBeans(profile("btcl", "ad-radius2")));
+        assertStarts("btcl", "ad-radius2");
     }
 }

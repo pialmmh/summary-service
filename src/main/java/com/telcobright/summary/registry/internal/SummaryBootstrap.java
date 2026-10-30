@@ -129,7 +129,7 @@ public class SummaryBootstrap {
         beans.forEach(this::register);
         readOnlyTheGroupsOfTheEnabledKinds(beans, kinds);
         kindGate.countFor(kinds, firstBeanOfTheCdrEntity(beans), DdlPartitions.tenantZone(config));
-        LOG.info(kindsLine(kinds));
+        LOG.info(kindsLine(kinds, beans));
     }
 
     /** {@code summary.kinds} — a word that is no kind refuses the start, in words. */
@@ -156,10 +156,16 @@ public class SummaryBootstrap {
     /**
      * Every bean must be of a kind this tenant enabled. One that is not refuses the start, naming each such bean and its kind:
      * left out instead, it would not hold the outbox, so its rows would be trimmed past it and its summaries lost.
+     * A bean whose input CROSSES the kinds ({@link CrossKindReader}: the chargeable roll-up) is a bean of every enabled kind — it
+     * starts under any kind and sums the enabled kinds' legs only (ARCH-0102 / SS-0009 D2: the ad pair sums sum_chargeable_* with
+     * {@code summary.kinds: [ad]}); its catalog package stays the call's.
      */
     private static void refuseBeansOfKindsNotEnabled(List<SummaryBean<?>> beans, TenantKinds kinds) {
         List<String> refused = new ArrayList<>();
         for (SummaryBean<?> bean : beans) {
+            if (bean instanceof CrossKindReader) {
+                continue;
+            }
             SummaryKind kind = kindOrNull(bean);
             if (kind == null || !kinds.enables(kind)) {
                 refused.add(bean.name() + " (" + (kind == null ? "of no kind" : "kind " + kind.word()) + ")");
@@ -195,10 +201,15 @@ public class SummaryBootstrap {
     }
 
     /** {@code KINDS call, ad, wifi (summary.kinds) — call = service groups 10, 11 …; ad = …} and, when some are not enabled, what becomes of their rows. */
-    private static String kindsLine(TenantKinds kinds) {
+    private static String kindsLine(TenantKinds kinds, List<SummaryBean<?>> beans) {
         List<String> reads = new ArrayList<>();
         KnownKinds.all().stream().filter(kinds::enables).forEach(kind -> reads.add(TenantKinds.readsOf(kind)));
         String line = "KINDS " + kinds.said() + " — " + String.join("; ", reads);
+        List<String> crossKindOfAKindNotEnabled = beans.stream()
+                .filter(bean -> bean instanceof CrossKindReader && !kinds.enables(kindOrNull(bean))).map(SummaryBean::name).toList();
+        if (!crossKindOfAKindNotEnabled.isEmpty()) {
+            line += "; " + String.join(", ", crossKindOfAKindNotEnabled) + " = every enabled kind's legs (a cross-kind roll-up; its kind is not enabled here)";
+        }
         if (kinds.notEnabled().isEmpty()) {
             return line;
         }
@@ -288,8 +299,9 @@ public class SummaryBootstrap {
         try {
             refuseAFaultOfTheProfile(config);
             TenantKinds kinds = tenantKinds(config);
-            refuseBeansOfKindsNotEnabled(resolveBeans(enabled), kinds);
-            System.out.println(kindsLine(kinds));
+            List<SummaryBean<?>> beans = resolveBeans(enabled);
+            refuseBeansOfKindsNotEnabled(beans, kinds);
+            System.out.println(kindsLine(kinds, beans));
             System.out.println("SECRET " + store.checkAtStart(autostart));
             treeRoadBearerLines(config, enabled).forEach(line -> System.out.println("SECRET " + line));
             return true;

@@ -1,5 +1,6 @@
 package com.telcobright.summary.tenancy.api;
 
+import com.telcobright.summary.registry.internal.ServiceCategory;
 import com.telcobright.summary.registry.api.SummaryBeanRegistry;
 import com.telcobright.summary.tenancy.internal.DoorbellListener;
 import com.telcobright.summary.tenancy.internal.PrimeContextTreeSource;
@@ -94,11 +95,17 @@ public class TenantWatcher {
             this.doorbell = new DoorbellListener(
                     text(config, "summary.tenants.doorbell.topic-base", "config_event_loader") + "_" + root,
                     text(config, "summary.tenants.doorbell.bootstrap-servers", text(config, "summary.outbox.ping-bootstrap-servers", "127.0.0.1:9092")),
-                    () -> requestReload("the doorbell"));
+                    () -> requestReload("the doorbell"),
+                    ServiceCategory.of(config));
         } else {
             this.source = null;
             this.doorbell = null;
         }
+    }
+
+    /** The doorbell's consumer group — named by the profile's {@code summary.category} (ARCH-0102); null when there is no doorbell (single mode). */
+    public String doorbellConsumerGroup() {
+        return doorbell == null ? null : doorbell.consumerGroup();
     }
 
     /** A watcher over a given tree source, with no doorbell and no refresh (a test drives {@link #reloadNow()}). */

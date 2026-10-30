@@ -166,6 +166,25 @@ class SummaryBootstrapKindsTest {
     }
 
     @Test
+    void an_ad_only_tenant_with_the_chargeable_roll_up_starts_and_the_roll_up_sums_the_ad_legs_alone() {
+        // ARCH-0102 / SS-0009 D2: the ad pair sums sum_chargeable_* with summary.kinds = ad — a cross-kind reader is a bean of every
+        // enabled kind, so it is not refused; it sums the enabled kinds' legs only (group 30's) and says so in the KINDS line.
+        set("summary.kinds", "ad", "summary.enabledSummary", "dailyChargeableSummary");
+        byte[] aViewAndACall = AdTestSupport.batchJson(List.of(AdTestSupport.leafView(at(2026, 10, 10, 21, 14)).json(),
+                CdrTestSupport.entryJson(CdrTestSupport.sg10Entry(at(2026, 10, 10, 9, 0)))));
+
+        try (LogCapture said = LogCapture.of(SummaryBootstrap.class)) {
+            bootstrap().onStart(null);
+            assertEquals(Set.of("dailyChargeableSummary"), registry.beanNames(), "registered, not refused");
+            assertTrue(said.lines().stream().anyMatch(line -> line.startsWith("KINDS ad (summary.kinds) — ad = service group 30; "
+                    + "dailyChargeableSummary = every enabled kind's legs (a cross-kind roll-up; its kind is not enabled here). NOT enabled: call = ")),
+                    said.lines().toString());
+        }
+        assertEquals(List.of(30), chargeable.buildBatch(aViewAndACall, "btcl").stream().map(leg -> leg.tup_servicegroup).toList(),
+                "the view's leg is summed; the call's two legs are not (their kind is not enabled)");
+    }
+
+    @Test
     void a_word_that_is_no_kind_refuses_the_start_in_words() {
         set("summary.kinds", "call,sms");
 

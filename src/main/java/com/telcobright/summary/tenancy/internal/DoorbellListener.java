@@ -1,5 +1,6 @@
 package com.telcobright.summary.tenancy.internal;
 
+import com.telcobright.summary.registry.internal.ServiceCategory;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -14,7 +15,6 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Properties;
-import java.util.UUID;
 
 /**
  * Listens to the ROOT's doorbell — Kafka {@code config_event_loader_<root>}, rung by prime-context AFTER it rebuilt
@@ -32,15 +32,27 @@ public final class DoorbellListener {
     private final String topic;
     private final String bootstrapServers;
     private final Runnable onRing;
+    /** This listener's consumer group: unique per start (every instance hears every ring), named by the service category when the profile names one (ARCH-0102). */
+    private final String consumerGroup;
     private volatile boolean running = false;
     private volatile boolean hearing = false;
     private Thread thread;
     private KafkaConsumer<String, byte[]> consumer;
 
     public DoorbellListener(String topic, String bootstrapServers, Runnable onRing) {
+        this(topic, bootstrapServers, onRing, "");
+    }
+
+    public DoorbellListener(String topic, String bootstrapServers, Runnable onRing, String category) {
         this.topic = topic;
         this.bootstrapServers = bootstrapServers;
         this.onRing = onRing;
+        this.consumerGroup = ServiceCategory.consumerGroup(category, "doorbell");
+    }
+
+    /** The consumer group this listener joins — {@code summary-service-<category>-doorbell-<uuid>}, or {@code summary-doorbell-<uuid>} with no category. */
+    public String consumerGroup() {
+        return consumerGroup;
     }
 
     public synchronized void start() {
@@ -74,7 +86,7 @@ public final class DoorbellListener {
     }
 
     private void consume() {
-        LOG.infof("doorbell listener started: topic=%s brokers=%s", topic, bootstrapServers);
+        LOG.infof("doorbell listener started: topic=%s brokers=%s group=%s", topic, bootstrapServers, consumerGroup);
         try {
             consumer = new KafkaConsumer<>(props());
             consumer.subscribe(List.of(topic), new ConsumerRebalanceListener() {
@@ -121,7 +133,7 @@ public final class DoorbellListener {
     private Properties props() {
         Properties p = new Properties();
         p.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        p.put(ConsumerConfig.GROUP_ID_CONFIG, "summary-doorbell-" + UUID.randomUUID());   // unique -> every instance hears every ring
+        p.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroup);   // unique -> every instance hears every ring; named by the category (ARCH-0102)
         p.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         p.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);

@@ -16,3 +16,4 @@ Paired with billing-core `ad-pair` (BC-0010). Work folder `~/adpair-work` (logs,
 | item | state |
 |---|---|
 | 1 | DONE 2026-10-31 02:01 +0600 — the read list in SS-0009-done.md §1; D2 the chargeable pair under kinds = ad |
+| 3 | DONE 2026-10-31 02:41 +0600 — the profile btcl/ad-radius2, ServiceCategory (summary.category → the groups), the cross-kind chargeable under any kind (D2), decisions §20, profile page §8; fast runner 58/58 |
