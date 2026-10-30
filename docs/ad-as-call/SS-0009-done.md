@@ -14,7 +14,7 @@ telcobright-billing-core `docs/ad-as-call/BC-0010-done.md` (its §1 holds the re
 | 2 (billing-core's; BC-0010) | — | |
 | 3 summary-service on the services store, kind ad | DONE — §3 below (the profile btcl/ad-radius2; summary.category names the groups; a cross-kind reader starts under any kind (D2); 4 test classes touched/new, fast runner 58/58) | 2026-10-31 02:41 +0600 |
 | 4 the proof: two categories, two databases, two topics | DONE — §4 below (continued by a fresh agent after the stop of ~03:05; the harness is billing-core's `java/tools/lab/ad-pair-e2e.sh`, 2e8fe7d): the run of record **HOLDS 41 ok / 0 FAIL**, this service's checks all ok; mutants red — fast runner MS1 3/4, MS2 1/16, MS3 1/5 (base-ss 20/20 green); the worktree never held a mutant, every touched file = HEAD by cmp | 2026-10-31 03:58 +0600 |
-| 5 the gates and the bed jar | — | |
+| 5 the gates and the bed jar | DONE — §5 below: a clean copy of 32990ce, `mvn -o verify` on the private base alone: **unit 481 · 0 · 0 · 0, ITs 96 · 0 · 0 · 3** (both engines); the bed jar `~/artifacts/summary-service/32990ce-pinned/` (sha256 `7d4cb81f…c736`), its base proven by bytes (116 of 116 libraries, 0 in-house); the e2e on its own bytes **HOLDS 41 / 0**. §6: the rulings received, 3 open points | 2026-10-31 04:51 +0600 |
 
 ## 1 · Item 1 — the read list: every table and topic summary-service names, by road, and today's source
 
@@ -104,3 +104,49 @@ follow-up if wanted (stop the workers before the pool closes) — `OutboxWorker`
 
 The brief's three mutants are billing-core's (the ingest group left old, `kinds` left `ad, wifi`, partnerprefix from the table): BC-0010
 §4 — all red there, in the fast runner and in this e2e. Logs: `~/adpair-work/mut/<id>.log`, `~/c-work/gates/adpair-e2e-*.log`.
+
+## 5 · Item 5 — the gate and the bed jar
+
+**Step 0, the fill** (shared with billing-core; BC-0010 §5): the private base `~/adpair-work/m2-ss` held no surefire JUnit-platform
+provider (the first agent's package ran `-DskipTests`); one hold of the lock (04:16:22–04:18:13 +06) ran ONE test class
+(`AdPairProfileTest`) and ONE IT (`BuildBakesNoTenantIT`) online against this box's own `~/.m2/repository` only (the `file://`
+mirror): 2426 → 2459 files; 0 files written into `~/.m2`.
+
+**The gate** — in ONE hold of the lock with billing-core's (`~/adpair-work/gate-and-jars.sh 2e8fe7d 32990ce`, 04:20:19–04:33:33 +06):
+a git-archive clean copy of **32990ce** (all of the round's code; the commits after it add only reports), `mvn -o verify` on the
+private base `m2-ss` ALONE (no tail; the pom pins no in-house artifact), both engines.
+
+| run | tests · failures · errors · skipped |
+|---|---|
+| the baseline — HARDEN-2's gate of 32e8056 | unit 470 · 0 · 0 · 0; ITs 96 · 0 · 0 · 3 |
+| **unit** (surefire) | **481 · 0 · 0 · 0** — 481 = 470 + this round's 11 (`AdPairProfileTest` 5, `CategoryNamedGroupsTest` 4, `ProfileKindsTest` +1, `SummaryBootstrapKindsTest` +1) |
+| **ITs** (failsafe), PostgreSQL 16 (c-pg16 127.0.0.1:7544, `adpair_ss_it`) + MySQL 5.7.44 (`adpair-mysql57` 127.0.0.1:7642) | **96 · 0 · 0 · 3**, BUILD SUCCESS — PostgreSQL 54 (`PostgresOutboxConsumerIT` 45, `PostgresTreeIT` 9), MySQL 38 (`OutboxConsumerIT` 36, `MySqlTreeIT` 2), `BuildBakesNoTenantIT` 1; the 3 skipped = `KafkaListenersIT` (pointed at a closed port on purpose: the lab broker was the e2e's alone, and the IT's `summary-ping-<uuid>` groups would have tripped the e2e's "no pre-split group" check), as in every gate of record — the listeners on a real broker are the e2e's checks |
+
+The MySQL password reached Maven by NAME only (`SUMMARY_IT_MYSQL_PASSWORD` in Maven's environment from the owner's 0600 lab file):
+lines of the item-5 logs that hold it — 0.
+
+**The bed jar** — packaged in the same hold from its own fresh clean archive of 32990ce, ALONE on `m2-ss`, offline, no tail,
+`-DskipTests` (`~/adpair-work/cut-artifacts.sh`), a Quarkus fast-jar as every earlier bed artifact of this repo:
+
+| | |
+|---|---|
+| artifact | `~/artifacts/summary-service/32990ce-pinned/summary-service-32990ce-quarkus-app.tar.gz` |
+| sha256 | **`7d4cb81fb133c64184dc83802b40370d33de60936fa8428e687fb97ef7cdc736`** (`SHA256SUMS`; check it on the box before the install) |
+| the base, by bytes | in-house artifacts in the base: **0** (the pom pins none); the app's libraries (lib/boot + lib/main): **116, each byte-equal (sha256) to a jar of the base**, none in-house; `app/summary-service-1.0.0-SNAPSHOT.jar`: 158 classes, all under `com/telcobright/summary/`; the profile `config/tenants/btcl/ad-radius2/profile-ad-radius2.yml` in the jar = the commit's file (EQUAL) |
+| the proof on its bytes | the two-category e2e run on THIS tarball (unpacked after `sha256sum -c`, under a clean archive of 32990ce for the lab tools), beside billing-core's tarball the same way: **HOLDS — 41 ok, 0 FAIL** (2026-10-31 04:34:11–04:38:53 +06, `~/c-work/gates/adpair-e2e-shipped.log`); item 4's run of record ran the same app classes byte for byte (158 of 158) |
+| `BUILD.txt` | the recipe, the base proof, the gate, the proof, the start rule (NEVER bare: the jar's own `config/tenants.yml` enables tcbl/dev, a LIVE deployment — `SUMMARY_ACTIVE_TENANT=btcl/ad-radius2`, the secreteer variable `TENANT_BTCL_AD_SUMMARY_SERVICE_PASSWORD`, a port of its own), what must exist first (`cdr_summary_ping_ad_btcl`, `ad_services` with grants, the ad billing-core started first) |
+
+## 6 · The rulings received, and what stays open
+
+**Received** (the architect, `~/c-work/briefs/ARCH-0102b-continuation.md`, 2026-10-31 03:2x): **D2** ACCEPTED — a cross-kind reader is a
+bean of every enabled kind; it sums the enabled kinds' legs only (as built in item 3, pinned, mutant MS2 red). **D1** (billing-core's)
+ACCEPTED — the ping topic per category, `cdr_summary_ping_ad_btcl` on both sides (the WiFi pair's `cdr_summary_ping_wifi_btcl`).
+
+**Open — for the architect / devops** (no code of this round waits on them):
+1. **The bed's prerequisites** — `cdr_summary_ping_ad_btcl` on kafka-s2 (the profile: "it must exist"; a ping only cuts the
+   latency — the outbox poll drains regardless, every 5 s); `ad_services` with the tier schemas and the grants for `summary_service` (W1, prime-context's
+   create-or-adopt); the secreteer file with `TENANT_BTCL_AD_SUMMARY_SERVICE_PASSWORD`; the ad billing-core started FIRST.
+2. **Beside the pre-split summary-service on radius-2** until the clean slate stops it (`radius2`: `routesphere`, twelve beans) — the ad
+   pair's unit needs its own HTTP port and `SUMMARY_ACTIVE_TENANT=btcl/ad-radius2`. Devops's unit name and port.
+3. **F1: the drain lines at a planned stop** — a follow-up round (stop the workers before the pool), or accepted as is? (BC-0010 F4 is
+   billing-core's twin.)
