@@ -13,7 +13,7 @@ telcobright-billing-core `docs/ad-as-call/BC-0010-done.md` (its §1 holds the re
 | 1 the read list | DONE — §1 below (the table; no non-record read exists; D2 the chargeable pair under kinds = ad) | 2026-10-31 02:01 +0600 |
 | 2 (billing-core's; BC-0010) | — | |
 | 3 summary-service on the services store, kind ad | DONE — §3 below (the profile btcl/ad-radius2; summary.category names the groups; a cross-kind reader starts under any kind (D2); 4 test classes touched/new, fast runner 58/58) | 2026-10-31 02:41 +0600 |
-| 4 the proof: two categories, two databases, two topics | — | |
+| 4 the proof: two categories, two databases, two topics | DONE — §4 below (continued by a fresh agent after the stop of ~03:05; the harness is billing-core's `java/tools/lab/ad-pair-e2e.sh`, 2e8fe7d): the run of record **HOLDS 41 ok / 0 FAIL**, this service's checks all ok; mutants red — fast runner MS1 3/4, MS2 1/16, MS3 1/5 (base-ss 20/20 green); the worktree never held a mutant, every touched file = HEAD by cmp | 2026-10-31 03:58 +0600 |
 | 5 the gates and the bed jar | — | |
 
 ## 1 · Item 1 — the read list: every table and topic summary-service names, by road, and today's source
@@ -63,3 +63,44 @@ print-only road found by the first run and fixed). Maven's numbers of record: it
 background package of billing-core (it had finished, exit 0, 02:21); no mutant had been applied; item 3 was in the worktree
 uncommitted and is this commit.
 
+
+## 4 · Item 4 — the proof: two categories, two databases, two topics
+
+ONE harness proves the pair: billing-core's `java/tools/lab/ad-pair-e2e.sh` (billing-core `ad-pair` 2e8fe7d; its report BC-0010 §4
+holds the whole table, the lab and the harness's own faults found by its first runs). This service runs there as the bed will run it:
+the profile it SHIPS (`btcl/ad-radius2`), only the addresses moved to this box (the store url → the lab's `ad_services`, the broker,
+the prime-context stand-in; the lab belt `summary.endpoints.local-only` on) — the profile run = the jar's own resource (a check:
+EQUAL), started by `tools/lab/run-lab.sh btcl/ad-radius2` (the tenant named; the endpoints shown first, every host this box; the
+bundled tcbl never reached). Beside it: the ad billing-core on `cdr_ad_btcl` → `ad_services`, and a WiFi category's billing-core on
+`cdr_wifi_btcl` → `wifi_services`.
+
+**The run of record** (2026-10-31 03:54:07–03:56:51 +06; this service = the package of 32990ce): **HOLDS — 41 ok, 0 FAIL**
+(`~/c-work/gates/adpair-e2e-run4.log`). This service's checks:
+
+| what | the check (each `ok`) |
+|---|---|
+| the start says the category | `KINDS ad (summary.kinds) — ad = service group 30; dailyChargeableSummary, hourlyChargeableSummary = every enabled kind's legs`; `ping listener started: topic=cdr_summary_ping_ad_btcl group=summary-service-ad-ping-<uuid>`; `doorbell listener started: topic=config_event_loader_btcl … group=summary-service-ad-doorbell-<uuid>` |
+| the summaries sum from `ad_services` alone | `sum_ad_day_30` btcl 1 view / 0.40, res_44 1 / 0.50; `sum_ad_hr_30` 1 + 1; `sum_chargeable_day` group 30 alone, one leg per tier (D2: the cross-kind reader under `kinds: [ad]`); the four beans' bookmarks, one offset per tier; `wifi_services` holds no table of this service (`sum_*`, `summary_offset`, `summary_affected_dlq`); the role `summary_service` connected to `ad_services`, never to `wifi_services`; the reaper trimmed the `cdr` entity's outbox rows every bean has passed (HARDEN-1, both tiers 0 left) |
+| the groups | its two groups on the broker in the category's names; none of the pre-split `summary-ping-*` / `summary-doorbell-*` |
+| one ring, every category | ONE ring of `config_event_loader_btcl` → the tree read again by billing-core (ad), billing-core (WiFi) AND this service, each in its own group |
+| a restart | stopped and started again with its billing-core: the sums count each view ONCE after both restarts (btcl 2 / 0.80, res_44 2 / 1.00; chargeable 2 legs per tier) — a drain cut by the stop (F1 below) is drained again, never twice |
+
+**F1 — ERROR lines at a stop (pre-existing; not this round's).** A worker's drain in flight when the pool closes logs "drain failed —
+offset STUCK … SummaryStoreException: commit failed … Socket closed [Error Occurred After Shutdown]" (seen 4 times in run 3, 0 in run
+4: it depends on whether a 1-second poll is in flight at the stop). The transaction rolls back WITH its bookmark (one transaction), so
+the next start drains it again — the restart check above. Harmless, but a log watcher that alerts on ERROR fires at a planned stop. A
+follow-up if wanted (stop the workers before the pool closes) — `OutboxWorker` is untouched by this round.
+
+**The mutants** — each ONE break in its OWN fresh copy of the tree (`~/adpair-work/mutants.py`, rsync of the worktree without `.git`
+/ `target`); the worktree never held one; after the round every touched file is byte-equal to the commit's (`cmp` with
+`git show HEAD:<file>`) and `git status` is clean. Fast runner = javac + the JUnit launcher (NOT Maven); Maven's numbers: item 5.
+
+| mutant | the break | fast runner (the named tests) |
+|---|---|---|
+| base-ss | none: `CategoryNamedGroupsTest`, `SummaryBootstrapKindsTest`, `ProfileKindsTest`, `AdPairProfileTest` | **20 found, 20 passed** |
+| MS1 | the category ignored: the consumer groups of before (`summary-ping-<uuid>`, `summary-doorbell-<uuid>`) | **RED 3 of 4** — `a_category_names_the_groups_and_every_start_gets_its_own_group_still`, `the_ping_listener_and_the_doorbell_listener_join_their_categorys_groups`, `the_tenant_watcher_hands_the_profiles_category_to_its_doorbell` |
+| MS2 | a cross-kind reader refused again under a kind it is not of (the chargeable pair cannot start with `kinds: [ad]`) | **RED 1 of 16** — `an_ad_only_tenant_with_the_chargeable_roll_up_starts_and_the_roll_up_sums_the_ad_legs_alone` |
+| MS3 | the ad pair's profile names no category (its groups the names of before) | **RED 1 of 5** — `the_kinds_the_category_and_the_beans_are_the_ad_categorys_alone` |
+
+The brief's three mutants are billing-core's (the ingest group left old, `kinds` left `ad, wifi`, partnerprefix from the table): BC-0010
+§4 — all red there, in the fast runner and in this e2e. Logs: `~/adpair-work/mut/<id>.log`, `~/c-work/gates/adpair-e2e-*.log`.
