@@ -12,6 +12,7 @@ import com.telcobright.summary.runtime.internal.JdbcUnitOfWorkFactory;
 import com.telcobright.summary.runtime.spi.UnitOfWork;
 import com.telcobright.summary.runtime.spi.UnitOfWorkFactory;
 import com.telcobright.summary.summarybeans.ad.internal.AdSummaryBean;
+import com.telcobright.summary.summarybeans.ad.model.AdSummary;
 import com.telcobright.summary.summarybeans.ad.internal.AdTestSupport;
 import com.telcobright.summary.summarybeans.call.CallSummaries;
 import com.telcobright.summary.summarybeans.call.internal.CallSummaryBean;
@@ -844,6 +845,66 @@ abstract class OutboxConsumerContract {
         assertEquals(8, queryLong("select views from " + olderTable + " where id = " + idOfTheOldRow));
     }
 
+    /** The skipped measure as this version describes it (2026-11-02): what a table of 32990ce, or of before, does not have. */
+    private static final String SKIPPED_COLUMN = ",skipped BIGINT NOT NULL DEFAULT 0";
+
+    /**
+     * 2026-11-02 (the owner: "Reports: a column for skipped views"). The bed's ad tables were made by 32990ce: every column of today
+     * but {@code skipped}. At the service's first use after the swap the column is ADDED — the rows that are there read 0, never NULL
+     * (ad-sphere's reader sums it by that name, {@code JdbcCdrReader.SKIPPED}), and nothing else of them changes. The stream goes on: a view
+     * skipped at its content's mark lands in the SAME row as the views of its key before the swap (one day, one campaign) — skipped 1,
+     * credited +1 like any credited view (one click = one view, skipped or not), the old views' credited unchanged. Every later start finds
+     * nothing to do.
+     */
+    @Test
+    void an_ad_table_made_by_32990ce_gets_skipped_at_its_first_use_its_rows_read_0_and_a_skipped_view_counts_1_in_its_row() throws SQLException {
+        AdSummaryBean adDaily = AdTestSupport.dailyBean();
+        String table = adDaily.table();
+        java.time.LocalDateTime t = AdTestSupport.at(2026, 10, 25, 18, 31);           // inside the tests' MySQL partition horizon (09-01 + 60 days)
+        AdSummary before = adDaily.buildBatch(AdTestSupport.batchOf(AdTestSupport.leafView(t)), schemaName()).get(0);   // a credited view of the key, as 32990ce summed it
+        try (Connection service = dbConnection()) {
+            for (String statement : withSmallHorizon(() -> adDaily.tableDdl(dialect()))) {
+                assertTrue(!statement.startsWith("CREATE TABLE") || statement.contains(SKIPPED_COLUMN), "this version describes the column: " + statement);
+                exec(service, statement.replace(SKIPPED_COLUMN, ""));                    // the table as 32990ce made it
+            }
+            exec(service, "insert into " + table + " (" + AdSummary.INSERT_COLUMNS.replace(",skipped", "") + ") values " + before.insertValues().replaceFirst(",0\\)$", ")"));
+        }
+        assertEquals(0, queryLong(columnCount(table, "skipped")), "32990ce's table has no such column");
+        long idOfTheOldRow = queryLong("select id from " + table);
+
+        provisionSmall(adDaily);                                   // the service's first use of the schema after the swap
+
+        assertEquals(1, queryLong(columnCount(table, "skipped")), "the column is there");
+        assertEquals(0, queryLong("select skipped from " + table + " where id = " + idOfTheOldRow), "the old row reads 0, never NULL");
+        assertEquals(0, queryLong("select count(*) from " + table + " where skipped is null"));
+        assertEquals("1 | 1 | 1", queryText("select concat_ws(' | ', views, completed, credited) from " + table + " where id = " + idOfTheOldRow),
+                "and nothing else of it changed: history is not rebuilt");
+        assertEquals(0, queryLong("select coalesce(sum(skipped), 0) from " + table), "what ad-sphere's reader sums: 0 for the days before the swap");
+
+        // the stream goes on: one view skipped at its mark, of the same key (the same day and campaign), and one of another content
+        seedOutbox(1, OutboxCodec.encode(AdTestSupport.batchOf(AdTestSupport.leafView(t.plusMinutes(2)).skipped(true),
+                AdTestSupport.leafView(t.plusMinutes(3)).content("c-v2proof-20").skipped(true))));
+        assertEquals(1, reader.drain(adDaily));
+        assertEquals(2, count(table), "the old row goes on; the other content opens its own");
+        assertEquals("2 | 2 | 2 | 1", queryText("select concat_ws(' | ', views, completed, credited, skipped) from " + table + " where id = " + idOfTheOldRow),
+                "the old view + the skipped one: 2 views, 2 credited, 1 skipped");
+        assertEquals(1, queryLong("select skipped from " + table + " where tup_contentid = 'c-v2proof-20'"));
+        assertEquals(2, queryLong("select sum(skipped) from " + table));
+
+        // every later start: the table is as described — the step finds nothing to do, and does nothing
+        UnitOfWork look = unitOfWorkFactory().begin();
+        try {
+            assertEquals(List.of(), com.telcobright.summary.bean.spi.TableDdl.bringUpToDate(adDaily.tableSpec(), dialect(), look.store().columnWidths(table)),
+                    "idempotent: the second time there is no statement");
+            look.commit();
+        } finally {
+            look.close();
+        }
+        provisionSmall(adDaily);
+        assertEquals(2, queryLong("select sum(skipped) from " + table));
+        assertEquals(0, reader.drain(adDaily), "nothing counted twice");
+    }
+
     /**
      * The ad table as the FIRST PostgreSQL version of this branch made it (938ab19) — {@code tup_rulecode} 20 wide, no
      * {@code tup_contentid} — holding one row a deployment summed: 7 views of campaign 5, rule {@code ruleCode}.
@@ -851,7 +912,8 @@ abstract class OutboxConsumerContract {
     private void theFirstVersionsTableWithARow(AdSummaryBean adBean, String ruleCode) throws SQLException {
         try (Connection service = dbConnection()) {
             for (String statement : withSmallHorizon(() -> adBean.tableDdl(dialect()))) {
-                String first = statement.replace(",tup_contentid VARCHAR(64) NOT NULL DEFAULT ''", "").replace("tup_rulecode VARCHAR(64)", "tup_rulecode VARCHAR(20)");
+                String first = statement.replace(",tup_contentid VARCHAR(64) NOT NULL DEFAULT ''", "").replace(SKIPPED_COLUMN, "")
+                        .replace("tup_rulecode VARCHAR(64)", "tup_rulecode VARCHAR(20)");
                 exec(service, first);
             }
             exec(service, "insert into " + adBean.table() + " (tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"

@@ -37,11 +37,11 @@ class AdReaderContractTest {
     private static final List<String> READER_FILTERS = List.of("tup_partnerid", "tup_starttime", "tup_campaignid");
 
     @Test
-    void the_insert_columns_are_the_seventeen_the_reader_knows_in_their_order_then_the_units_measure_then_the_content() {
-        // what came later is APPENDED — chargedunits (SS-0001), tup_contentid (S13): a table that gets a column by
-        // ALTER (which can only append on PostgreSQL) is then the same table as one made with it
+    void the_insert_columns_are_the_seventeen_the_reader_knows_in_their_order_then_the_units_the_content_and_the_skipped_views() {
+        // what came later is APPENDED — chargedunits (SS-0001), tup_contentid (S13), skipped (2026-11-02): a table that gets a
+        // column by ALTER (which can only append on PostgreSQL) is then the same table as one made with it
         assertEquals("tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
-                        + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits,tup_contentid",
+                        + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits,tup_contentid,skipped",
                 AdSummary.INSERT_COLUMNS, "a renamed, removed or moved column breaks ad-sphere's reader (and every existing table)");
     }
 
@@ -55,6 +55,30 @@ class AdReaderContractTest {
             for (String ddl : List.of(bean.tableDdl(), bean.tableDdl(SqlDialect.POSTGRESQL).get(0))) {
                 assertTrue(ddl.contains("tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"), "empty when a record carries none, never NULL: " + ddl);
             }
+        }
+    }
+
+    /**
+     * ad-sphere's reader (p2-adflow ae1b9fe, {@code JdbcCdrReader.SummaryColumns}) reads three measures BY NAME where the table has them —
+     * {@code chargedunits}, {@code tup_contentid} and, since 2026-11-02, {@code skipped} ({@code JdbcCdrReader.SKIPPED = "skipped"}:
+     * {@code SUM(skipped)} where the column is there, null where not). The names are the contract: each is a column of the entity,
+     * of the MySQL DDL and of the PostgreSQL reference, on both tables; {@code skipped} is a whole number that a row of before reads as 0.
+     */
+    private static final List<String> READER_OPTIONAL_BY_NAME = List.of("chargedunits", "tup_contentid", "skipped");
+
+    @Test
+    void the_measures_the_reader_reads_by_name_where_present_are_columns_of_both_tables_on_both_engines_and_skipped_reads_0_on_old_rows() throws IOException {
+        Map<String, Map<String, String>> onPostgres = tablesOf(resource("db/postgres/sum_ad.sql"));
+        List<String> insert = Arrays.asList(AdSummary.INSERT_COLUMNS.split(","));
+        for (String column : READER_OPTIONAL_BY_NAME) assertTrue(insert.contains(column), "the reader reads " + column + " by that name");
+        for (var bean : List.of(AdTestSupport.dailyBean(), AdTestSupport.hourlyBean())) {
+            assertEquals("BIGINT", columnsOf(bean.tableDdl()).get("skipped"), bean.table() + " on MySQL");
+            assertEquals("BIGINT", onPostgres.get(bean.table()).get("skipped"), bean.table() + " on PostgreSQL");
+            for (String ddl : List.of(bean.tableDdl(), bean.tableDdl(SqlDialect.POSTGRESQL).get(0))) {
+                assertTrue(ddl.contains("skipped BIGINT NOT NULL DEFAULT 0"), "a row of before reads 0, never NULL: " + ddl);
+            }
+            assertTrue(TableDdl.bringUpToDate(bean.tableSpec(), SqlDialect.POSTGRESQL, theTableOfTheFirstVersion())
+                    .contains("ALTER TABLE " + bean.table() + " ADD COLUMN IF NOT EXISTS skipped BIGINT NOT NULL DEFAULT 0"), "an EXISTING table gets it at first use");
         }
     }
 

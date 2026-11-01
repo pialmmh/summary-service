@@ -38,7 +38,8 @@ final class AdMetaData {
                 text(meta.get("site")),
                 text(meta.get("app")),
                 flag(meta.get("completed")),
-                flag(meta.get("credited")));
+                flag(meta.get("credited")),
+                flag(meta.get("skipped")));             // 2026-11-02: ad-sphere's record says it (79cdd65); a record of before reads false
     }
 
     /** A whole number, as a JSON number or as digits in a string; anything else is 0 (no campaign). */

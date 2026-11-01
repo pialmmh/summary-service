@@ -33,6 +33,7 @@ class AdSummaryTest {
         s.watchedsec = 15;
         s.chargedamount = new BigDecimal("0.50");
         s.chargedunits = new BigDecimal("3");
+        s.skipped = 1;                                      // 2026-11-02: skipped at its mark — still a view, completed
         return s;
     }
 
@@ -48,6 +49,7 @@ class AdSummaryTest {
         assertEquals(30, a.watchedsec);
         assertEquals(new BigDecimal("1.00"), a.chargedamount);
         assertEquals(new BigDecimal("6"), a.chargedunits, "units add to units, never to the money");
+        assertEquals(2, a.skipped, "the skipped views add like every measure");
         assertEquals("res_44", a.tup_tenant, "dimensions never merge");
         assertEquals(61, a.tup_partnerid);
     }
@@ -62,6 +64,7 @@ class AdSummaryTest {
         assertEquals(-15, a.watchedsec);
         assertEquals(new BigDecimal("-0.50"), a.chargedamount);
         assertEquals(new BigDecimal("-3"), a.chargedunits);
+        assertEquals(-1, a.skipped, "a subtract row takes the skip back too");
     }
 
     @Test
@@ -94,6 +97,7 @@ class AdSummaryTest {
         assertEquals(a.views, c.views);
         assertEquals(a.chargedamount, c.chargedamount);
         assertEquals(a.chargedunits, c.chargedunits);
+        assertEquals(a.skipped, c.skipped);
     }
 
     @Test
@@ -102,9 +106,9 @@ class AdSummaryTest {
         String values = a.insertValues();
 
         assertEquals(AdSummary.INSERT_COLUMNS.split(",").length, values.split(",").length, "one value per INSERT column");
-        assertEquals("('res_44',61,5,'1001','dhaka-01','','wifi','video','done','2026-09-29 00:00:00',1,1,1,0,0,15,0.50,3,'lux-30')", values,
-                "the values in the column list's order — the content last, as its column is the table's last");
-        assertEquals("views=1,shown=1,completed=1,credited=0,failed=0,watchedsec=15,chargedamount=0.50,chargedunits=3", a.updateAssignments(),
+        assertEquals("('res_44',61,5,'1001','dhaka-01','','wifi','video','done','2026-09-29 00:00:00',1,1,1,0,0,15,0.50,3,'lux-30',1)", values,
+                "the values in the column list's order — the content, then the skipped views last, as their columns are the table's last");
+        assertEquals("views=1,shown=1,completed=1,credited=0,failed=0,watchedsec=15,chargedamount=0.50,chargedunits=3,skipped=1", a.updateAssignments(),
                 "UPDATE assigns measures only");
         assertEquals("'2026-09-29 00:00:00'", a.bucketLiteral(), "partition-pruning literal");
     }

@@ -21,8 +21,9 @@ import java.math.RoundingMode;
  * wall clock — cut to the bean's window. Key strings are cut to their column widths so a fresh build keys
  * identically to its reloaded row.
  *
- * <p>The measures: {@code views} 1 always; {@code shown} when the record has an answer time; {@code completed}
- * and {@code credited} as the view's facts say; {@code failed} when the cause is not a normal clearing;
+ * <p>The measures: {@code views} 1 always; {@code shown} when the record has an answer time; {@code completed},
+ * {@code credited} and {@code skipped} (2026-11-02: skipped at the content's mark — still a view, completed and
+ * credited as its facts say) as the view's facts say; {@code failed} when the cause is not a normal clearing;
  * {@code watchedsec} = {@code DurationSec}, to the whole second (half up — the column is a whole number).
  *
  * <p>The charge is the customer chargeable's billed amount, and it is MONEY or UNITS by the leg's own unit
@@ -88,6 +89,7 @@ final class AdSummaryBuilder {
         s.shown = cdr.wasShown() ? 1 : 0;
         s.completed = facts.completed() ? 1 : 0;
         s.credited = facts.credited() ? 1 : 0;
+        s.skipped = facts.skipped() ? 1 : 0;
         s.failed = done ? 0 : 1;
         s.watchedsec = wholeSeconds(cdr.durationSec());
         BigDecimal billed = charge == null || charge.billedAmount() == null ? BigDecimal.ZERO : charge.billedAmount();

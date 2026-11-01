@@ -89,6 +89,7 @@ public final class AdTestSupport {
         private String app = "wifi";
         private boolean completed = true;
         private boolean credited = true;
+        private Boolean skipped;                   // null = the record says nothing (a record written before 2026-11-02)
         private String rawMeta;
         private boolean metaAbsent;
         private boolean noChargeable;
@@ -118,6 +119,8 @@ public final class AdTestSupport {
         public View app(String name) { this.app = name; return this; }
         public View completed(boolean yes) { this.completed = yes; return this; }
         public View credited(boolean yes) { this.credited = yes; return this; }
+        /** The view was skipped at its content's mark (ad-sphere's record says it since 2026-11-02); never called = the record says nothing. */
+        public View skipped(boolean yes) { this.skipped = yes; return this; }
         /** The meta data text as it is, whatever it is — a short object, a broken one, not an object at all. */
         public View meta(String text) { this.rawMeta = text; return this; }
         public View noMeta() { this.metaAbsent = true; return this; }
@@ -174,7 +177,9 @@ public final class AdTestSupport {
             if (app != null) m.append(",\"app\":").append(quoted(app));
             if (zone != null) m.append(",\"zone\":").append(quoted(zone));
             if (site != null) m.append(",\"site\":").append(quoted(site));
-            m.append(",\"requiredSeconds\":15,\"completed\":").append(completed).append(",\"credited\":").append(credited).append(",\"fallback\":false}");
+            m.append(",\"requiredSeconds\":15,\"completed\":").append(completed).append(",\"credited\":").append(credited);
+            if (skipped != null) m.append(",\"skipped\":").append(skipped);
+            m.append(",\"fallback\":false}");
             return m.toString();
         }
 

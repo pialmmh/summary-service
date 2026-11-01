@@ -207,6 +207,32 @@ class AdSummaryBeanTest {
         assertEquals(1, both.credited);
     }
 
+    /**
+     * 2026-11-02 (the owner: "Reports: a column for skipped views"): a view skipped at its content's mark counts {@code skipped} 1 — and
+     * stays a view, completed and credited as its record says (one click = one view, skipped or not); a view watched to its end counts 0;
+     * a record of before (no such fact) reads 0; the word "true" reads as the JSON true. The skipped views add up by the key like every measure.
+     */
+    @Test
+    void a_view_skipped_at_its_mark_counts_skipped_and_stays_a_completed_credited_view() {
+        AdSummary skipped = dailyBean().buildBatch(batchOf(leafView(MORNING).skipped(true)), LEAF).get(0);
+        assertEquals(1, skipped.skipped);
+        assertEquals(1, skipped.views);
+        assertEquals(1, skipped.completed, "still completed");
+        assertEquals(1, skipped.credited, "still credited: its WiFi time was given");
+        assertEquals(0, dailyBean().buildBatch(batchOf(leafView(MORNING).skipped(false)), LEAF).get(0).skipped, "watched to its end");
+        assertEquals(0, dailyBean().buildBatch(batchOf(leafView(MORNING)), LEAF).get(0).skipped, "a record of before says nothing: 0");
+        assertEquals(1, dailyBean().buildBatch(batchOf(leafView(MORNING).meta("{\"campaignId\":5,\"completed\":true,\"credited\":true,\"skipped\":\"true\"}")), LEAF)
+                .get(0).skipped, "the word true reads as true");
+
+        Collection<AdSummary> rows = rollup(dailyBean(), LEAF, List.of(leafView(MORNING).skipped(true), leafView(MORNING.plusMinutes(5)).skipped(true),
+                leafView(MORNING.plusMinutes(9)).skipped(false)));
+        assertEquals(1, rows.size(), "one key, one row");
+        AdSummary day = rows.iterator().next();
+        assertEquals(3, day.views);
+        assertEquals(2, day.skipped, "two of the three views were skipped");
+        assertEquals(3, day.credited, "skipped never shrinks credited");
+    }
+
     @Test
     void the_charged_amount_is_the_customer_chargeables_billed_amount_when_its_unit_is_money() {
         AdSummary charged = dailyBean().buildBatch(batchOf(leafView(MORNING).charge("0.75")), LEAF).get(0);
@@ -473,7 +499,7 @@ class AdSummaryBeanTest {
             assertEquals("", row.tup_contentid, "the empty string, never null");
             assertEquals(1, row.views, "and the view counts");
         }
-        assertTrue(refused.insertValues().endsWith(",'')"), refused.insertValues());
+        assertTrue(refused.insertValues().endsWith(",'',0)"), refused.insertValues() + " — the empty content, then the skipped views (0) last");
 
         // in one window they are ONE row beside the contents' rows
         Collection<AdSummary> rows = rollup(dailyBean(), LEAF, List.of(leafView(MORNING).content(null), leafView(MORNING.plusMinutes(3)).content(null),

@@ -13,8 +13,9 @@ import com.telcobright.summary.summarybeans.ad.model.AdSummary;
  *
  * <p>The ad tables are net-new and this service's alone, so the description is KEPT UP TO DATE: a table made by an
  * earlier version gets what it lacks at its first use ({@code TableDdl.bringUpToDate}) — {@code tup_contentid}
- * (added 2026-10-04; the rows that are there read it as {@code ''}), and {@code tup_rulecode} widened from 20 to
- * 64 (the same day; a value that is there stays as it is).
+ * (added 2026-10-04; the rows that are there read it as {@code ''}), {@code tup_rulecode} widened from 20 to
+ * 64 (the same day; a value that is there stays as it is), and {@code skipped} (added 2026-11-02; the rows that are
+ * there read 0 — history is not rebuilt).
  */
 final class SumAdDdl {
 
@@ -43,7 +44,8 @@ final class SumAdDdl {
                 .bigint("watchedsec")
                 .decimal("chargedamount", 18, 6)
                 .decimal("chargedunits", 18, 6)
-                .varchar("tup_contentid", AdSummaryBuilder.CONTENT_WIDTH)   // the content shown; the LAST column (see AdSummary)
+                .varchar("tup_contentid", AdSummaryBuilder.CONTENT_WIDTH)   // the content shown (see AdSummary)
+                .bigint("skipped")                                // 2026-11-02: the views skipped at their mark; the LAST column (see AdSummary)
                 .primaryKey("id", AdSummary.BUCKET_COLUMN)        // the partition column is in every unique key
                 .index("ix_starttime", "tup_starttime")
                 .index("ix_tenant_partner", "tup_tenant", "tup_partnerid", "tup_starttime")

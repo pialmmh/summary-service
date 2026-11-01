@@ -79,7 +79,7 @@ class TableDdlTest {
         assertTrue(ddl.startsWith("CREATE TABLE IF NOT EXISTS sum_ad_day_30 (id BIGINT NOT NULL AUTO_INCREMENT,tup_tenant VARCHAR(100) NOT NULL DEFAULT '',"), ddl);
         assertTrue(ddl.contains(",tup_starttime DATETIME NOT NULL,views BIGINT NOT NULL DEFAULT 0,"));
         assertTrue(ddl.contains(",chargedamount DECIMAL(18,6) NOT NULL DEFAULT 0,chargedunits DECIMAL(18,6) NOT NULL DEFAULT 0,"
-                + "tup_contentid VARCHAR(64) NOT NULL DEFAULT '',PRIMARY KEY (id, tup_starttime),"
+                + "tup_contentid VARCHAR(64) NOT NULL DEFAULT '',skipped BIGINT NOT NULL DEFAULT 0,PRIMARY KEY (id, tup_starttime),"
                 + "KEY ix_starttime (tup_starttime),KEY ix_tenant_partner (tup_tenant, tup_partnerid, tup_starttime)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4\n"
                 + "PARTITION BY RANGE COLUMNS(tup_starttime) (\n  PARTITION p20260601 VALUES LESS THAN ('2026-06-02 00:00:00'),"));
         assertTrue(ddl.endsWith("  PARTITION p20260603 VALUES LESS THAN ('2026-06-04 00:00:00'),\n  PARTITION pMAX VALUES LESS THAN (MAXVALUE)\n)"), ddl);
@@ -97,7 +97,8 @@ class TableDdlTest {
                 + "tup_mediakind VARCHAR(16) NOT NULL DEFAULT '',tup_outcome VARCHAR(32) NOT NULL DEFAULT '',tup_starttime TIMESTAMP NOT NULL,"
                 + "views BIGINT NOT NULL DEFAULT 0,shown BIGINT NOT NULL DEFAULT 0,completed BIGINT NOT NULL DEFAULT 0,credited BIGINT NOT NULL DEFAULT 0,"
                 + "failed BIGINT NOT NULL DEFAULT 0,watchedsec BIGINT NOT NULL DEFAULT 0,chargedamount NUMERIC(18,6) NOT NULL DEFAULT 0,"
-                + "chargedunits NUMERIC(18,6) NOT NULL DEFAULT 0,tup_contentid VARCHAR(64) NOT NULL DEFAULT '',PRIMARY KEY (id, tup_starttime))", ddl.get(0));
+                + "chargedunits NUMERIC(18,6) NOT NULL DEFAULT 0,tup_contentid VARCHAR(64) NOT NULL DEFAULT '',skipped BIGINT NOT NULL DEFAULT 0,"
+                + "PRIMARY KEY (id, tup_starttime))", ddl.get(0));
         assertEquals("CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_starttime ON sum_ad_day_30 (tup_starttime)", ddl.get(1));
         assertEquals("CREATE INDEX IF NOT EXISTS sum_ad_day_30_ix_tenant_partner ON sum_ad_day_30 (tup_tenant, tup_partnerid, tup_starttime)", ddl.get(2));
         assertEquals(ddl, TableDdl.createIfAbsent(adDay(), SqlDialect.POSTGRESQL));
@@ -218,6 +219,17 @@ class TableDdlTest {
         return fewer;
     }
 
+    /** 2026-11-02: the bed's ad tables were made by 32990ce — every column but {@code skipped}: ONE statement, the rows that are there read 0. */
+    @Test
+    void the_table_of_32990ce_gets_the_skipped_column_and_nothing_else_on_both_engines() {
+        Map<String, Integer> madeBy32990ce = without(columnsAsDescribed(adDay()), "skipped");
+
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS skipped BIGINT NOT NULL DEFAULT 0"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, madeBy32990ce), "the rows that are there read 0: history is not rebuilt");
+        assertEquals(List.of("ALTER TABLE sum_ad_day_30 ADD COLUMN skipped BIGINT NOT NULL DEFAULT 0"),
+                TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, madeBy32990ce));
+    }
+
     @Test
     void a_column_an_older_table_lacks_is_added_with_its_default_on_both_engines() {
         Map<String, Integer> madeBeforeTheContent = without(columnsAsDescribed(adDay()), "tup_contentid");
@@ -244,15 +256,17 @@ class TableDdlTest {
 
     @Test
     void the_table_of_the_first_version_gets_both_changes_in_the_columns_order_and_then_none() {
-        // 938ab19's table: tup_rulecode 20 wide, no tup_contentid
-        Map<String, Integer> first = without(columnsAsDescribed(adDay()), "tup_contentid");
+        // 938ab19's table: tup_rulecode 20 wide, no tup_contentid (and no skipped, 2026-11-02)
+        Map<String, Integer> first = without(columnsAsDescribed(adDay()), "tup_contentid", "skipped");
         first.put("tup_rulecode", 20);
 
         assertEquals(List.of("ALTER TABLE sum_ad_day_30 ALTER COLUMN tup_rulecode TYPE VARCHAR(64)",
-                        "ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS tup_contentid VARCHAR(64) NOT NULL DEFAULT ''",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN IF NOT EXISTS skipped BIGINT NOT NULL DEFAULT 0"),
                 TableDdl.bringUpToDate(adDay(), SqlDialect.POSTGRESQL, first));
         assertEquals(List.of("ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_rulecode VARCHAR(64) NOT NULL DEFAULT ''",
-                        "ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN skipped BIGINT NOT NULL DEFAULT 0"),
                 TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, first));
         assertEquals(List.of(), TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, columnsAsDescribed(adDay())), "after them: nothing");
     }
@@ -260,14 +274,15 @@ class TableDdlTest {
     @Test
     void an_older_ad_table_of_any_earlier_shape_is_brought_up_by_the_same_rule() {
         // stream X's first MySQL table (ec2546e): 17 columns — no chargedunits, no tup_contentid — tup_app 32 and tup_rulecode 20 wide
-        Map<String, Integer> streamXs = without(columnsAsDescribed(adDay()), "chargedunits", "tup_contentid");
+        Map<String, Integer> streamXs = without(columnsAsDescribed(adDay()), "chargedunits", "tup_contentid", "skipped");
         streamXs.put("tup_app", 32);
         streamXs.put("tup_rulecode", 20);
 
         assertEquals(List.of("ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_rulecode VARCHAR(64) NOT NULL DEFAULT ''",
                         "ALTER TABLE sum_ad_day_30 MODIFY COLUMN tup_app VARCHAR(64) NOT NULL DEFAULT ''",
                         "ALTER TABLE sum_ad_day_30 ADD COLUMN chargedunits DECIMAL(18,6) NOT NULL DEFAULT 0",
-                        "ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''"),
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN tup_contentid VARCHAR(64) NOT NULL DEFAULT ''",
+                        "ALTER TABLE sum_ad_day_30 ADD COLUMN skipped BIGINT NOT NULL DEFAULT 0"),
                 TableDdl.bringUpToDate(adDay(), SqlDialect.MYSQL, streamXs), "every described column it lacks, every text column that is narrower — in the columns' order");
     }
 

@@ -26,7 +26,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
     /** INSERT column list (CSV, in {@link #insertValues()} order, WITHOUT id). */
     public static final String INSERT_COLUMNS =
             "tup_tenant,tup_partnerid,tup_campaignid,tup_rulecode,tup_zone,tup_site,tup_app,tup_mediakind,tup_outcome,"
-                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits,tup_contentid";
+                    + "tup_starttime,views,shown,completed,credited,failed,watchedsec,chargedamount,chargedunits,tup_contentid,skipped";
 
     public static final String BUCKET_COLUMN = "tup_starttime";
 
@@ -61,6 +61,13 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
     public BigDecimal chargedamount = BigDecimal.ZERO;
     /** Units: the charges paid from a package, in the package's own unit. Never added to the money. */
     public BigDecimal chargedunits = BigDecimal.ZERO;
+    /**
+     * 2026-11-02 (the owner: "Reports: a column for skipped views"): the views the viewer skipped at the content's skip
+     * mark — counted INSIDE views, completed and credited, never instead of them. Its COLUMN is the table's last
+     * (after {@code tup_contentid}): a table that gets it by ALTER is the same table as one made with it. ad-sphere's
+     * reader sums it by this name ({@code JdbcCdrReader.SKIPPED}).
+     */
+    public long skipped;
 
     @Override
     public Long id() {
@@ -99,6 +106,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         watchedsec += o.watchedsec;
         chargedamount = chargedamount.add(o.chargedamount);
         chargedunits = chargedunits.add(o.chargedunits);
+        skipped += o.skipped;
     }
 
     /** Scales EVERY measure, {@code views} included (the SUBTRACT path negates a copy). */
@@ -112,6 +120,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         watchedsec *= factor;
         chargedamount = chargedamount.multiply(BigDecimal.valueOf(factor));
         chargedunits = chargedunits.multiply(BigDecimal.valueOf(factor));
+        skipped *= factor;
     }
 
     @Override
@@ -136,6 +145,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
         c.watchedsec = watchedsec;
         c.chargedamount = chargedamount;
         c.chargedunits = chargedunits;
+        c.skipped = skipped;
         return c;
     }
 
@@ -160,6 +170,7 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
                 + "," + SqlLiterals.num(chargedamount)
                 + "," + SqlLiterals.num(chargedunits)
                 + "," + SqlLiterals.str(tup_contentid)
+                + "," + SqlLiterals.num(skipped)
                 + ")";
     }
 
@@ -172,7 +183,8 @@ public final class AdSummary implements SummaryEntity<AdSummary> {
                 + ",failed=" + SqlLiterals.num(failed)
                 + ",watchedsec=" + SqlLiterals.num(watchedsec)
                 + ",chargedamount=" + SqlLiterals.num(chargedamount)
-                + ",chargedunits=" + SqlLiterals.num(chargedunits);
+                + ",chargedunits=" + SqlLiterals.num(chargedunits)
+                + ",skipped=" + SqlLiterals.num(skipped);
     }
 
     /** The date-partition key for this row: {@code tup_starttime}. */
